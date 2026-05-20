@@ -1,0 +1,155 @@
+spec_version: "0.1"
+card_version: "0.1.0"
+app_id: "com.taobao.taobao"
+app_name: "淘宝"
+platforms: ["android"]
+locale: ["zh-CN"]
+
+embedded_agent:
+  name: "AI购物助手"
+  type: native_in_app_agent
+  description: >
+    Taobao's AI shopping assistant inside the Messages tab. Handles product
+    search, recommendations, comparison, order/logistics queries, and local
+    delivery via Taobao Flash. OS router must hand off control for any
+    terminal action (order, pay, address confirm, coupon select).
+
+  entry:
+    primary:
+      method: tap_sequence
+      steps:
+        - tap: { accessibility_id: "消息" }
+        # "AI购物助手" row is not clickable itself; tap-through on the label.
+        - wait: { until: { accessibility_id: "AI购物助手" } }
+        - tap: { accessibility_id: "AI购物助手" }
+    fallback: []
+    preconditions:
+      - type: login_required
+
+  invocation:
+    input:
+      field:
+        resource_id: "com.taobao.taobao.ai_assistant_remote_aar:id/et_input"
+      max_chars: 1000
+    submit:
+      # iv_send appears after input; bottom edge may be covered by IME.
+      # Using verified upper-half bounds.
+      trigger:
+        x_bounds:
+          box: [938, 2211, 1038, 2238]
+          anchor: bottom_right
+    prompt_template: "{{user_prompt}}"
+
+  output:
+    method: none
+
+  capabilities:
+    - id: search_product
+      description: >
+        Search and recommend products by natural language. Parses budget,
+        brand, specs, use case, delivery constraints. Returns product cards
+        or search results. Agent does not auto-order; user selects manually.
+      example_prompts:
+        - "帮我找一台适合学生的平板电脑，预算2000以内"
+        - "推荐几款夏天通勤穿的男士防晒衣"
+      executable: true
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 12
+      failure_modes:
+        - "Too few constraints → follow-up questions (budget, size, brand, use case)"
+        - "Clicking product cards may leave agent chat for product detail page"
+
+    - id: compare_products
+      description: >
+        Compare products by price, specs, reviews, and promotions.
+        Informational output only; does not purchase.
+      example_prompts:
+        - "iPhone 17 和上一代买哪个更划算"
+        - "帮我比较这几款扫地机器人适合养宠家庭吗"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 15
+
+    - id: buy_product
+      description: >
+        Guide purchase flow for a specific product: find listing, confirm
+        specs, apply coupons, add to cart, jump to checkout. Final order
+        confirmation and payment must be manual; OS router must not auto-submit.
+      example_prompts:
+        - "帮我买一包猫砂，膨润土的，10公斤左右"
+        - "把这款黑色 256G 手机加入购物车"
+      executable: true
+      side_effects:
+        - payment
+      requires_login: true
+      reversible: false
+      handoff_to_user_required: true
+      typical_latency_seconds: 15
+      failure_modes:
+        - "Specs, quantity, address, or coupon ambiguous → user must manually select"
+        - "Checkout/payment pages require manual confirmation; scripts must not tap"
+
+    - id: order_local_delivery
+      description: >
+        Local delivery via Taobao Flash / on-demand. Searches nearby stores
+        for drinks, meals, or daily items based on location. Order, address,
+        and payment are irreversible; must hand off.
+      example_prompts:
+        - "帮我点一杯蜜雪冰城蜜桃四季春"
+        - "附近有没有半小时能送到的矿泉水"
+      executable: true
+      side_effects:
+        - payment
+      requires_login: true
+      reversible: false
+      handoff_to_user_required: true
+      typical_latency_seconds: 18
+      failure_modes:
+        - "No nearby store or out of stock → suggests alternatives or wider range"
+        - "Flavor, ice, sugar etc. ambiguous → asks user to confirm"
+      x_partner_service: "淘宝闪购"
+
+    - id: track_order
+      description: >
+        Query order status, logistics, after-sale progress, or refund status.
+        Read-only; does not modify orders. If user initiates return/refund,
+        switch to handoff flow.
+      example_prompts:
+        - "我最近买的键盘到哪了"
+        - "查一下刚才那单有没有发货"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 10
+      failure_modes:
+        - "Multiple matching orders → user must pick the specific one"
+
+provenance:
+  last_verified: "2026-05-20"
+  verified_app_version: "10.60.20"
+  verified_os: "android-16"
+  verified_device: "Pixel 9"
+  verification_method: scripted
+  evidence_url: ""
+  x_device_metrics:
+    resolution_px: [1080, 2424]
+    density_dpi: 420
+
+constraints:
+  app_version_min: "10.60.20"
+  region: ["CN"]
+  network_required: true
+  known_issues:
+    - "Entry path verified on Pixel 9 / Taobao 10.60.20: Messages tab → AI购物助手 conversation."
+    - "Chat page title shows '千问' while Messages list entry shows 'AI购物助手'."
+    - "Send button (iv_send) bottom edge may be covered by IME; manifest uses verified upper-half x_bounds."
+    - "Agent operates within Taobao account context; order/address/payment depend on login state."
+    - "Terminal actions (purchase, checkout, payment, confirm receipt, refund) require manual confirmation."

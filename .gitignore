@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.pyc
+test-results/
+.env
+tests/config_local.py
+
+# macOS
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+*.egg
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Cache
+.mypy_cache/
+.pytest_cache/
