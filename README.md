@@ -67,7 +67,7 @@ AppAgentCards/
 The demo router requires an explicit package id via `--app`, scores that app's capability descriptions with a keyword-overlap heuristic, then prints the entry, invocation, `x_bounds` remapping, handoff, and output plan. It does not tap or operate any app UI.
 
 ```bash
-uv venv && source .venv/bin/activate && uv pip install pyyaml
+uv venv && source .venv/bin/activate && uv pip install .
 
 python examples/match_intent.py --app com.autonavi.minimap "Navigate to the Bund in Shanghai"
 python examples/match_intent.py --app ctrip.android.view "Hotel near the Bund under 800 yuan"
@@ -79,7 +79,7 @@ python examples/match_intent.py --app com.xingin.xhs "Weekend activities with ki
 ## Run tests
 
 ```bash
-uv pip install pyyaml
+uv pip install .
 python -m unittest discover -s tests -v              # unit tests (no device needed)
 python -m unittest tests.test_manifest_cli -v        # CLI smoke tests only
 ```

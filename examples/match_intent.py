@@ -19,7 +19,7 @@ router would do, on what coordinates, before any UI side effect.
 
 Install:
     uv venv && source .venv/bin/activate
-    uv pip install pyyaml
+    uv pip install .
 
 Usage:
     python match_intent.py --app com.autonavi.minimap "导航到上海外滩"
