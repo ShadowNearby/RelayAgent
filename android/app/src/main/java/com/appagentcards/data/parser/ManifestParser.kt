@@ -1,6 +1,5 @@
 package com.appagentcards.data.parser
 
-import com.appagentcards.data.model.*
 import com.appagentcards.domain.model.*
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlList
@@ -13,77 +12,121 @@ class ManifestParser {
     private val yaml = Yaml.default
 
     fun parse(yamlString: String): Card {
-        val dto = yaml.decodeFromString(ManifestDto.serializer(), yamlString)
-        return dto.toDomain()
+        val root = yaml.parseToYamlNode(yamlString) as? YamlMap
+            ?: error("Manifest root is not a YAML map")
+        return parseCard(root)
     }
 
     fun parseAll(yamlStrings: List<String>): List<Card> = yamlStrings.map { parse(it) }
 
-    // ---- DTO → Domain ----
+    // ---- Root ----
 
-    private fun ManifestDto.toDomain(): Card = Card(
-        specVersion = spec_version, cardVersion = card_version,
-        appId = app_id, appName = app_name,
-        platforms = platforms, locale = locale,
-        embeddedAgent = embedded_agent.toDomain(),
-        provenance = provenance.toDomain(),
-        constraints = constraints.toDomain()
+    private fun parseCard(m: YamlMap): Card = Card(
+        specVersion = m.reqStr("spec_version"),
+        cardVersion = m.reqStr("card_version"),
+        appId = m.reqStr("app_id"),
+        appName = m.reqStr("app_name"),
+        platforms = m.reqStrList("platforms"),
+        locale = m.reqStrList("locale"),
+        embeddedAgent = parseEmbeddedAgent(m.reqYamlMap("embedded_agent")),
+        provenance = parseProvenance(m.reqYamlMap("provenance")),
+        constraints = parseConstraints(m.reqYamlMap("constraints"))
     )
 
-    private fun EmbeddedAgentDto.toDomain(): EmbeddedAgent = EmbeddedAgent(
-        name = name, type = parseAgentType(type), description = description,
-        entry = entry.toDomain(), invocation = invocation.toDomain(),
-        output = output?.toDomain() ?: Output(),
-        capabilities = capabilities.map { it.toDomain() }
-    )
-
-    private fun EntryDto.toDomain(): Entry = Entry(
-        primary = parseEntryMethod(primary),
-        fallback = fallback.map { parseEntryMethod(it) },
-        preconditions = preconditions.map { it.toDomain() }
-    )
-
-    private fun PreconditionDto.toDomain(): Precondition = Precondition(
-        type = type, permission = permission,
-        dismiss = dismiss?.let { parseStep(it) }
-    )
-
-    private fun InvocationDto.toDomain(): Invocation = Invocation(
-        input = InputField(field = parseSelector(input.field), maxChars = input.max_chars),
-        submit = SubmitAction(trigger = parseSelector(submit.trigger)),
-        promptTemplate = prompt_template ?: "{{user_prompt}}"
-    )
-
-    private fun OutputDto.toDomain(): Output = Output(
-        method = parseOutputMethod(method),
-        completionSignal = completion_signal?.let {
-            CompletionSignal(type = it.type, patterns = it.patterns, timeoutMs = it.timeout_ms)
+    private fun parseEmbeddedAgent(m: YamlMap): EmbeddedAgent = EmbeddedAgent(
+        name = m.reqStr("name"),
+        type = parseAgentType(m.reqStr("type")),
+        description = m.reqStr("description"),
+        entry = parseEntry(m.reqYamlMap("entry")),
+        invocation = parseInvocation(m.reqYamlMap("invocation")),
+        output = m.yamlMap("output")?.let { parseOutput(it) } ?: Output(),
+        capabilities = m.reqYamlList("capabilities").items.map {
+            parseCapability(it.asMap("capability"))
         }
     )
 
-    private fun CapabilityDto.toDomain(): Capability = Capability(
-        id = id, description = description, examplePrompts = example_prompts,
-        executable = executable, sideEffects = side_effects.map { parseSideEffect(it) },
-        requiresLogin = requires_login, reversible = reversible,
-        handoffToUserRequired = handoff_to_user_required,
-        typicalLatencySeconds = typical_latency_seconds, failureModes = failure_modes
+    private fun parseEntry(m: YamlMap): Entry = Entry(
+        primary = parseEntryMethod(m.reqYamlMap("primary")),
+        fallback = m.yamlList("fallback")?.items?.map {
+            parseEntryMethod(it.asMap("fallback entry"))
+        } ?: emptyList(),
+        preconditions = m.yamlList("preconditions")?.items?.map {
+            parsePrecondition(it.asMap("precondition"))
+        } ?: emptyList()
     )
 
-    private fun ProvenanceDto.toDomain(): Provenance = Provenance(
-        lastVerified = last_verified, verifiedAppVersion = verified_app_version,
-        verifiedOs = verified_os, verifiedDevice = verified_device,
-        verificationMethod = verification_method, evidenceUrl = evidence_url,
-        xDeviceMetrics = x_device_metrics?.let {
-            DeviceMetrics(it.resolution_px[0] to it.resolution_px[1], it.density_dpi)
+    private fun parsePrecondition(m: YamlMap): Precondition = Precondition(
+        type = m.reqStr("type"),
+        permission = m.str("permission"),
+        dismiss = m.yamlMap("dismiss")?.let { parseStep(it) }
+    )
+
+    private fun parseInvocation(m: YamlMap): Invocation = Invocation(
+        input = InputField(
+            field = parseSelector(m.reqYamlMap("input").reqYamlMap("field")),
+            maxChars = m.reqYamlMap("input").int("max_chars")
+        ),
+        submit = SubmitAction(
+            trigger = parseSelector(m.reqYamlMap("submit").reqYamlMap("trigger"))
+        ),
+        promptTemplate = m.str("prompt_template") ?: "{{user_prompt}}"
+    )
+
+    private fun parseOutput(m: YamlMap): Output = Output(
+        method = parseOutputMethod(m.str("method") ?: "none"),
+        completionSignal = m.yamlMap("completion_signal")?.let { c ->
+            CompletionSignal(
+                type = c.reqStr("type"),
+                patterns = c.reqStrList("patterns"),
+                timeoutMs = c.int("timeout_ms")?.toLong() ?: 30000L
+            )
         }
     )
 
-    private fun ConstraintsDto.toDomain(): Constraints = Constraints(
-        appVersionMin = app_version_min, appVersionMax = app_version_max,
-        region = region, networkRequired = network_required, knownIssues = known_issues
+    private fun parseCapability(m: YamlMap): Capability = Capability(
+        id = m.reqStr("id"),
+        description = m.reqStr("description"),
+        examplePrompts = m.reqStrList("example_prompts"),
+        executable = m.bool("executable") ?: false,
+        sideEffects = m.yamlList("side_effects")?.items?.map {
+            parseSideEffect((it as? YamlScalar)?.content ?: "none")
+        } ?: emptyList(),
+        requiresLogin = m.bool("requires_login") ?: false,
+        reversible = m.bool("reversible") ?: false,
+        handoffToUserRequired = m.bool("handoff_to_user_required") ?: false,
+        typicalLatencySeconds = m.float("typical_latency_seconds")?.toDouble(),
+        failureModes = m.yamlList("failure_modes")?.items?.mapNotNull {
+            (it as? YamlScalar)?.content
+        } ?: emptyList()
     )
 
-    // ---- YamlMap helpers using kaml 0.57 API ----
+    private fun parseProvenance(m: YamlMap): Provenance = Provenance(
+        lastVerified = m.reqStr("last_verified"),
+        verifiedAppVersion = m.reqStr("verified_app_version"),
+        verifiedOs = m.reqStr("verified_os"),
+        verifiedDevice = m.str("verified_device"),
+        verificationMethod = m.reqStr("verification_method"),
+        evidenceUrl = m.str("evidence_url"),
+        xDeviceMetrics = m.yamlMap("x_device_metrics")?.let { dm ->
+            val res = dm.reqYamlList("resolution_px").items
+            DeviceMetrics(
+                resolutionPx = (res[0] as YamlScalar).toInt() to (res[1] as YamlScalar).toInt(),
+                densityDpi = dm.reqInt("density_dpi")
+            )
+        }
+    )
+
+    private fun parseConstraints(m: YamlMap): Constraints = Constraints(
+        appVersionMin = m.reqStr("app_version_min"),
+        appVersionMax = m.str("app_version_max"),
+        region = m.yamlList("region")?.items?.mapNotNull { (it as? YamlScalar)?.content },
+        networkRequired = m.bool("network_required") ?: true,
+        knownIssues = m.yamlList("known_issues")?.items?.mapNotNull {
+            (it as? YamlScalar)?.content
+        } ?: emptyList()
+    )
+
+    // ---- YamlMap / YamlNode helpers (kaml 0.57 API) ----
 
     private fun YamlMap.has(key: String): Boolean = get<YamlNode>(key) != null
 
@@ -93,6 +136,9 @@ class ManifestParser {
         str(key) ?: error("Missing required key '$key'")
 
     private fun YamlMap.int(key: String): Int? = get<YamlScalar>(key)?.toInt()
+
+    private fun YamlMap.reqInt(key: String): Int =
+        int(key) ?: error("Missing required int key '$key'")
 
     private fun YamlMap.float(key: String): Float? = get<YamlScalar>(key)?.toFloat()
 
@@ -107,6 +153,12 @@ class ManifestParser {
 
     private fun YamlMap.reqYamlList(key: String): YamlList =
         yamlList(key) ?: error("Missing required list key '$key'")
+
+    private fun YamlMap.reqStrList(key: String): List<String> =
+        reqYamlList(key).items.mapNotNull { (it as? YamlScalar)?.content }
+
+    private fun YamlNode.asMap(label: String): YamlMap =
+        this as? YamlMap ?: error("Expected $label to be a YAML map")
 
     // ---- Selector parsing ----
 
