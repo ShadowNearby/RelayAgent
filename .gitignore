@@ -21,3 +21,4 @@ build/
 # Cache
 .mypy_cache/
 .pytest_cache/
+traj_logs/
