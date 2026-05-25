@@ -73,6 +73,8 @@ uv run --python /home/yjs/AppAgentCards/.venv/bin/python mobile-world server &
    - 沉默失败禁忌：早期所有失败路径都是 `logger.debug`，被默认日志级别吞掉，看着像"功能不工作"实际上是 dump 出错。已全部升级到 `logger.info/warning`。
    - 局限：通义的输入框 placeholder TextView `clickable=false`，scoring 会给低分，但只要 `text` 字段精确匹配仍然命中并返回 bounds 中心；点击事件穿透到真正的 EditText 兄弟节点上。
 
+3.5. **App 冷启动由调用方负责，planner 默认会包含 `open_app`，但可关闭。** `scripts/run_test.py` 在调 `mw test` 之前用 `adb shell am force-stop + monkey LAUNCHER` 自己拉起目标 app，然后给子进程设 `APPCARDS_SKIP_OPEN_APP=1`；planner 看到这个环境变量就跳过最开头的 `open_app + 2.5s wait`。这样首张截图直接是 app 主页，无需依赖 MobileWorld 的 `open_app` 实现。如果绕过脚本直接 `mw test`，planner 仍会自带 `open_app` 步骤，不影响 standalone 使用。
+
 4. **`x_prepare_fresh_conversation` 一定要接进 planner。** SPEC 用 `x_` 前缀表示非标扩展字段，老代码的 `build_plan()` 没读它，每次跑都带着上次的历史上下文。现在 `build_plan(... , fresh_conversation=True)` 默认在 `open_app + cold-launch wait` 之后插这段步骤。可用环境变量 `APPCARDS_FRESH_CONV=0` 关掉。
 
 5. **`wait_for_reply` 用 VLM 轮询而不是死等 `typical_latency_seconds`。** 系统 prompt 见 `_REPLY_WATCH_SYSTEM`，VLM 同时回 `{done, text}`。

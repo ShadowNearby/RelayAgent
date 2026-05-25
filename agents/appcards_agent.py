@@ -51,6 +51,7 @@ _TARGET_APP_ENV = "APPCARDS_TARGET_APP"
 _MANIFESTS_ENV = "APPCARDS_MANIFESTS"
 _DENSITY_ENV = "APPCARDS_TARGET_DENSITY"
 _FRESH_CONV_ENV = "APPCARDS_FRESH_CONV"  # set to "0" to disable
+_SKIP_OPEN_APP_ENV = "APPCARDS_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
 
 _GROUNDING_SYSTEM = (
     "You are a UI grounding model. Given a phone screenshot and a target "
@@ -312,6 +313,7 @@ class AppCardsAgent(MCPAgent):
         self._reply_polls: int = 0
         self._last_agent_reply: str | None = None
         self.fresh_conversation: bool = os.getenv(_FRESH_CONV_ENV, "1") != "0"
+        self.skip_open_app: bool = os.getenv(_SKIP_OPEN_APP_ENV, "0") == "1"
 
     def initialize_hook(self, instruction: str) -> None:
         logger.info(f"AppCardsAgent init: instruction={instruction!r}")
@@ -348,6 +350,7 @@ class AppCardsAgent(MCPAgent):
                 cap_id,
                 invocation,
                 fresh_conversation=self.fresh_conversation,
+                skip_open_app=self.skip_open_app,
             )
             self._planned = True
             logger.info(

@@ -76,6 +76,32 @@ python examples/match_intent.py --app com.xingin.xhs "Weekend activities with ki
   --device-resolution 1440x3120 --device-density 480
 ```
 
+## Run under MobileWorld (multi-VLM real-device runner)
+
+`agents/appcards_agent.py` plugs AppAgentCards into [MobileWorld](https://github.com/Tongyi-MAI/MobileWorld) as an `--agent-type`. MobileWorld gives us a real-device runner with provider-agnostic VLM support (Claude, Gemini, Qwen-VL, Kimi, …); the card supplies the deterministic entry path and handoff policy.
+
+```bash
+# in a Linux/WSL host with adb + USB-debugging enabled phone
+git clone https://github.com/Tongyi-MAI/MobileWorld && cd MobileWorld
+uv pip install .
+uv run mobile-world server &
+
+# from this repo
+export APPCARDS_TARGET_APP=com.aliyun.tongyi
+uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
+    --agent-type "$PWD/agents/appcards_agent.py" \
+    --model_name anthropic/claude-sonnet-4-5
+```
+
+Switch model by changing `--model_name` (`google/gemini-3`, `qwen/qwen3-vl-235b-a22b`, etc.). The agent makes one LLM call to pick a capability from the target app's card and (when a step uses a text selector) one small VLM grounding call per such step; all tap coordinates come from `x_bounds` in the card.
+
+Optional env vars:
+
+- `APPCARDS_MANIFESTS=/path/to/manifests` — override the default `./manifests/` location.
+- `APPCARDS_TARGET_DENSITY=480` — your phone's density in DPI for `x_bounds` remapping. Without it the adapter uses raw bi-axial scaling.
+
+The adapter honors `handoff_to_user_required`: for any irreversible capability it emits `ask_user` before the terminal CTA rather than auto-confirming.
+
 ## Run tests
 
 ```bash
