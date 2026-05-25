@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">AppAgentCards</string>
-    <string name="accessibility_service_description">AppAgentCards 使用无障碍服务帮助你将自然语言请求自动传递给其他应用的内置 AI 助手。我们不会读取或收集你的个人数据。</string>
-</resources>
