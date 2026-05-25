@@ -40,6 +40,16 @@ def _compile_step(raw: dict) -> Step | None:
         return Step("wait_ms", {"ms": 1000})
     if "swipe" in raw:
         return Step("swipe", {"direction": raw["swipe"]})
+    if "wait_for_reply" in raw:
+        w = raw["wait_for_reply"] or {}
+        return Step(
+            "wait_for_reply",
+            {
+                "max_seconds": int(w.get("max_seconds", 60)),
+                "poll_interval_seconds": int(w.get("poll_interval_seconds", 2)),
+            },
+            note="agent reply (VLM-polled)",
+        )
     return None
 
 
@@ -58,6 +68,7 @@ def build_plan(
     invocation_text: str,
     *,
     fresh_conversation: bool = True,
+    skip_open_app: bool = False,
 ) -> list[Step]:
     ea = card["embedded_agent"]
     capability = next(
@@ -66,8 +77,12 @@ def build_plan(
 
     plan: list[Step] = []
 
-    plan.append(Step("open_app", {"package": card["app_id"]}, note="cold-launch"))
-    plan.append(Step("wait_ms", {"ms": 2500}, note="cold-launch settle"))
+    # Caller (e.g. scripts/run_test.py) may already have cold-launched
+    # the app before invoking MobileWorld. In that case we skip the
+    # redundant open_app + settle wait at the top of the plan.
+    if not skip_open_app:
+        plan.append(Step("open_app", {"package": card["app_id"]}, note="cold-launch"))
+        plan.append(Step("wait_ms", {"ms": 2500}, note="cold-launch settle"))
 
     # Optional: start a fresh conversation so prior context does not bleed in.
     # Cards may declare the prep flow under embedded_agent.entry.x_prepare_fresh_conversation.

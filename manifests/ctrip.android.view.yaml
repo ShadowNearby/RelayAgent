@@ -37,7 +37,7 @@ embedded_agent:
       # Send button is an ImageView with only content-desc="image"; bounds as fallback.
       trigger:
         x_bounds:
-          box: [947, 2242, 1005, 2296]
+          box: [927, 2079, 1011, 2163]
           anchor: bottom_right
     prompt_template: "{{user_prompt}}"
 
@@ -115,10 +115,11 @@ embedded_agent:
 
     - id: plan_trip
       description: >
-        Multi-day trip planning. Unlike freeform itineraries, Ctrip maps
-        "plan N-day trip" to packaged tour products (private/group/semi-guided
-        SKU cards with rating, sales count, starting price). User taps card
-        for product details and checkout. No text itinerary output.
+        Multi-day trip planning. The agent's first reply is a short prompt
+        plus a "线路规划" card with a "获取专属行程" CTA — the actual itinerary
+        is generated only after that CTA is tapped, which opens a form for
+        dates/origin/party-size/preferences. User completes the form and the
+        agent returns a tailored itinerary (with packaged-tour SKUs alongside).
       example_prompts:
         - "我想十一去三亚玩四天怎么安排"
         - "暑假带孩子去云南怎么玩"
@@ -129,6 +130,14 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 25
+      x_post_result_flow:
+        # First reply only surfaces the "线路规划" entry card; tap "获取专属行程"
+        # to advance into the itinerary form. The form itself requires user
+        # input, so we hand off immediately after the tap.
+        steps:
+          - tap: { text: "获取专属行程" }
+          - wait: { ms: 2000 }            # let the AI行程助手 page settle
+          - wait_for_reply: { max_seconds: 90 }  # actual itinerary generation
       failure_modes:
         - "Destination/duration ambiguous → agent asks for clarification"
         - "Same intent across multiple turns may return different SKUs due to follow-up suggestions"
