@@ -40,6 +40,13 @@ def _compile_step(raw: dict) -> Step | None:
         return Step("wait_ms", {"ms": 1000})
     if "swipe" in raw:
         return Step("swipe", {"direction": raw["swipe"]})
+    if "tap_unless_present" in raw:
+        body = raw["tap_unless_present"]
+        return Step(
+            "tap_unless_present",
+            {"probe": body["probe"], "target": body["target"]},
+            note="conditional tap (skip if probe present)",
+        )
     if "wait_for_reply" in raw:
         w = raw["wait_for_reply"] or {}
         return Step(
@@ -121,10 +128,23 @@ def build_plan(
     # the reply is actually done — and capture the text while we are there.
     typical_latency = capability.get("typical_latency_seconds", 10)
     max_wait = max(int(typical_latency * 3), 30)
+    # Long-form replies (stacked POI cards, multi-paragraph summaries) often
+    # exceed one viewport — capability can opt in to a post-done scroll-and-
+    # capture loop via `x_capture_full_reply: { max_scrolls: N }` (or just
+    # `true` for the default of 6).
+    capture_cfg = capability.get("x_capture_full_reply")
+    wait_params: dict[str, Any] = {
+        "max_seconds": max_wait,
+        "poll_interval_seconds": 2,
+    }
+    if capture_cfg:
+        wait_params["capture_full"] = True
+        if isinstance(capture_cfg, dict) and "max_scrolls" in capture_cfg:
+            wait_params["max_capture_scrolls"] = int(capture_cfg["max_scrolls"])
     plan.append(
         Step(
             "wait_for_reply",
-            {"max_seconds": max_wait, "poll_interval_seconds": 2},
+            wait_params,
             note="agent reply (VLM-polled)",
         )
     )

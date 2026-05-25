@@ -21,13 +21,34 @@ embedded_agent:
         # Bottom-center tab. resource_id "tab_name_v2" shared across 5 tabs;
         # v0.1 single-field selectors can't express "resource_id + text" AND. See OQ-10.
         - tap: { text: "长按说话" }
+        - wait: { ms: 800 }
+        # The AI tab opens in voice ("按住说话") mode on first install. The
+        # hint text "有什么问题尽管问我" is only present in text mode, so
+        # treat it as the probe — if absent, tap the keyboard glyph at the
+        # bottom-right of the input row to flip. The toggle is stateful
+        # across restarts but NOT idempotent, so we use a one-shot
+        # conditional tap rather than an unconditional one.
+        - tap_unless_present:
+            probe: { text: "有什么问题尽管问我" }
+            target:
+              x_bounds:
+                box: [946, 2101, 1009, 2164]
+                anchor: bottom_right
+        - wait: { ms: 600 }
     fallback: []
 
   invocation:
     input:
-      # EditText has no resource-id or content-desc. Hint text exposed only before focus;
-      # router MUST tap first, then type.
-      field: { text: "有什么问题尽管问我" }
+      # EditText has no resource-id or content-desc. When unfocused, both
+      # `text` and `hint` carry "有什么问题尽管问我"; once tapped, `text`
+      # empties out, so the hint-text selector ONLY works pre-focus.
+      # x_bounds is the robust path; the text selector is kept as a hint
+      # for matchers that want a semantic anchor.
+      field:
+        x_bounds:
+          box: [68, 2105, 925, 2160]
+          anchor: bottom_left
+        text: "有什么问题尽管问我"
       max_chars: 500
     submit:
       # Same ViewGroup: empty → mic icon, has text → send arrow.
@@ -88,6 +109,12 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 10
+      # The first VLM "done" reading is often the transient "找到N篇资料"
+      # search-spinner state, not the rendered ride-hailing card. Keep
+      # polling/scrolling past that to capture the actual destination
+      # confirmation + car-type panel before handing back to the user.
+      x_capture_full_reply:
+        max_scrolls: 3
       failure_modes:
         - "Multi-terminal airports → drop-off disambiguation panel"
         - "Not logged in → redirects to login page"
@@ -127,6 +154,7 @@ constraints:
   known_issues:
     - "Entry tab text says 'Press to Talk' (voice-oriented) but also accepts text input."
     - "Input field and send/mic button have no accessibility id or content-desc; selectors rely on hint text and absolute bounds."
+    - "AI tab defaults to voice mode (按住说话) on first install; the keyboard toggle that flips it to text mode is non-idempotent and stateful across restarts. See entry.preconditions.x_text_input_mode_required."
     - "Send button and mic are the same ViewGroup: empty input shows mic, text shows send arrow."
     - "Secondary taps inside agent response cards may not respond to scripted clicks during TTS playback. User manual taps unaffected."
     - "Home screen card 'Call me' is a chat prompt, not actual phone call support — agent refuses dialing requests."

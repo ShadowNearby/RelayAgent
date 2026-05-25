@@ -52,6 +52,7 @@ _MANIFESTS_ENV = "APPCARDS_MANIFESTS"
 _DENSITY_ENV = "APPCARDS_TARGET_DENSITY"
 _FRESH_CONV_ENV = "APPCARDS_FRESH_CONV"  # set to "0" to disable
 _SKIP_OPEN_APP_ENV = "APPCARDS_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
+_REPLY_OUT_ENV = "APPCARDS_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
 
 _GROUNDING_SYSTEM = (
     "You are a UI grounding model. Given a phone screenshot and a target "
@@ -312,6 +313,13 @@ class AppCardsAgent(MCPAgent):
         self._planned: bool = False
         self._reply_polls: int = 0
         self._last_agent_reply: str | None = None
+        # Multi-screen capture state for replies that exceed one viewport
+        # (e.g. 小红书 点点 returns long answers with stacked POI cards). See
+        # the `capture_full` branch in wait_for_reply.
+        self._capture_phase: str | None = None  # None | "scrolling"
+        self._captured_chunks: list[str] = []
+        self._capture_scrolls: int = 0
+        self._capture_idle: int = 0
         self.fresh_conversation: bool = os.getenv(_FRESH_CONV_ENV, "1") != "0"
         self.skip_open_app: bool = os.getenv(_SKIP_OPEN_APP_ENV, "0") == "1"
 
@@ -338,6 +346,10 @@ class AppCardsAgent(MCPAgent):
         self._planned = False
         self._reply_polls = 0
         self._last_agent_reply = None
+        self._capture_phase = None
+        self._captured_chunks = []
+        self._capture_scrolls = 0
+        self._capture_idle = 0
 
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
         screenshot = observation["screenshot"]
@@ -359,7 +371,7 @@ class AppCardsAgent(MCPAgent):
             )
 
         if self.cursor >= len(self.plan):
-            return ("plan exhausted", JSONAction(action_type="status", goal_status="complete"))
+            return ("plan exhausted", JSONAction(action_type="finished", goal_status="complete"))
 
         step = self.plan[self.cursor]
         action, advance, extra_note = self._materialize(step, screenshot, screen_w, screen_h)
@@ -436,6 +448,50 @@ class AppCardsAgent(MCPAgent):
             return JSONAction(action_type="wait"), True, ""
 
         if kind == "wait_for_reply":
+            capture_full = bool(p.get("capture_full"))
+            max_capture_scrolls = int(p.get("max_capture_scrolls", 6))
+
+            # Phase 2: after VLM said done, walk backwards through the reply
+            # by swiping down (MW direction="down" reveals content ABOVE),
+            # capturing visible text per frame. Stops on max scrolls or when
+            # two consecutive frames produce no new text.
+            if self._capture_phase == "scrolling":
+                _, text = self._poll_agent_reply(screenshot)
+                novel = text and text not in self._captured_chunks
+                if novel:
+                    self._captured_chunks.append(text)
+                    self._capture_idle = 0
+                    logger.info(
+                        f"Capture scroll {self._capture_scrolls}: +chunk "
+                        f"({len(text)} chars)"
+                    )
+                else:
+                    self._capture_idle += 1
+                stop = (
+                    self._capture_scrolls >= max_capture_scrolls
+                    or self._capture_idle >= 2
+                )
+                if stop:
+                    # Chunks were captured bottom→top; reverse for reading order.
+                    full = "\n\n---\n\n".join(reversed(self._captured_chunks))
+                    self._last_agent_reply = full
+                    logger.info(
+                        f"Reply capture complete: {len(self._captured_chunks)} "
+                        f"chunks, {len(full)} chars total"
+                    )
+                    self._capture_phase = None
+                    self._captured_chunks = []
+                    self._capture_scrolls = 0
+                    self._capture_idle = 0
+                    return JSONAction(action_type="wait"), True, "capture done"
+                self._capture_scrolls += 1
+                return (
+                    JSONAction(action_type="scroll", direction="down"),
+                    False,
+                    f"capture scroll {self._capture_scrolls}/{max_capture_scrolls}",
+                )
+
+            # Phase 1: poll for done.
             done, text = self._poll_agent_reply(screenshot)
             self._reply_polls += 1
             max_polls = max(1, int(p.get("max_seconds", 30)))  # ~1s per poll
@@ -450,6 +506,16 @@ class AppCardsAgent(MCPAgent):
                     f"text={text!r}"
                 )
                 self._reply_polls = 0
+                if capture_full:
+                    self._capture_phase = "scrolling"
+                    self._captured_chunks = [text]
+                    self._capture_scrolls = 0
+                    self._capture_idle = 0
+                    return (
+                        JSONAction(action_type="scroll", direction="down"),
+                        False,
+                        "done; entering full-reply capture",
+                    )
                 return JSONAction(action_type="wait"), True, f"done; text={text!r}"
             if done and not text:
                 logger.warning(
@@ -466,10 +532,40 @@ class AppCardsAgent(MCPAgent):
                 return JSONAction(action_type="wait"), True, "timeout"
             return JSONAction(action_type="wait"), False, f"poll {self._reply_polls}/{max_polls}"
 
+        if kind == "tap_unless_present":
+            # Probe via uiautomator only (cheap + precise); fall through to
+            # tap target if probe is missing. We deliberately do NOT fall
+            # back to VLM for the probe — a VLM hallucination here would
+            # cause a destructive tap on a non-idempotent UI toggle.
+            probe = p["probe"]
+            target = p["target"]
+            probe_text = probe.get("text") or probe.get("text_contains")
+            if probe_text and _ground_text_via_uiautomator(
+                probe_text, screen_w, screen_h
+            ) is not None:
+                return JSONAction(action_type="wait"), True, (
+                    f"probe {probe_text!r} present; skipping conditional tap"
+                )
+            # Probe missing → tap target. Only x_bounds supported here to
+            # keep the conditional-tap semantics deterministic.
+            if "x_bounds" not in target:
+                logger.warning(
+                    f"tap_unless_present: unsupported target {target!r}; "
+                    "only x_bounds is implemented. Skipping."
+                )
+                return JSONAction(action_type="wait"), True, "unsupported target"
+            x, y = bounds_center(
+                target["x_bounds"], self.card, (screen_w, screen_h), self.target_density
+            )
+            return JSONAction(action_type="click", x=x, y=y), True, (
+                f"probe {probe_text!r} absent; tapping target bounds"
+            )
+
         if kind == "swipe":
             return JSONAction(action_type="scroll", direction=p.get("direction", "down")), True, ""
 
         if kind == "handoff":
+            self._maybe_persist_reply()
             reply_note = (
                 f"\n\nAgent reply captured:\n{self._last_agent_reply}"
                 if self._last_agent_reply
@@ -486,7 +582,8 @@ class AppCardsAgent(MCPAgent):
             ), True, ""
 
         if kind == "done":
-            return JSONAction(action_type="status", goal_status=p.get("status", "complete")), True, ""
+            self._maybe_persist_reply()
+            return JSONAction(action_type="finished", goal_status=p.get("status", "complete")), True, ""
 
         logger.warning(f"Unsupported step kind={kind}; emitting ask_user")
         return JSONAction(
@@ -542,6 +639,31 @@ class AppCardsAgent(MCPAgent):
             px, py = int(rx * screen_w / 999), int(ry * screen_h / 999)
         logger.info(f"Grounding {target!r}: mapped to pixel ({px},{py})")
         return px, py
+
+    def _maybe_persist_reply(self) -> None:
+        """If APPCARDS_REPLY_OUT is set, dump the captured in-app agent
+        reply as JSON so a parent process (e.g. FlowRunner) can pick it up
+        after `mw test` exits. Best-effort; never raises."""
+        path = os.getenv(_REPLY_OUT_ENV)
+        if not path:
+            return
+        try:
+            Path(path).write_text(
+                json.dumps(
+                    {
+                        "reply": self._last_agent_reply,
+                        "target_app": self.target_app,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            logger.info(
+                f"Persisted captured reply to {path} "
+                f"({len(self._last_agent_reply or '')} chars)"
+            )
+        except OSError as e:
+            logger.warning(f"Failed to persist reply to {path}: {e}")
 
     def _poll_agent_reply(self, screenshot) -> tuple[bool, str | None]:
         """Ask the VLM whether the in-app assistant has finished replying,

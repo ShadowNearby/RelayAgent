@@ -8,10 +8,14 @@ capability id and render an invocation prompt for the in-app agent.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
 from loguru import logger
+
+_FORCE_CAP_ENV = "APPCARDS_FORCE_CAPABILITY"
+_FORCE_INVOCATION_ENV = "APPCARDS_INVOCATION_TEXT"
 
 _SYSTEM = """You route a user instruction to one in-app AI agent capability.
 
@@ -65,7 +69,23 @@ def route_capability(
 
     Returns (capability_id, invocation_text). Raises if the LLM reply is
     unparseable or names an unknown capability.
+
+    If APPCARDS_FORCE_CAPABILITY is set (used by the flow runner to skip
+    routing in single-capability sub-runs), it is validated against the
+    card and returned as-is, paired with APPCARDS_INVOCATION_TEXT (falling
+    back to the original instruction).
     """
+    forced = os.getenv(_FORCE_CAP_ENV)
+    if forced:
+        known = {c["id"] for c in card["embedded_agent"]["capabilities"]}
+        if forced not in known:
+            raise ValueError(
+                f"{_FORCE_CAP_ENV}={forced!r} not in card capabilities {sorted(known)}"
+            )
+        invocation = os.getenv(_FORCE_INVOCATION_ENV) or instruction
+        logger.info(f"Capability router skipped (forced): {forced!r}")
+        return forced, invocation.strip()
+
     user_msg = json.dumps(
         {
             "instruction": instruction,
