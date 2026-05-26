@@ -34,13 +34,14 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
 import yaml
 from loguru import logger
 from openai import OpenAI
+
+from agents._adb import cold_launch as _cold_launch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
@@ -49,8 +50,9 @@ MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
 # --------------------------------------------------------------------------- #
-# small helpers (duplicated from scripts/run_test.py to keep flow_runner
-# importable without adding `scripts/` to sys.path)
+# small helpers. `cold_launch` is shared via agents/_adb.py; `.env` parsing
+# is intentionally inlined here to keep flow_runner standalone-importable
+# without depending on the `scripts/` directory being on sys.path.
 # --------------------------------------------------------------------------- #
 
 
@@ -67,23 +69,8 @@ def _load_dotenv(path: Path) -> dict[str, str]:
     return out
 
 
-def _cold_launch(package: str, settle_seconds: float = 2.5) -> None:
-    logger.info(f"cold-launching {package} ...")
-    subprocess.run(
-        ["adb", "shell", "am", "force-stop", package],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    res = subprocess.run(
-        ["adb", "shell", "monkey", "-p", package,
-         "-c", "android.intent.category.LAUNCHER", "1"],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    if res.returncode != 0 or "No activities found" in (res.stdout + res.stderr):
-        raise RuntimeError(
-            f"Failed to launch {package}. stdout={res.stdout.strip()!r} "
-            f"stderr={res.stderr.strip()!r}"
-        )
-    time.sleep(settle_seconds)
+# cold-launch delegates to agents._adb so all three call sites (run_test.py,
+# flow_runner, appcards_agent open_app) share one implementation.
 
 
 # --------------------------------------------------------------------------- #
@@ -169,16 +156,21 @@ class FlowRunner:
         capability = step["capability"]
         prompt = render(step["prompt"], self.bb)
 
-        _cold_launch(app)
+        _cold_launch(app)  # from agents._adb
 
         with tempfile.NamedTemporaryFile(
             mode="w+", suffix=".json", prefix="appcards_reply_", delete=False
         ) as fh:
             reply_path = Path(fh.name)
         try:
+            # Priority: explicit overrides (the per-step APPCARDS_* keys
+            # below) > shell env > .env file. Putting `self.env` (sourced
+            # from .env) underneath `os.environ` lets a user override any
+            # LLM_* / APPCARDS_* setting from their shell without editing
+            # .env. The per-step keys at the end always win.
             child_env = {
-                **os.environ,
                 **self.env,
+                **os.environ,
                 "APPCARDS_TARGET_APP": app,
                 "APPCARDS_SKIP_OPEN_APP": "1",
                 "APPCARDS_FORCE_CAPABILITY": capability,

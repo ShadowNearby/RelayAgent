@@ -15,52 +15,28 @@ import argparse
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from agents._adb import cold_launch as _cold_launch  # noqa: E402
+
 ENV_FILE = REPO_ROOT / ".env"
 AGENT_FILE = REPO_ROOT / "agents" / "appcards_agent.py"
 MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
 def cold_launch(package: str, settle_seconds: float = 2.5) -> None:
-    """Cold-launch policy — MANDATORY before any test run.
-
-    Always force-stop the target app FIRST, then (re-)launch via the
-    standard launcher intent. This guarantees MobileWorld's first
-    observation is the app's clean home surface — not a stale modal,
-    half-finished chat thread, expired session sheet, or whatever the
-    previous run left behind.
-
-    The agent (`appcards_agent._materialize`) mirrors this policy
-    independently when it handles the `open_app` step, so direct
-    `mw test` invocations that bypass this script still cold-start
-    cleanly. Both call sites must stay in sync — DO NOT remove
-    either one.
-    """
+    """Cold-launch the target app via the shared helper. Mandatory before
+    any test run — see agents/_adb.py for the policy rationale."""
     print(f"▶ cold-launching {package} (force-stop + monkey LAUNCHER) ...",
           file=sys.stderr)
-    fs = subprocess.run(
-        ["adb", "shell", "am", "force-stop", package],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    if fs.returncode != 0:
-        # force-stop is best-effort; report and continue to launch.
-        print(f"  ! force-stop returned {fs.returncode}: "
-              f"{(fs.stderr or fs.stdout).strip()}", file=sys.stderr)
-    res = subprocess.run(
-        ["adb", "shell", "monkey", "-p", package,
-         "-c", "android.intent.category.LAUNCHER", "1"],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    if res.returncode != 0 or "No activities found" in (res.stdout + res.stderr):
-        sys.exit(
-            f"Failed to launch {package} via adb monkey.\n"
-            f"stdout: {res.stdout.strip()}\nstderr: {res.stderr.strip()}\n"
-            "Check `adb devices` and the package id."
-        )
-    time.sleep(settle_seconds)
+    try:
+        _cold_launch(package, settle_seconds=settle_seconds)
+    except RuntimeError as e:
+        sys.exit(f"{e}\nCheck `adb devices` and the package id.")
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
@@ -112,9 +88,12 @@ def main() -> int:
     cold_launch(args.app)
 
     # The adapter reads APPCARDS_TARGET_APP at construction time.
+    # Priority: explicit overrides (APPCARDS_*) > shell env > .env file.
+    # `env_vars` from .env is the lowest layer so a user can override any
+    # LLM_* / APPCARDS_* setting from their shell without editing .env.
     child_env = {
-        **os.environ,
         **env_vars,
+        **os.environ,
         "APPCARDS_TARGET_APP": args.app,
         "APPCARDS_SKIP_OPEN_APP": "1",
     }
