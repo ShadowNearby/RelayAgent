@@ -111,6 +111,17 @@ def build_plan(
         if s is not None:
             plan.append(s)
 
+    # Some capabilities require switching the chat surface into a dedicated
+    # sub-mode before typing — e.g. WPS AI's "AI PPT" chip locks the input
+    # into PPT-topic-only mode. Capability can declare these prefix steps
+    # under `x_pre_invocation_steps`; they run after entry, before the
+    # input is focused.
+    for raw in capability.get("x_pre_invocation_steps") or []:
+        s = _compile_step(raw)
+        if s is not None:
+            s.note = s.note or "capability pre-invocation"
+            plan.append(s)
+
     field_sel = ea["invocation"]["input"]["field"]
     focus = _compile_selector_tap(field_sel)
     focus.note = "focus input"
@@ -148,6 +159,32 @@ def build_plan(
             note="agent reply (VLM-polled)",
         )
     )
+
+    # If the card declares output.method == copy_button, tap the in-app
+    # copy button after the reply lands so the answer ends up on the device
+    # clipboard. Reading it back is out of scope (Binder 1MB cap on rich
+    # copies); the persisted text in agent_reply.json still comes from VLM.
+    # Locator: prefer VLM grounding via `text`, fall back to fixed `x_bounds`.
+    output_cfg = ea.get("output") or {}
+    if output_cfg.get("method") == "copy_button":
+        cfg = output_cfg.get("x_copy_button") or {}
+        payload: dict[str, Any] = {}
+        if cfg.get("text"):
+            payload["text"] = cfg["text"]
+        if cfg.get("x_bounds"):
+            payload["bounds"] = cfg["x_bounds"]
+        if cfg.get("valid_x"):
+            payload["valid_x"] = list(cfg["valid_x"])
+        if cfg.get("valid_y"):
+            payload["valid_y"] = list(cfg["valid_y"])
+        if payload:
+            plan.append(
+                Step(
+                    "copy_reply",
+                    payload,
+                    note="tap in-app copy button (leaves answer on clipboard)",
+                )
+            )
 
     for raw in (capability.get("x_post_result_flow") or {}).get("steps", []) or []:
         s = _compile_step(raw)

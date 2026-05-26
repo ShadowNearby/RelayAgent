@@ -83,6 +83,70 @@ _FENCE_ANY = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
 _BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
 
+# Strip whitespace + common punctuation noise so two VLM extractions of the
+# same paragraph compare equal even when one renders "2022年, 董..." and the
+# other "2022年，董...", or with/without inline numbering / bullet glyphs.
+_DEDUP_STRIP_RE = re.compile(r"[\s.,;:!?，。、；：！？\-—–·•*•]+")
+
+
+def _normalize_for_dedup(s: str) -> str:
+    """Lowercase + drop whitespace and minor punctuation. Used only for
+    chunk-equality checks; the original chunk text is preserved for output."""
+    return _DEDUP_STRIP_RE.sub("", s).lower()
+
+
+def _stitch_chunks(chunks: list[str]) -> str:
+    """Merge VLM-extracted chunks from sliding screenshot windows into one
+    coherent reply, with three passes:
+
+      1. Drop any chunk whose normalized form is a substring of another
+         (sub-window dupes — same content captured at a slightly different
+         scroll position).
+      2. For each adjacent pair, look for a long suffix/prefix overlap in
+         normalized space and trim it off the second chunk before joining.
+      3. If after (1) and (2) the merged text STILL contains the same
+         paragraph more than once, keep only the largest chunk. This is the
+         honest pragmatic fallback for VLM extraction noise: VLM sometimes
+         paraphrases the same paragraph differently across overlapping
+         frames, defeating both substring and overlap matches. Returning
+         the longest single coherent capture beats a 3x-duplicated mess.
+
+    Chunks are assumed to be in reading order (top → bottom)."""
+    chunks = [c for c in chunks if c and c.strip()]
+    if not chunks:
+        return ""
+    if len(chunks) == 1:
+        return chunks[0]
+
+    # (1) Drop substring duplicates (normalized).
+    norms = [_normalize_for_dedup(c) for c in chunks]
+    keep_idx: list[int] = []
+    for i, ni in enumerate(norms):
+        if not ni:
+            continue
+        if any(i != j and norms[j] and ni in norms[j] for j in range(len(norms))):
+            continue  # ni is a substring of some other chunk
+        keep_idx.append(i)
+    chunks = [chunks[i] for i in keep_idx]
+    if len(chunks) <= 1:
+        return chunks[0] if chunks else ""
+
+    # (2) Multiple chunks survived step 1 (none is a strict substring of
+    # another). They DO have significant overlap though — VLM paraphrases
+    # the same content slightly differently across frames (whitespace,
+    # line wrap, bullet glyphs), so neither substring matching nor
+    # suffix/prefix stitching can collapse them cleanly. The honest
+    # fallback for VLM extraction noise is to keep just the longest
+    # single coherent capture; that beats a 2-3x duplicated mess.
+    longest = max(chunks, key=lambda c: len(_normalize_for_dedup(c)))
+    logger.info(
+        f"_stitch_chunks: {len(chunks)} chunks survived substring dedup "
+        f"(VLM paraphrase drift); returning longest "
+        f"({len(longest)} of {sum(len(c) for c in chunks)} total chars)"
+    )
+    return longest
+
+
 def _ground_text_via_uiautomator(
     target: str, screen_w: int, screen_h: int
 ) -> tuple[int, int] | None:
@@ -394,13 +458,30 @@ class AppCardsAgent(MCPAgent):
         p = step.payload
 
         if kind == "open_app":
+            # Cold-launch policy: always force-stop the target before launching,
+            # so the in-app agent observes a clean home surface (not a stale
+            # modal / half-finished chat / expired session sheet from a
+            # previous run). MobileWorld's `open_app` is launcher-tap-based
+            # and does NOT force-stop, so we shell out to adb first. The
+            # run_test.py wrapper does the same thing before this code path
+            # is ever reached — duplicating it here covers direct `mw test`
+            # invocations that bypass the wrapper.
+            pkg = p["package"]
+            try:
+                subprocess.run(
+                    ["adb", "shell", "am", "force-stop", pkg],
+                    check=False, capture_output=True, timeout=10,
+                )
+                logger.info(f"force-stopped {pkg} before open_app")
+            except Exception as e:  # pragma: no cover — best-effort
+                logger.warning(f"force-stop {pkg} failed (continuing): {e}")
             # MobileWorld's open_app expects the launcher label (e.g. "千问"),
             # not the package id. Prefer the card's embedded_agent.name as the
             # launcher label; fall back to app_name, then the package id.
             launcher_label = (
                 (self.card or {}).get("embedded_agent", {}).get("name")
                 or (self.card or {}).get("app_name")
-                or p["package"]
+                or pkg
             )
             return JSONAction(action_type="open_app", app_name=launcher_label), True, ""
 
@@ -457,9 +538,31 @@ class AppCardsAgent(MCPAgent):
             # two consecutive frames produce no new text.
             if self._capture_phase == "scrolling":
                 _, text = self._poll_agent_reply(screenshot)
-                novel = text and text not in self._captured_chunks
+                # Substring dedup with normalization: a new VLM-extracted
+                # frame often repeats text from a previous frame but with
+                # tiny formatting drift (whitespace, punctuation, markdown
+                # numbering style). Comparing on a normalized form (no
+                # whitespace, no punctuation noise) catches those duplicates
+                # while we keep the richer original text for storage. If the
+                # new chunk strictly EXTENDS an existing one, replace in
+                # place so we end up with the longest variant.
+                novel = False
+                if text:
+                    n_text = _normalize_for_dedup(text)
+                    norms = [_normalize_for_dedup(c) for c in self._captured_chunks]
+                    contained = any(n_text and n_text in nc for nc in norms)
+                    if not contained:
+                        replaced = False
+                        for i, nc in enumerate(norms):
+                            if nc and nc in n_text:
+                                # New chunk is a superset — keep the longer one.
+                                self._captured_chunks[i] = text
+                                replaced = True
+                                break
+                        if not replaced:
+                            self._captured_chunks.append(text)
+                        novel = True
                 if novel:
-                    self._captured_chunks.append(text)
                     self._capture_idle = 0
                     logger.info(
                         f"Capture scroll {self._capture_scrolls}: +chunk "
@@ -472,8 +575,10 @@ class AppCardsAgent(MCPAgent):
                     or self._capture_idle >= 2
                 )
                 if stop:
-                    # Chunks were captured bottom→top; reverse for reading order.
-                    full = "\n\n---\n\n".join(reversed(self._captured_chunks))
+                    # Chunks were captured bottom→top; reverse for reading
+                    # order, then stitch adjacent chunks at their suffix/
+                    # prefix overlap so duplicated seam content collapses.
+                    full = _stitch_chunks(list(reversed(self._captured_chunks)))
                     self._last_agent_reply = full
                     logger.info(
                         f"Reply capture complete: {len(self._captured_chunks)} "
@@ -564,6 +669,67 @@ class AppCardsAgent(MCPAgent):
         if kind == "swipe":
             return JSONAction(action_type="scroll", direction=p.get("direction", "down")), True, ""
 
+        if kind == "copy_reply":
+            # Single-shot: tap the in-app 复制 button. We don't read the
+            # clipboard back — Android's Binder 1MB cap rejects WeChat AI 搜索
+            # copies (they include cited cards + HTML). The answer is left on
+            # the device clipboard for the user / a downstream IME helper.
+            #
+            # Locator priority:
+            #   1. VLM grounding via `text`
+            #   2. Sanity-check the (x,y) against `valid_x` / `valid_y`. The
+            #      copy icon is in a fixed COLUMN on this device — only the
+            #      toolbar's y drifts with reply length — so a wildly off x
+            #      is almost always a model miss. Snap x to the spec center
+            #      (bounds midpoint) when VLM y is valid but x isn't.
+            #   3. Hard fallback: bounds_center.
+            spec_x = spec_y = None
+            if p.get("bounds"):
+                spec_x, spec_y = bounds_center(
+                    p["bounds"], self.card, (screen_w, screen_h), self.target_density
+                )
+            vx = vy = None
+            if p.get("text"):
+                try:
+                    vx, vy = self._ground_text(p["text"], screenshot, screen_w, screen_h)
+                    logger.info(
+                        f"copy_reply: VLM-grounded {p['text']!r} -> ({vx},{vy})"
+                    )
+                except RuntimeError as e:
+                    logger.warning(f"copy_reply: VLM grounding failed: {e}")
+
+            def _in(rng, v):
+                return rng is None or (rng[0] <= v <= rng[1])
+
+            vx_ok = vx is not None and _in(p.get("valid_x"), vx)
+            vy_ok = vy is not None and _in(p.get("valid_y"), vy)
+            if vx_ok and vy_ok:
+                x, y = vx, vy
+                note = f"VLM ({vx},{vy})"
+            elif vy_ok and spec_x is not None:
+                # Common Qwen-VL failure mode: correct y, bogus x. Keep y.
+                x, y = spec_x, vy
+                logger.warning(
+                    f"copy_reply: VLM x={vx} outside valid_x={p.get('valid_x')}; "
+                    f"snapping x to spec_x={spec_x} (kept VLM y={vy})"
+                )
+                note = f"VLM-y + spec-x ({spec_x},{vy})"
+            elif spec_x is not None and spec_y is not None:
+                x, y = spec_x, spec_y
+                logger.warning(
+                    f"copy_reply: VLM unusable (vx={vx}, vy={vy}); using bounds "
+                    f"center ({spec_x},{spec_y})"
+                )
+                note = f"bounds-center ({spec_x},{spec_y})"
+            else:
+                logger.warning("copy_reply: no usable locator; skipping tap")
+                return JSONAction(action_type="wait"), True, "no copy locator"
+            return (
+                JSONAction(action_type="click", x=x, y=y),
+                True,
+                f"tap copy via {note}",
+            )
+
         if kind == "handoff":
             self._maybe_persist_reply()
             reply_note = (
@@ -641,29 +807,36 @@ class AppCardsAgent(MCPAgent):
         return px, py
 
     def _maybe_persist_reply(self) -> None:
-        """If APPCARDS_REPLY_OUT is set, dump the captured in-app agent
-        reply as JSON so a parent process (e.g. FlowRunner) can pick it up
-        after `mw test` exits. Best-effort; never raises."""
-        path = os.getenv(_REPLY_OUT_ENV)
-        if not path:
-            return
-        try:
-            Path(path).write_text(
-                json.dumps(
-                    {
-                        "reply": self._last_agent_reply,
-                        "target_app": self.target_app,
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-            logger.info(
-                f"Persisted captured reply to {path} "
-                f"({len(self._last_agent_reply or '')} chars)"
-            )
-        except OSError as e:
-            logger.warning(f"Failed to persist reply to {path}: {e}")
+        """Dump the captured in-app agent reply as JSON to:
+          1. APPCARDS_REPLY_OUT (if set) — for parent processes like FlowRunner;
+          2. <MW traj dir>/agent_reply.json — always, so the reply lives next
+             to traj.json / screenshots and survives MW's per-run backup of
+             traj_logs/user_task/. Best-effort; never raises."""
+        payload = json.dumps(
+            {
+                "reply": self._last_agent_reply,
+                "target_app": self.target_app,
+            },
+            ensure_ascii=False,
+        )
+        targets: list[Path] = []
+        env_path = os.getenv(_REPLY_OUT_ENV)
+        if env_path:
+            targets.append(Path(env_path))
+        # MobileWorld dumps the active run under traj_logs/user_task/ (see
+        # CLAUDE.md). Drop the reply there too so it's discoverable by default.
+        traj_dir = Path("traj_logs") / "user_task"
+        if traj_dir.exists():
+            targets.append(traj_dir / "agent_reply.json")
+        for path in targets:
+            try:
+                path.write_text(payload, encoding="utf-8")
+                logger.info(
+                    f"Persisted captured reply to {path} "
+                    f"({len(self._last_agent_reply or '')} chars)"
+                )
+            except OSError as e:
+                logger.warning(f"Failed to persist reply to {path}: {e}")
 
     def _poll_agent_reply(self, screenshot) -> tuple[bool, str | None]:
         """Ask the VLM whether the in-app assistant has finished replying,
