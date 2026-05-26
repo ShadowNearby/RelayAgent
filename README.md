@@ -41,11 +41,15 @@ The target app is **explicit**. The OS agent selects a capability within that ap
 
 ## Demo
 
-A real-device end-to-end case — the OS agent routes `order_food` to Tongyi Qianwen, the in-app agent handles the interaction, and the OS agent steps in only for the post-result confirmation flow (pick item → pick spec → stop before payment):
+A real-device end-to-end case across two apps — one NL sentence, *"在上海找三家评价好的小众书店，挑一家打车过去"*, is routed to the `xhs_to_amap_place` flow: Xiaohongshu's 点点 returns three bookstores, the user picks one, and Amap's voice tab takes the pick straight into a ride-hailing card. The OS agent only steps in to relay the choice and to hand control back before the final CTA:
 
-![Order via Tongyi Qianwen](assets/demo-mixue-order.gif)
+![Xiaohongshu → Amap bookstore + ride](assets/demo_xhs_to_amap_place.gif)
 
-Driven by the [Tongyi Qianwen manifest](manifests/com.aliyun.tongyi.yaml). The card's `order_food` capability defines the entry, invocation prompt, and the `x_post_result_flow` that taps through the confirmation UI.
+Driven by the [`xhs_to_amap_place` flow](manifests/_flows/xhs_to_amap_place.yaml), composing the [Xiaohongshu](manifests/com.xingin.xhs.yaml) and [Amap](manifests/com.autonavi.minimap.yaml) cards. Reproduce with:
+
+```bash
+uv run python scripts/run_nl.py "在上海找三家评价好的小众书店，挑一家打车过去" --record
+```
 
 ## What's in the repo
 
