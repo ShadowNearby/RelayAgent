@@ -5,8 +5,6 @@ import re
 import subprocess
 import time
 import unittest
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -38,13 +36,6 @@ BLOCKER_SETTLE_SECONDS = float(config.BLOCKER_SETTLE_SECONDS)
 SCREEN_RECORD = config.SCREEN_RECORD
 SCREEN_RECORD_BITRATE = str(config.SCREEN_RECORD_BITRATE)
 SCREEN_RECORD_TIME_LIMIT = int(config.SCREEN_RECORD_TIME_LIMIT)
-VISION_SUMMARY = config.VISION_SUMMARY
-VISION_BASE_URL = config.VISION_BASE_URL
-VISION_API_KEY = config.VISION_API_KEY
-VISION_MODEL = config.VISION_MODEL
-VISION_MAX_IMAGES = int(config.VISION_MAX_IMAGES)
-VISION_TIMEOUT_SECONDS = int(config.VISION_TIMEOUT_SECONDS)
-VISION_REQUIRED = config.VISION_REQUIRED
 
 
 def _bounds_center(bounds: str) -> tuple[int, int]:
@@ -354,8 +345,7 @@ class ManifestRealAdbTests(unittest.TestCase):
             self.capture_traj("after_submit")
             self.wait_for_result_stable(before_submit_text)
             stable_snapshot = self.capture_traj("after_result_stable")
-            full_result = self.collect_full_result_by_scrolling(stable_snapshot)
-            self.summarize_full_result_with_vision(app_id, prompt, full_result)
+            self.collect_full_result_by_scrolling(stable_snapshot)
             post_result_flow = (
                 capability.get("x_post_result_flow") if capability else None
             )
@@ -654,107 +644,6 @@ class ManifestRealAdbTests(unittest.TestCase):
             merged_file=_path_for_traj(self.traj_dir / "full_result_merged.txt"),
         )
         return result
-
-    def summarize_full_result_with_vision(
-        self,
-        app_id: str,
-        prompt: str,
-        full_result: dict[str, object],
-    ) -> None:
-        if not VISION_SUMMARY:
-            self.record_traj(
-                "vision_summary_skipped",
-                reason="VISION_SUMMARY disabled",
-            )
-            return
-
-        if not (VISION_BASE_URL and VISION_API_KEY):
-            self.record_traj(
-                "vision_summary_skipped",
-                reason="missing VISION_BASE_URL or VISION_API_KEY",
-            )
-            return
-
-        pages = full_result["pages"]
-        screenshots = [
-            page.get("screenshot") for page in pages
-            if isinstance(page, dict) and page.get("screenshot")
-        ][:VISION_MAX_IMAGES]
-        if not screenshots:
-            message = "no screenshots available for vision summary"
-            self.record_traj("vision_summary_skipped", reason=message)
-            if VISION_REQUIRED:
-                raise AssertionError(message)
-            return
-
-        content = [
-            {
-                "type": "text",
-                "text": (
-                    "你是移动应用真实测试结果提取器。"
-                    "下面是按测试轨迹下滑顺序采集的多张手机截图，"
-                    "以及 uiautomator 可见文本聚合。"
-                    "请从截图中尽量提取完整回答内容，过滤输入框、底部按钮、"
-                    "历史无关对话和重复文本，并输出：\n"
-                    "1. full_answer: 完整回答正文\n"
-                    "2. concise_summary: 3-6 条要点总结\n"
-                    "3. evidence: 说明你依据了哪些截图/页面\n"
-                    "4. warnings: 如果内容可能不完整、被遮挡、或混入历史记录，请说明\n\n"
-                    f"app_id: {app_id}\n"
-                    f"user_prompt: {prompt}\n"
-                    "accessibility_text_merged:\n"
-                    f"{full_result['merged_text']}"
-                ),
-            }
-        ]
-        for screenshot in screenshots:
-            path = Path(str(screenshot))
-            if not path.is_absolute():
-                path = ROOT / path
-            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{b64}",
-                },
-            })
-
-        payload = {
-            "model": VISION_MODEL,
-            "messages": [{"role": "user", "content": content}],
-            "temperature": 0,
-        }
-        url = VISION_BASE_URL.rstrip("/") + "/chat/completions"
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {VISION_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=VISION_TIMEOUT_SECONDS) as resp:
-                response = json.loads(resp.read().decode("utf-8"))
-            summary = response["choices"][0]["message"]["content"]
-        except (KeyError, json.JSONDecodeError, urllib.error.URLError) as exc:
-            self.record_traj("vision_summary_error", error=repr(exc))
-            if VISION_REQUIRED:
-                raise AssertionError(f"vision summary failed: {exc!r}") from exc
-            return
-
-        summary_path = self.traj_dir / "vision_summary.md"
-        summary_path.write_text(summary, encoding="utf-8")
-        self.record_traj(
-            "vision_summary",
-            model=VISION_MODEL,
-            base_url=VISION_BASE_URL,
-            image_count=len(screenshots),
-            chars=len(summary),
-            file=_path_for_traj(summary_path),
-            text=summary,
-        )
 
     def screen_size(self) -> tuple[int, int]:
         proc = self.adb("shell", "wm", "size", check=False)
