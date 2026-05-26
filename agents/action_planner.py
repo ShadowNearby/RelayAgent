@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from loguru import logger
+
 
 @dataclass
 class Step:
@@ -19,12 +21,30 @@ class Step:
     note: str = ""
 
 
+# tap_label selector field priority (matches SPEC §6.1 and the real-device
+# test runner in tests/test_manifest_real_adb.py).
+_TAP_LABEL_KEYS = (
+    "text_or_desc",
+    "text",
+    "text_or_desc_contains",
+    "text_contains",
+    "accessibility_id",
+)
+
+
 def _compile_step(raw: dict) -> Step | None:
-    """One card step → one logical Step. None if unsupported."""
+    """One card step → one logical Step. Returns None on unrecognized step
+    (and logs a warning — a silent skip masks card typos)."""
     if "tap" in raw:
         return _compile_selector_tap(raw["tap"])
     if "tap_label" in raw:
-        return Step("tap_text", {"text": raw["tap_label"]["text_or_desc"]})
+        body = raw["tap_label"] or {}
+        for key in _TAP_LABEL_KEYS:
+            v = body.get(key)
+            if v:
+                return Step("tap_text", {"text": v})
+        logger.warning(f"tap_label step has no usable selector: {body!r}")
+        return None
     if "tap_screen_fraction" in raw:
         f = raw["tap_screen_fraction"]
         return Step("tap_fraction", {"x_ratio": f["x_ratio"], "y_ratio": f["y_ratio"]})
@@ -35,7 +55,13 @@ def _compile_step(raw: dict) -> Step | None:
         if "until" in w:
             sel = w["until"]
             text = sel.get("text") or sel.get("text_contains")
-            timeout = int(w.get("timeout_seconds", 5) * 1000)
+            timeout = int(float(w.get("timeout_seconds", 5)) * 1000)
+            if not text:
+                logger.warning(
+                    f"wait.until selector lacks text/text_contains; falling "
+                    f"back to fixed {timeout}ms wait: {sel!r}"
+                )
+                return Step("wait_ms", {"ms": timeout})
             return Step("wait_text", {"text": text, "timeout_ms": timeout})
         return Step("wait_ms", {"ms": 1000})
     if "swipe" in raw:
@@ -51,12 +77,13 @@ def _compile_step(raw: dict) -> Step | None:
         w = raw["wait_for_reply"] or {}
         return Step(
             "wait_for_reply",
-            {
-                "max_seconds": int(w.get("max_seconds", 60)),
-                "poll_interval_seconds": int(w.get("poll_interval_seconds", 2)),
-            },
+            {"max_seconds": int(w.get("max_seconds", 60))},
             note="agent reply (VLM-polled)",
         )
+    logger.warning(
+        f"Unknown step kind in card (no handler matched): {list(raw.keys())!r} "
+        f"— step will be dropped from the plan"
+    )
     return None
 
 
@@ -144,10 +171,7 @@ def build_plan(
     # capture loop via `x_capture_full_reply: { max_scrolls: N }` (or just
     # `true` for the default of 6).
     capture_cfg = capability.get("x_capture_full_reply")
-    wait_params: dict[str, Any] = {
-        "max_seconds": max_wait,
-        "poll_interval_seconds": 2,
-    }
+    wait_params: dict[str, Any] = {"max_seconds": max_wait}
     if capture_cfg:
         wait_params["capture_full"] = True
         if isinstance(capture_cfg, dict) and "max_scrolls" in capture_cfg:

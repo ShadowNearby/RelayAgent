@@ -13,8 +13,11 @@ Design:
 - One LLM call per task picks a capability + invocation text from the card.
 - The rest of the turns walk a deterministic plan: open_app, taps using
   card x_bounds, input_text, submit, optional post-result flow.
-- Text-based selectors (input field focus, post-result labels) get one
-  small VLM grounding call per occurrence — same multi-model client.
+- Text-based selectors (input field focus, post-result labels) try
+  `uiautomator dump` first (precise, free, robust to redraws); only fall
+  back to a small VLM grounding call if the text is not in the a11y tree.
+- `wait_for_reply` polls a VLM (`{done, text}`) on a WALL-CLOCK budget
+  (`max(3×typical_latency, 30)` seconds), not a poll-count budget.
 - Honors `handoff_to_user_required`: emits ask_user before the irreversible CTA.
 """
 
@@ -26,6 +29,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -43,6 +47,7 @@ from mobile_world.agents.base import MCPAgent
 from mobile_world.agents.utils.helpers import pil_to_base64
 from mobile_world.runtime.utils.models import JSONAction
 
+from agents._adb import adb_base, force_stop
 from agents.action_planner import Step, build_plan
 from agents.capability_router import route_capability
 from agents.card_loader import bounds_center, load_card_by_app_id
@@ -97,19 +102,22 @@ def _normalize_for_dedup(s: str) -> str:
 
 def _stitch_chunks(chunks: list[str]) -> str:
     """Merge VLM-extracted chunks from sliding screenshot windows into one
-    coherent reply, with three passes:
+    coherent reply. Two passes:
 
       1. Drop any chunk whose normalized form is a substring of another
          (sub-window dupes — same content captured at a slightly different
          scroll position).
-      2. For each adjacent pair, look for a long suffix/prefix overlap in
-         normalized space and trim it off the second chunk before joining.
-      3. If after (1) and (2) the merged text STILL contains the same
-         paragraph more than once, keep only the largest chunk. This is the
-         honest pragmatic fallback for VLM extraction noise: VLM sometimes
-         paraphrases the same paragraph differently across overlapping
-         frames, defeating both substring and overlap matches. Returning
-         the longest single coherent capture beats a 3x-duplicated mess.
+      2. If multiple chunks survive (none is a strict substring of another
+         but they DO overlap heavily because the VLM paraphrased the same
+         content slightly differently across frames), keep only the longest
+         single chunk. We do NOT attempt suffix/prefix stitching: VLM
+         paraphrase drift defeats char-level overlap matching, and returning
+         the longest coherent capture beats emitting a 2-3x duplicated mess.
+
+    Trade-off: long replies that span >1 viewport with genuinely distinct
+    paragraphs per frame will get truncated to the single-best frame. If
+    that becomes a real problem, the fix is a different capture strategy
+    (deterministic anchor-based scroll + a11y extraction), not stitching.
 
     Chunks are assumed to be in reading order (top → bottom)."""
     chunks = [c for c in chunks if c and c.strip()]
@@ -162,8 +170,7 @@ def _ground_text_via_uiautomator(
     All matches are restricted to clickable / focusable / visible nodes when
     possible — falls back to any node if no clickable match exists.
     """
-    device = os.getenv("APPCARDS_ANDROID_SERIAL")  # optional, for multi-device
-    base = ["adb"] + (["-s", device] if device else [])
+    base = adb_base()
 
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
         local_xml = fh.name
@@ -376,6 +383,8 @@ class AppCardsAgent(MCPAgent):
         self.cursor: int = 0
         self._planned: bool = False
         self._reply_polls: int = 0
+        self._reply_start_ts: float | None = None
+        self._wait_text_start_ts: float | None = None
         self._last_agent_reply: str | None = None
         # Multi-screen capture state for replies that exceed one viewport
         # (e.g. 小红书 点点 returns long answers with stacked POI cards). See
@@ -409,6 +418,8 @@ class AppCardsAgent(MCPAgent):
         self.cursor = 0
         self._planned = False
         self._reply_polls = 0
+        self._reply_start_ts = None
+        self._wait_text_start_ts = None
         self._last_agent_reply = None
         self._capture_phase = None
         self._captured_chunks = []
@@ -437,12 +448,19 @@ class AppCardsAgent(MCPAgent):
         if self.cursor >= len(self.plan):
             return ("plan exhausted", JSONAction(action_type="finished", goal_status="complete"))
 
-        step = self.plan[self.cursor]
+        step_idx = self.cursor  # 0-based index of the step we're about to run
+        step = self.plan[step_idx]
         action, advance, extra_note = self._materialize(step, screenshot, screen_w, screen_h)
         if advance:
             self.cursor += 1
         note = step.note + (f"; {extra_note}" if extra_note else "")
-        thought = f"step {self.cursor + (0 if advance else 0)}/{len(self.plan)}: {step.kind} ({note})"
+        # Display 1-based index of the CURRENT step (the one we just emitted
+        # an action for), not the next one. wait_for_reply re-enters the same
+        # index until it advances, which is fine and visible in the suffix.
+        suffix = "" if advance else " [hold]"
+        thought = (
+            f"step {step_idx + 1}/{len(self.plan)}: {step.kind} ({note}){suffix}"
+        )
         logger.info(f"{thought} → {action.model_dump(exclude_none=True)}")
         return thought, action
 
@@ -458,21 +476,17 @@ class AppCardsAgent(MCPAgent):
         p = step.payload
 
         if kind == "open_app":
-            # Cold-launch policy: always force-stop the target before launching,
-            # so the in-app agent observes a clean home surface (not a stale
-            # modal / half-finished chat / expired session sheet from a
-            # previous run). MobileWorld's `open_app` is launcher-tap-based
-            # and does NOT force-stop, so we shell out to adb first. The
-            # run_test.py wrapper does the same thing before this code path
-            # is ever reached — duplicating it here covers direct `mw test`
-            # invocations that bypass the wrapper.
+            # Cold-launch policy: always force-stop before launching so the
+            # in-app agent observes a clean home surface. MobileWorld's
+            # `open_app` is launcher-tap-based and does NOT force-stop, so we
+            # do it ourselves. The run_test.py / flow_runner wrappers do the
+            # FULL cold-launch (force-stop + monkey LAUNCHER) before reaching
+            # this code path; duplicating force-stop here covers direct
+            # `mw test` invocations that bypass those wrappers — MobileWorld
+            # will perform the launcher tap itself via the returned action.
             pkg = p["package"]
             try:
-                subprocess.run(
-                    ["adb", "shell", "am", "force-stop", pkg],
-                    check=False, capture_output=True, timeout=10,
-                )
-                logger.info(f"force-stopped {pkg} before open_app")
+                force_stop(pkg)
             except Exception as e:  # pragma: no cover — best-effort
                 logger.warning(f"force-stop {pkg} failed (continuing): {e}")
             # MobileWorld's open_app expects the launcher label (e.g. "千问"),
@@ -502,8 +516,6 @@ class AppCardsAgent(MCPAgent):
             # 1. Try uiautomator XML first (precise, free, robust to UI redraws).
             #    Retry briefly to absorb animation latency (drawer open, etc.).
             # 2. Fall back to the VLM only if the text was not in the a11y tree.
-            import time
-
             xy = None
             for attempt in range(3):
                 xy = _ground_text_via_uiautomator(p["text"], screen_w, screen_h)
@@ -526,7 +538,38 @@ class AppCardsAgent(MCPAgent):
             return JSONAction(action_type="wait"), True, ""
 
         if kind == "wait_text":
-            return JSONAction(action_type="wait"), True, ""
+            # Poll uiautomator until `text` shows up or timeout elapses. Each
+            # call to _materialize is one tick of MobileWorld's step loop;
+            # we hold the cursor (advance=False) while waiting so subsequent
+            # ticks re-enter this branch.
+            target = p.get("text") or ""
+            timeout_ms = int(p.get("timeout_ms", 5000))
+            if not target:
+                return JSONAction(action_type="wait"), True, "no text; bare wait"
+            if self._wait_text_start_ts is None:
+                self._wait_text_start_ts = time.monotonic()
+            hit = _ground_text_via_uiautomator(target, screen_w, screen_h)
+            elapsed_ms = int((time.monotonic() - self._wait_text_start_ts) * 1000)
+            if hit is not None:
+                logger.info(
+                    f"wait_text: {target!r} appeared after {elapsed_ms}ms"
+                )
+                self._wait_text_start_ts = None
+                return JSONAction(action_type="wait"), True, (
+                    f"text {target!r} present ({elapsed_ms}ms)"
+                )
+            if elapsed_ms >= timeout_ms:
+                logger.warning(
+                    f"wait_text: {target!r} did not appear within "
+                    f"{timeout_ms}ms; advancing anyway"
+                )
+                self._wait_text_start_ts = None
+                return JSONAction(action_type="wait"), True, (
+                    f"timeout after {elapsed_ms}ms"
+                )
+            return JSONAction(action_type="wait"), False, (
+                f"waiting for {target!r} ({elapsed_ms}ms/{timeout_ms}ms)"
+            )
 
         if kind == "wait_for_reply":
             capture_full = bool(p.get("capture_full"))
@@ -596,10 +639,15 @@ class AppCardsAgent(MCPAgent):
                     f"capture scroll {self._capture_scrolls}/{max_capture_scrolls}",
                 )
 
-            # Phase 1: poll for done.
+            # Phase 1: poll for done. Budget is WALL-CLOCK seconds, not poll
+            # count — each poll is a real VLM call (multiple seconds), so a
+            # poll-count budget under-reports actual latency wildly.
+            if self._reply_start_ts is None:
+                self._reply_start_ts = time.monotonic()
             done, text = self._poll_agent_reply(screenshot)
             self._reply_polls += 1
-            max_polls = max(1, int(p.get("max_seconds", 30)))  # ~1s per poll
+            max_seconds = max(1, int(p.get("max_seconds", 30)))
+            elapsed = time.monotonic() - self._reply_start_ts
             # Trust `done` only if the VLM also produced text. If text is None,
             # the VLM is telling us it cannot read any reply on screen — which
             # almost always means generation has not actually finished. Keep
@@ -607,10 +655,11 @@ class AppCardsAgent(MCPAgent):
             if done and text:
                 self._last_agent_reply = text
                 logger.info(
-                    f"In-app agent reply DONE after {self._reply_polls} poll(s); "
-                    f"text={text!r}"
+                    f"In-app agent reply DONE after {self._reply_polls} poll(s) "
+                    f"/ {elapsed:.1f}s; text={text!r}"
                 )
                 self._reply_polls = 0
+                self._reply_start_ts = None
                 if capture_full:
                     self._capture_phase = "scrolling"
                     self._captured_chunks = [text]
@@ -625,17 +674,24 @@ class AppCardsAgent(MCPAgent):
             if done and not text:
                 logger.warning(
                     f"VLM reported done but returned no text on poll "
-                    f"{self._reply_polls}/{max_polls} — distrusting, continuing"
+                    f"{self._reply_polls} ({elapsed:.1f}s/{max_seconds}s) — "
+                    "distrusting, continuing"
                 )
-            if self._reply_polls >= max_polls:
+            if elapsed >= max_seconds:
                 logger.warning(
-                    f"In-app agent reply did not finish within {max_polls} polls; "
-                    f"advancing anyway (last text={text!r})"
+                    f"In-app agent reply did not finish within {max_seconds}s "
+                    f"({self._reply_polls} poll(s)); advancing anyway "
+                    f"(last text={text!r})"
                 )
                 self._last_agent_reply = text
                 self._reply_polls = 0
+                self._reply_start_ts = None
                 return JSONAction(action_type="wait"), True, "timeout"
-            return JSONAction(action_type="wait"), False, f"poll {self._reply_polls}/{max_polls}"
+            return (
+                JSONAction(action_type="wait"),
+                False,
+                f"poll {self._reply_polls} @ {elapsed:.1f}s/{max_seconds}s",
+            )
 
         if kind == "tap_unless_present":
             # Probe via uiautomator only (cheap + precise); fall through to
