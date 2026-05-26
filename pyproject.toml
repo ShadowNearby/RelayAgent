@@ -21,7 +21,17 @@ dependencies = [
     "openai>=1.0",
     # Screenshot encoding for the VLM grounding / reply-watch calls.
     "pillow>=10.0",
+    # MobileWorld pulls in fastmcp 2.9.2, which is incompatible with
+    # pydantic >=2.11 (Settings model declares both `default` and
+    # `default_factory` on the same field → TypeError at import time).
+    # Pin the last compatible release. See CLAUDE.md for context.
+    "pydantic<2.11",
+    # Real-device runner. Sourced from a local checkout via [tool.uv.sources]
+    # below — there is no PyPI release yet. Override the path with the
+    # MOBILEWORLD_PATH env var or by editing the source entry.
+    "mobile-world",
 ]
+
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -62,3 +72,7 @@ include = [
     "LICENSE",
     ".env.example",
 ]
+
+[tool.uv.sources]
+# MobileWorld is not on PyPI; uv clones it directly. Bump `rev` to upgrade.
+mobile-world = { git = "https://github.com/Tongyi-MAI/MobileWorld", rev = "9baaa2b" }

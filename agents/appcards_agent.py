@@ -47,7 +47,7 @@ from mobile_world.agents.base import MCPAgent
 from mobile_world.agents.utils.helpers import pil_to_base64
 from mobile_world.runtime.utils.models import JSONAction
 
-from agents._adb import adb_base, force_stop
+from agents._adb import adb_base, force_stop, swipe_down
 from agents.action_planner import Step, build_plan
 from agents.capability_router import route_capability
 from agents.card_loader import bounds_center, load_card_by_app_id
@@ -58,6 +58,13 @@ _DENSITY_ENV = "APPCARDS_TARGET_DENSITY"
 _FRESH_CONV_ENV = "APPCARDS_FRESH_CONV"  # set to "0" to disable
 _SKIP_OPEN_APP_ENV = "APPCARDS_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
 _REPLY_OUT_ENV = "APPCARDS_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
+
+# MobileWorld writes the active run under traj_logs/user_task/ (see CLAUDE.md).
+# We append every LLM call into traj.json at top-level under "0".llm_calls so
+# the calls live alongside the per-step traj entries. MW's log_traj rewrites
+# the whole file each step but preserves unknown sibling keys, so the field
+# survives across step writes.
+_TRAJ_DIR = Path("traj_logs") / "user_task"
 
 _GROUNDING_SYSTEM = (
     "You are a UI grounding model. Given a phone screenshot and a target "
@@ -350,6 +357,56 @@ def _extract_xy(raw: str) -> tuple[int | None, int | None]:
     return None, None
 
 
+def _sanitize_messages_for_log(messages: list[dict]) -> list[dict]:
+    """Strip giant base64 image_url payloads so traj.json stays readable."""
+    out: list[dict] = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            parts: list[dict] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    parts.append({"type": "raw", "value": repr(part)[:200]})
+                    continue
+                if part.get("type") == "image_url":
+                    url = (part.get("image_url") or {}).get("url", "")
+                    if isinstance(url, str) and url.startswith("data:"):
+                        parts.append({"type": "image_url", "image_url": {
+                            "url": f"<base64 image, {len(url)} chars>"
+                        }})
+                    else:
+                        parts.append(part)
+                else:
+                    parts.append(part)
+            out.append({**msg, "content": parts})
+        else:
+            out.append(msg)
+    return out
+
+
+def _sanitize_kwargs_for_log(kwargs: dict) -> dict:
+    return {k: v for k, v in kwargs.items()
+            if k in ("temperature", "max_tokens", "max_completion_tokens", "stream")}
+
+
+def _llm_purpose_from_messages(messages: list[dict]) -> str:
+    """Best-effort label for a call site (capability-router / grounding /
+    reply-watch / other), inferred from the system prompt."""
+    if not messages:
+        return "unknown"
+    sys_msg = next((m for m in messages if m.get("role") == "system"), None)
+    sys = (sys_msg or {}).get("content")
+    if not isinstance(sys, str):
+        return "unknown"
+    if sys.startswith(_GROUNDING_SYSTEM[:40]):
+        return "grounding"
+    if sys.startswith(_REPLY_WATCH_SYSTEM[:40]):
+        return "reply_watch"
+    if "capability id" in sys:
+        return "capability_router"
+    return "other"
+
+
 class AppCardsAgent(MCPAgent):
     """Card-driven agent. The model only picks capabilities and grounds text
     selectors; tap coordinates come from the card's `x_bounds`."""
@@ -395,6 +452,81 @@ class AppCardsAgent(MCPAgent):
         self._capture_idle: int = 0
         self.fresh_conversation: bool = os.getenv(_FRESH_CONV_ENV, "1") != "0"
         self.skip_open_app: bool = os.getenv(_SKIP_OPEN_APP_ENV, "0") == "1"
+
+    def openai_chat_completions_create(  # type: ignore[override]
+        self,
+        model: str,
+        messages: list[dict],
+        **kwargs: Any,
+    ) -> str | None:
+        """Wrap MCPAgent's LLM call so every invocation is appended to
+        traj.json. Image payloads are replaced with a short placeholder so the
+        log stays human-readable; token deltas are computed from MCPAgent's
+        running totals so we record per-call usage."""
+        started = time.monotonic()
+        pre_completion = self._total_completion_tokens
+        pre_prompt = self._total_prompt_tokens
+        pre_cached = self._total_cached_tokens
+        purpose = _llm_purpose_from_messages(messages)
+        try:
+            raw = super().openai_chat_completions_create(
+                model=model, messages=messages, **kwargs
+            )
+        except Exception as e:  # pragma: no cover — best-effort logging
+            self._append_llm_call({
+                "ts": time.time(),
+                "elapsed_s": round(time.monotonic() - started, 3),
+                "purpose": purpose,
+                "model": model,
+                "messages": _sanitize_messages_for_log(messages),
+                "response": None,
+                "error": repr(e),
+                "plan_step": self.cursor if self._planned else None,
+                "kwargs": _sanitize_kwargs_for_log(kwargs),
+            })
+            raise
+        self._append_llm_call({
+            "ts": time.time(),
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "purpose": purpose,
+            "model": model,
+            "messages": _sanitize_messages_for_log(messages),
+            "response": raw,
+            "usage_delta": {
+                "completion_tokens": self._total_completion_tokens - pre_completion,
+                "prompt_tokens": self._total_prompt_tokens - pre_prompt,
+                "cached_tokens": self._total_cached_tokens - pre_cached,
+            },
+            "plan_step": self.cursor if self._planned else None,
+            "kwargs": _sanitize_kwargs_for_log(kwargs),
+        })
+        return raw
+
+    def _append_llm_call(self, record: dict) -> None:
+        """Append one LLM-call record to traj_logs/user_task/traj.json under
+        log_data["0"]["llm_calls"]. Defensive: creates the bucket and stub
+        traj/tools fields so MW's first log_traj does not KeyError on them."""
+        traj_path = _TRAJ_DIR / "traj.json"
+        try:
+            if not traj_path.exists():
+                return
+            try:
+                with open(traj_path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError:
+                # Either a fresh `{}` mid-write or a corrupted file. Skip this
+                # record rather than clobber MW's writer.
+                return
+            if not isinstance(data, dict):
+                return
+            bucket = data.setdefault("0", {})
+            bucket.setdefault("tools", None)
+            bucket.setdefault("traj", [])
+            bucket.setdefault("llm_calls", []).append(record)
+            with open(traj_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except OSError as e:
+            logger.warning(f"Failed to append LLM call to traj.json: {e}")
 
     def initialize_hook(self, instruction: str) -> None:
         logger.info(f"AppCardsAgent init: instruction={instruction!r}")
@@ -618,10 +750,10 @@ class AppCardsAgent(MCPAgent):
                     or self._capture_idle >= 2
                 )
                 if stop:
-                    # Chunks were captured bottom→top; reverse for reading
-                    # order, then stitch adjacent chunks at their suffix/
-                    # prefix overlap so duplicated seam content collapses.
-                    full = _stitch_chunks(list(reversed(self._captured_chunks)))
+                    # Chunks were captured top→bottom in reading order;
+                    # stitch adjacent chunks at their suffix/prefix overlap
+                    # so duplicated seam content collapses.
+                    full = _stitch_chunks(list(self._captured_chunks))
                     self._last_agent_reply = full
                     logger.info(
                         f"Reply capture complete: {len(self._captured_chunks)} "
@@ -633,8 +765,13 @@ class AppCardsAgent(MCPAgent):
                     self._capture_idle = 0
                     return JSONAction(action_type="wait"), True, "capture done"
                 self._capture_scrolls += 1
+                # Issue our own larger-than-default swipe (MW's built-in
+                # scroll is fixed at ~0.4*width vertical, which means many
+                # frames + many VLM calls). Then return a no-op so MW just
+                # captures the next screenshot.
+                swipe_down()
                 return (
-                    JSONAction(action_type="scroll", direction="down"),
+                    JSONAction(action_type="wait"),
                     False,
                     f"capture scroll {self._capture_scrolls}/{max_capture_scrolls}",
                 )
@@ -665,8 +802,9 @@ class AppCardsAgent(MCPAgent):
                     self._captured_chunks = [text]
                     self._capture_scrolls = 0
                     self._capture_idle = 0
+                    swipe_down()
                     return (
-                        JSONAction(action_type="scroll", direction="down"),
+                        JSONAction(action_type="wait"),
                         False,
                         "done; entering full-reply capture",
                     )

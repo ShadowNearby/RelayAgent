@@ -21,7 +21,7 @@ embedded_agent:
         # Bottom-center tab. resource_id "tab_name_v2" shared across 5 tabs;
         # v0.1 single-field selectors can't express "resource_id + text" AND. See OQ-10.
         - tap: { text: "长按说话" }
-        - wait: { ms: 800 }
+        - wait: { ms: 300 }
         # The AI tab opens in voice ("按住说话") mode on first install. The
         # hint text "有什么问题尽管问我" is only present in text mode, so
         # treat it as the probe — if absent, tap the keyboard glyph at the
@@ -34,7 +34,7 @@ embedded_agent:
               x_bounds:
                 box: [946, 2101, 1009, 2164]
                 anchor: bottom_right
-        - wait: { ms: 600 }
+        - wait: { ms: 300 }
     fallback: []
 
   invocation:

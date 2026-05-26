@@ -12,14 +12,12 @@
 
   装项目本体之前需先在 `pyproject.toml` 加 `[tool.hatch.build.targets.wheel] packages = [...]`。
 
-- MobileWorld 已从 `~/MobileWorld` 安装进本 venv（`mw` / `mobile-world` 可用）。
-- **已知坑**：`fastmcp 2.9.2` 与新版 pydantic 不兼容（`default` + `default_factory` 同时存在会抛 `TypeError`）。安装 MobileWorld 后必须降级：
-
-  ```bash
-  VIRTUAL_ENV=$PWD/.venv uv pip install "pydantic<2.11"
-  ```
-
-  当前固定在 `pydantic==2.10.6` / `pydantic-core==2.27.2`。
+- MobileWorld 通过 `pyproject.toml` 里的 git 依赖 + `[tool.uv.sources]` 由 uv
+  自动 clone 安装（详见下面 "MobileWorld 依赖" 一节），`mw` / `mobile-world` 可用。
+- **历史坑（已通过 pyproject 固定，不需再手动处理）**：`fastmcp 2.9.2` 与 pydantic
+  `>=2.11` 不兼容（`default` + `default_factory` 同时存在 → `TypeError`）。
+  `pyproject.toml` 里写了 `"pydantic<2.11"`，当前锁在 `pydantic==2.10.6` /
+  `pydantic-core==2.27.2`。如果未来升级 fastmcp 后这个限制可以放开。
 
 ## 用户的 LLM 端点（运行 `mw test` 时的默认配置）
 
@@ -49,13 +47,18 @@ uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
 
 ## MobileWorld 依赖
 
-`mw` 来自外部仓库 [Tongyi-MAI/MobileWorld](https://github.com/Tongyi-MAI/MobileWorld)，需先：
+`mw` 来自外部仓库 [Tongyi-MAI/MobileWorld](https://github.com/Tongyi-MAI/MobileWorld)，已经通过
+`pyproject.toml` 的 `[tool.uv.sources]` 声明为 git 依赖（pin 到某个 commit）。
+`uv sync` 会自动 clone+安装到 venv，不需要手动 `git clone`。
 
 ```bash
-git clone https://github.com/Tongyi-MAI/MobileWorld && cd MobileWorld
-uv pip install . --python /home/yjs/AppAgentCards/.venv/bin/python
-uv run --python /home/yjs/AppAgentCards/.venv/bin/python mobile-world server &
+uv sync --no-install-project    # 装本项目依赖（含 mobile-world）
+uv run mobile-world server &    # 启动 MW server
 ```
+
+升级 MobileWorld：编辑 `pyproject.toml` 里 `mobile-world` 那条的 `rev` 然后
+重新 `uv sync` 即可。pydantic 的 `<2.11` 上限同样写在 `pyproject.toml`，不会被
+`uv run` 自动 bump 回去（CLAUDE.md 顶部那段历史背景仍适用）。
 
 需要 adb + 真机 USB 调试 + `com.android.adbkeyboard/.AdbIME`。
 
@@ -113,6 +116,17 @@ uv run --python /home/yjs/AppAgentCards/.venv/bin/python mobile-world server &
 | `wait_for_reply` poll | 1–N（典型 2–5）|
 
 蜜雪冰城下单一条完整链路当前 token_usage 约 6800 total，主要在 wait_for_reply 的多张截图轮询。
+
+### Capture-scroll 幅度可调
+
+`wait_for_reply` 的 `capture_full` 阶段不再用 MW 的固定 0.4×width 小幅度
+swipe。`agents/_adb.py:swipe_down(ratio=0.7)` 直接发 `input swipe`，幅度 =
+`ratio × wm size height`（clamp 0.1–0.95）。环境变量
+`APPCARDS_CAPTURE_SCROLL_RATIO` 覆写默认值。
+
+- 调大（0.8–0.9）→ 砍 VLM poll 次数，但相邻帧重叠少，seam 处可能丢词。
+- 调小（0.4–0.5）→ 重叠多更稳，但 VLM 调用更多。
+- 方向：finger 从底往上推，把当前可见内容推出视口，露出**下方**的新内容（即向后读）。XHS 点点等场景下回复从上往下渲染，可见的是开头，后续内容在视口下方 — 所以 capture 阶段是顺序走读，chunks 直接按捕获顺序拼接，不再 `reversed()`。
 
 ## 已知阻塞
 

@@ -1,0 +1,56 @@
+spec_version: "0.1"
+flow_version: "0.2.0"
+flow_id: "xhs_to_amap_place"
+description: >
+  Two-app cowork: ask Xiaohongshu's 点点 to recommend niche places of a given
+  category (cafes, bookstores, bars, restaurants, parks, …), let the user pick
+  one, then ask Amap's AI assistant to hail a ride there. Each sub-step is a
+  single capability invocation on one app card; routing is skipped (we pin the
+  capability_id directly).
+
+apps_required:
+  - app_id: com.xingin.xhs
+    use_capability: qa_community_knowledge
+  - app_id: com.autonavi.minimap
+    use_capability: hail_ride
+
+inputs:
+  category:
+    type: string
+    default: "小众咖啡馆"
+    description: "想找的地点类别，例如 小众咖啡馆 / 独立书店 / 精酿酒吧 / 本帮菜馆 / 城市公园"
+  city:
+    type: string
+    default: "上海"
+  max_choices:
+    type: int
+    default: 5
+  topic:
+    type: string
+    default: "{city}{category}"
+    description: "传给点点的检索话题，默认用 city+category 拼接"
+
+steps:
+  - id: discover
+    app: com.xingin.xhs
+    capability: qa_community_knowledge
+    prompt: "{topic}，推荐 {max_choices} 家，只要店名/地点名和所在区，每家一行"
+    extract:
+      prompt: |
+        从下面的推荐文本中抽取 {category} 列表，返回 JSON 数组，每项形如
+        {"name": "<店名或地点名>", "district": "<所在区，例如 静安、徐汇>"}。
+        若文本里没有明确的区，district 留空字符串。最多 {max_choices} 项。
+      bind_to_array_key: candidates
+    bind: candidates
+
+  - id: choose
+    type: ask_user
+    select_from: candidates
+    item_label: "{name}（{district}）"
+    prompt_header: "点点推荐了这些 {category}，挑一家（编号或名称）："
+    bind: chosen
+
+  - id: ride
+    app: com.autonavi.minimap
+    capability: hail_ride
+    prompt: "打车去{chosen.name}（{city}{chosen.district}）"

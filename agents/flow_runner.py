@@ -21,8 +21,8 @@ Design notes (see CLAUDE.md for project context):
   blackboard dict that starts as `inputs` and grows as steps bind values.
 
 Usage:
-    scripts/run_flow.py manifests/_flows/xhs_to_amap_coffee.yaml \\
-        --input topic="上海小众咖啡馆" --input city=上海
+    scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \\
+        --input category="独立书店" --input city=北京
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,7 @@ class FlowRunner:
         flow_path: Path,
         env_overrides: dict[str, str] | None = None,
         input_overrides: dict[str, str] | None = None,
+        nl_request: str | None = None,
         extra_mw_args: list[str] | None = None,
     ) -> None:
         self.flow_path = flow_path
@@ -120,17 +122,94 @@ class FlowRunner:
                 raise RuntimeError(f"Missing required config: {k} (set in .env or env)")
             self.env[k] = v
 
-        self.bb: dict[str, Any] = {}
-        for name, spec in (self.flow.get("inputs") or {}).items():
-            if input_overrides and name in input_overrides:
-                self.bb[name] = _coerce(input_overrides[name], spec.get("type", "string"))
-            elif "default" in spec:
-                self.bb[name] = spec["default"]
-            else:
-                raise ValueError(f"Flow input {name!r} has no default and was not supplied")
-
         self.extra_mw_args = extra_mw_args or []
         self._llm = OpenAI(base_url=self.env["LLM_BASE_URL"], api_key=self.env["LLM_API_KEY"])
+
+        # Each flow run gets its own traj root so the sub-runs don't keep
+        # overwriting `traj_logs/user_task/`. MW's TrajLogger always writes
+        # to `<log_file_root>/user_task/`, so we give each step its own
+        # `log_file_root` and group them under one flow-scoped parent.
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.flow_traj_root = REPO_ROOT / "traj_logs" / f"{flow_path.stem}_{ts}"
+        self._step_idx = 0
+        logger.info(f"flow traj root: {self.flow_traj_root}")
+
+        inputs_spec = self.flow.get("inputs") or {}
+        nl_derived: dict[str, Any] = {}
+        if nl_request:
+            nl_derived = self._resolve_nl_inputs(nl_request, inputs_spec)
+            logger.info(f"NL → inputs: {nl_derived}")
+
+        self.bb: dict[str, Any] = {}
+        for name, spec in inputs_spec.items():
+            type_name = spec.get("type", "string")
+            if input_overrides and name in input_overrides:
+                self.bb[name] = _coerce(input_overrides[name], type_name)
+            elif name in nl_derived:
+                self.bb[name] = _coerce_value(nl_derived[name], type_name)
+            elif "default" in spec:
+                dflt = spec["default"]
+                # Defaults can be templates that reference earlier inputs
+                # (e.g. topic: "{city}{category}"); render against the
+                # partially-built blackboard so later steps see the
+                # composed string, not the literal template.
+                if isinstance(dflt, str) and "{" in dflt:
+                    dflt = render(dflt, self.bb)
+                self.bb[name] = dflt
+            else:
+                raise ValueError(f"Flow input {name!r} has no default and was not supplied")
+        logger.info(f"resolved inputs: {_redact(self.bb)}")
+
+    # ------------------------------------------------------------- NL inputs
+
+    def _resolve_nl_inputs(self, nl: str, inputs_spec: dict) -> dict[str, Any]:
+        """Ask the text LLM to map a natural-language request to flow inputs.
+
+        Only fields the LLM actually reads from the sentence are returned;
+        everything else falls back to YAML defaults so we don't hallucinate
+        values the user never mentioned.
+        """
+        if not inputs_spec:
+            return {}
+        schema_lines = []
+        for name, spec in inputs_spec.items():
+            t = spec.get("type", "string")
+            desc = spec.get("description", "")
+            dflt = spec.get("default", "")
+            schema_lines.append(f"- {name} ({t}): {desc} [default: {dflt!r}]")
+        schema = "\n".join(schema_lines)
+        system = (
+            "You map a user's natural-language request to a flow's input "
+            "parameters. Return ONLY a JSON object inside a ```json``` fence. "
+            "Include a key ONLY if the sentence clearly specifies it; omit "
+            "keys the user did not mention (the caller will use defaults). "
+            "Do not invent values."
+        )
+        user = (
+            f"Flow inputs schema:\n{schema}\n\n"
+            f"User request:\n{nl}\n\n"
+            "Return the JSON object now."
+        )
+        resp = self._llm.chat.completions.create(
+            model=self.env["LLM_MODEL"],
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.0,
+            max_tokens=512,
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        logger.debug(f"NL-inputs raw reply: {out}")
+        try:
+            data = _parse_fenced_json(out)
+        except Exception as e:
+            logger.warning(f"NL-inputs parse failed ({e}); ignoring NL hint")
+            return {}
+        if not isinstance(data, dict):
+            logger.warning(f"NL-inputs expected object, got {type(data).__name__}; ignoring")
+            return {}
+        return {k: v for k, v in data.items() if k in inputs_spec}
 
     # ------------------------------------------------------------------ run
 
@@ -158,6 +237,10 @@ class FlowRunner:
 
         _cold_launch(app)  # from agents._adb
 
+        self._step_idx += 1
+        step_log_root = self.flow_traj_root / f"{self._step_idx:02d}_{step['id']}"
+        step_log_root.mkdir(parents=True, exist_ok=True)
+
         with tempfile.NamedTemporaryFile(
             mode="w+", suffix=".json", prefix="appcards_reply_", delete=False
         ) as fh:
@@ -183,6 +266,7 @@ class FlowRunner:
                 "--model_name", self.env["LLM_MODEL"],
                 "--llm_base_url", self.env["LLM_BASE_URL"],
                 "--api_key", self.env["LLM_API_KEY"],
+                "--log-file-root", str(step_log_root),
                 *self.extra_mw_args,
             ]
             logger.info(
@@ -201,7 +285,7 @@ class FlowRunner:
             if not reply:
                 raise RuntimeError(
                     f"Step {step['id']!r}: no reply captured at {reply_path}. "
-                    "Check the sub-run's traj_logs/user_task/."
+                    f"Check the sub-run's {step_log_root}/user_task/."
                 )
             logger.info(f"captured reply ({len(reply)} chars) from {app}")
         finally:
@@ -303,6 +387,19 @@ def _coerce(value: str, type_name: str) -> Any:
     return value
 
 
+def _coerce_value(value: Any, type_name: str) -> Any:
+    """Coerce a possibly-non-string value (LLM may already return int/float/bool)."""
+    if isinstance(value, str):
+        return _coerce(value, type_name)
+    if type_name == "int":
+        return int(value)
+    if type_name == "float":
+        return float(value)
+    if type_name == "bool":
+        return bool(value)
+    return str(value)
+
+
 def _redact(d: dict[str, Any]) -> dict[str, Any]:
     """Shallow redact obvious secrets in blackboard logging."""
     out = {}
@@ -344,14 +441,18 @@ def _parse_kv(kvs: list[str]) -> dict[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("flow", help="Path to a flow YAML (e.g. manifests/_flows/xhs_to_amap_coffee.yaml)")
+    p.add_argument("flow", help="Path to a flow YAML (e.g. manifests/_flows/xhs_to_amap_place.yaml)")
     p.add_argument("--input", action="append", default=[], metavar="KEY=VALUE",
                    help="Override a flow input; repeatable")
+    p.add_argument("--nl", default=None, metavar="TEXT",
+                   help="Natural-language request; LLM extracts flow inputs from it. "
+                        "Explicit --input values still take precedence.")
     args, extra = p.parse_known_args(argv)
 
     runner = FlowRunner(
         flow_path=Path(args.flow).resolve(),
         input_overrides=_parse_kv(args.input),
+        nl_request=args.nl,
         extra_mw_args=extra,
     )
     runner.run()

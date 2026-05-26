@@ -11,9 +11,11 @@ Each step is either:
     captured reply to parse structured data.
 
 Usage:
-    scripts/run_flow.py manifests/_flows/xhs_to_amap_coffee.yaml
-    scripts/run_flow.py manifests/_flows/xhs_to_amap_coffee.yaml \\
-        --input topic="上海安福路咖啡" --input max_choices=3 -- --max-step 60
+    scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml
+    scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \\
+        --input category="独立书店" --input max_choices=3 -- --max-step 60
+    scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \\
+        --nl "在北京找三家独立书店，挑一家打车过去"
 
 Any args after a literal `--` are forwarded to each underlying `mw test`.
 """

@@ -2,7 +2,7 @@
 
 A community registry of **machine-readable cards** describing the AI agents embedded inside mobile apps — so that an OS-level agent (HarmonyOS Xiaoyi, Apple Intelligence, etc.) can hand off a user's request to the in-app agent that already knows the user's account, context, and data.
 
-> **Status:** early draft. SPEC v0.1, seven verified Android reference manifests, MobileWorld adapter + multi-app flow runner. Contributors welcome.
+> **Status:** early draft. SPEC v0.1, seven verified Android reference manifests, MobileWorld adapter + multi-app flow runner (two reference flows). Contributors welcome.
 
 ---
 
@@ -55,9 +55,9 @@ AppAgentCards/
 ├── SPEC-OPEN-QUESTIONS.md     # known design questions still in flight
 ├── spec/
 │   └── schema.json            # JSON Schema mirror of SPEC (normative)
-├── manifests/                 # one YAML card per app; five Android cards
-├── agents/                    # MobileWorld adapter, planner, card loader, flow runner
-├── scripts/                   # run_test.py (single app), run_flow.py (multi-app flows)
+├── manifests/                 # one YAML card per app; seven Android cards + _flows/ for multi-app YAMLs
+├── agents/                    # MobileWorld adapter, planner, capability router, card loader, flow runner, adb helper
+├── scripts/                   # run_test.py (single app, cold-launches before mw test), run_flow.py (multi-app flows)
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
 ```
@@ -66,20 +66,40 @@ AppAgentCards/
 
 `agents/appcards_agent.py` plugs AppAgentCards into [MobileWorld](https://github.com/Tongyi-MAI/MobileWorld) as an `--agent-type`. MobileWorld gives us a real-device runner with provider-agnostic VLM support (Claude, Gemini, Qwen-VL, Kimi, …); the card supplies the deterministic entry path and handoff policy.
 
+Requires **Python 3.12** (MobileWorld pins `>=3.12,<3.13`) and a Linux/WSL host with adb + a USB-debugging phone running `com.android.adbkeyboard/.AdbIME`.
+
 ```bash
-# in a Linux/WSL host with adb + USB-debugging enabled phone
+# 1. set up the venv (project itself is not editable-installed; sync deps only)
+uv venv --python 3.12
+uv sync --no-install-project
+
+# 2. install MobileWorld into the same venv
 git clone https://github.com/Tongyi-MAI/MobileWorld && cd MobileWorld
-uv pip install .
+uv pip install . --python /path/to/AppAgentCards/.venv/bin/python
+# fastmcp 2.9.2 (a MobileWorld dep) breaks on pydantic ≥2.11 — pin it back
+VIRTUAL_ENV=/path/to/AppAgentCards/.venv uv pip install "pydantic<2.11"
 uv run mobile-world server &
 
-# from this repo
-export APPCARDS_TARGET_APP=com.aliyun.tongyi
-uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
-    --agent-type "$PWD/agents/appcards_agent.py" \
-    --model_name anthropic/claude-sonnet-4-5
+# 3. fill in .env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL) then drive a goal
+cd /path/to/AppAgentCards
+uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-Switch model by changing `--model_name` (`google/gemini-3`, `qwen/qwen3-vl-235b-a22b`, etc.). VLM token cost per task:
+`scripts/run_test.py` loads `.env`, cold-launches the target app via `agents/_adb.py` (force-stop + monkey LAUNCHER), sets `APPCARDS_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, and forwards any extra flags (e.g. `--max-step 40`) straight through to `mw test`.
+
+If you prefer to call `mw test` yourself, pass the LLM config explicitly:
+
+```bash
+set -a; source .env; set +a
+export APPCARDS_TARGET_APP=com.aliyun.tongyi
+uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
+    --agent-type   "$PWD/agents/appcards_agent.py" \
+    --model_name   "$LLM_MODEL" \
+    --llm_base_url "$LLM_BASE_URL" \
+    --api_key      "$LLM_API_KEY"
+```
+
+`--model_name` is provider-agnostic — point it at any OpenAI-compatible VLM (`qwen/qwen3-vl-235b-a22b`, `anthropic/claude-sonnet-4-5`, `google/gemini-3`, …). VLM token cost per task:
 
 - 1 LLM call to pick a capability from the card.
 - For each text selector, `uiautomator dump` is tried first (precise, free); a small VLM grounding call only on miss.
@@ -97,11 +117,29 @@ The adapter honors `handoff_to_user_required`: for any irreversible capability i
 
 ### Multi-app flows
 
-`scripts/run_flow.py` runs a YAML flow that chains multiple app cards — each step cold-launches one app, pins a single capability, captures the in-app agent's reply, and feeds it forward to the next step via a small text-LLM extract call:
+`scripts/run_flow.py` runs a YAML flow that chains multiple app cards — each step cold-launches one app via `agents/_adb.py`, pins a single capability, captures the in-app agent's reply, and feeds it forward to the next step via a small text-LLM extract call. Two reference flows live under `manifests/_flows/`:
 
 ```bash
-uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_coffee.yaml \
-    --input topic="上海安福路咖啡" --input city=上海
+# Xiaohongshu (POI discovery) → Amap (navigation)
+uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \
+    --input category="独立书店" --input city=北京
+
+# Or use a natural-language request and let the LLM fill flow inputs:
+uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \
+    --nl "在北京找三家独立书店，挑一家打车过去"
+
+# WeChat (chat summary) → WPS (doc generation)
+uv run python scripts/run_flow.py manifests/_flows/wechat_to_wps_summary.yaml
+```
+
+### Natural-language entry point
+
+`scripts/run_nl.py` takes a single NL sentence, builds a catalog of all app manifests + flows, and asks the text LLM to pick the best executor (single-app capability or multi-app flow) before dispatching. Use `--dry-run` to inspect the routing decision without launching anything.
+
+```bash
+uv run python scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"
+uv run python scripts/run_nl.py --dry-run "把和老王的聊天总结成一份周报 docx"
 ```
 
 ## Run tests
