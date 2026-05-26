@@ -1,0 +1,241 @@
+spec_version: "0.1"
+card_version: "0.1.0"
+app_id: "cn.wps.moffice_eng"
+app_name: "WPS Office"
+platforms: ["android"]
+locale: ["zh-CN"]
+
+embedded_agent:
+  name: "WPS AI"
+  type: native_in_app_agent
+  description: >
+    WPS Office's built-in AI assistant. Reachable from the home page as a
+    purple "WPS AI" shortcut card next to "拍照扫描". Tapping it opens a
+    bottom-sheet chat surface (WebView-rendered) where the agent can chat,
+    generate PPT slides, draft documents (快速写作), summarize documents
+    (文档阅读), and summarize web pages (网页摘要).
+
+  entry:
+    primary:
+      method: tap_sequence
+      steps:
+        - tap_label:
+            # Home-page shortcut card. The TextView itself has
+            # resource-id `cn.wps.moffice_eng:id/top_short_cut_big_title`
+            # and is non-clickable; tap on its bounds dispatches to the
+            # parent card container.
+            text_or_desc: "WPS AI"
+            timeout_seconds: 2
+            scroll_attempts: 0
+        - wait:
+            # "Hi，..." lives inside the WebView, invisible to uiautomator,
+            # so wait by time, not by text. ~1.8s covers the bottom-sheet
+            # animation + native chip overlay rendering on a Pixel 9.
+            ms: 1800
+    fallback:
+      # If the home shortcut row was customized away, the same surface is
+      # reachable via the "服务" tab in the bottom nav → "WPS AI" card.
+      - tap_label:
+          text_or_desc: "服务"
+          timeout_seconds: 1
+          scroll_attempts: 0
+      - tap_label:
+          text_or_desc: "WPS AI"
+          timeout_seconds: 2
+          scroll_attempts: 1
+
+  invocation:
+    input:
+      # Input is a DOM <input> inside the chat WebView — uiautomator can't
+      # see it. Tap by bounds to focus, then inject text via ADBKeyboard.
+      # Placeholder text "有什么问题随时问我" is visible only as part of the
+      # WebView render, not as a separate native node.
+      field:
+        x_bounds:
+          # Untyped state, before keyboard pops. Center of the input pill.
+          box: [28, 2060, 1050, 2160]
+          anchor: center
+      max_chars: 2000
+    submit:
+      # When the input is empty the right-side icon is the mic; once any
+      # text is in the field it morphs into a circular ▶ send button at
+      # the same position. uiautomator reports a non-clickable View, but
+      # raw bounds tap fires it.
+      trigger:
+        x_bounds:
+          box: [926, 2093, 1023, 2190]
+          anchor: center
+    prompt_template: "{{user_prompt}}"
+
+  output:
+    method: none
+
+  capabilities:
+
+    - id: chat
+      description: >
+        General Q&A and conversation. Pure LLM response, streamed into the
+        chat bubble. No partner apps, no side effects.
+      example_prompts:
+        - "用一句话介绍 WPS AI 能做什么"
+        - "帮我把这段话改得更书面一点：……"
+      executable: false
+      side_effects: []
+      requires_login: false
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 10
+
+    - id: ai_ppt
+      description: >
+        Generate a slide deck from a topic. Quick-access chip "AI PPT"
+        (生成演示文稿) sits above the input. After confirming the outline
+        the agent renders a .pptx into WPS storage; opening it lands in
+        the PPT editor.
+      example_prompts:
+        - "帮我做一份关于光合作用的 PPT"
+        - "用 AI PPT 做一份产品上线复盘的演示稿"
+      executable: true
+      side_effects:
+        - file_write
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 45
+      failure_modes:
+        - "outline confirmation step blocks until user taps 确定"
+      x_quick_chip:
+        text_or_desc: "AI PPT"
+      x_pre_invocation_steps:
+        # AI PPT runs in a dedicated sub-mode of the WPS AI surface: the
+        # chat input is replaced with a topic-only field ("描述创作的主题").
+        # Tap the chip first so the prompt is interpreted as a PPT topic
+        # rather than open-ended chat. uiautomator sees the subtitle
+        # TextView "生成演示文稿" — the bigger "AI PPT" label is not
+        # exposed as a separate node, but tapping the subtitle still
+        # dispatches to the parent chip.
+        - tap_label:
+            text_or_desc: "生成演示文稿"
+            timeout_seconds: 2
+            scroll_attempts: 0
+        - wait:
+            # Placeholder "描述创作的主题" lives inside the WebView and is
+            # not visible to uiautomator, so wait by time, not by text.
+            ms: 1200
+
+    - id: quick_writing
+      description: >
+        "快速写作 / 一键快速成文". Drafts long-form prose (emails, reports,
+        articles) from a short brief. Output is streamed into chat, then
+        a "导出为文档" CTA materializes a .docx file in WPS storage and
+        surfaces it as a clickable doc card in the same chat thread.
+      example_prompts:
+        - "帮我写一封请假邮件，明天上午有事"
+        - "写一篇 800 字的读后感，主题：《活着》"
+      executable: true
+      side_effects:
+        - file_write
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 25
+      x_quick_chip:
+        text_or_desc: "快速写作"
+      x_pre_invocation_steps:
+        # 快速写作 chip swaps the chat input into a topic-only field
+        # ("输入创作的主题") and surfaces a "类型" row (作文 / 读后感 /
+        # 日记 / 周记 / 课件大纲 / 职位描述 / 小红书 / 朋友圈 / 微博 /
+        # 公众号 …). Without explicit type selection the model picks a
+        # default; for type-specific output, add another tap_label step.
+        # uiautomator sees the subtitle "一键快速成文" rather than the
+        # big "快速写作" label, but tapping the subtitle bounds still
+        # dispatches to the parent chip.
+        - tap_label:
+            text_or_desc: "一键快速成文"
+            timeout_seconds: 2
+            scroll_attempts: 0
+        - wait:
+            ms: 1200
+      x_post_result_flow:
+        description: >
+          After the article finishes streaming, the chat shows a blue
+          "导出为文档" CTA. Tapping it generates a .docx into WPS storage
+          and replaces the CTA with a clickable doc card (title + W icon)
+          that opens the editor on tap. We stop after export — opening
+          the editor is the user's call.
+        steps:
+          - tap_label:
+              text_or_desc: "导出为文档"
+              timeout_seconds: 3
+              scroll_attempts: 1
+          - wait:
+              ms: 2500
+        stop_before:
+          - "打开文档"
+
+    - id: doc_reading
+      description: >
+        "文档阅读 / 总结文档内容". Picks a .doc/.pdf/.pptx from local or
+        cloud storage and produces a summary, Q&A, or outline of it. The
+        chip opens a file picker before the prompt is sent.
+      example_prompts:
+        - "帮我总结这份合同的关键条款"
+        - "把这份 PDF 翻译成英文要点"
+      executable: true
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 20
+      failure_modes:
+        - "file picker blocks until user selects a file or cancels"
+      x_quick_chip:
+        text_or_desc: "文档阅读"
+
+    - id: web_summary
+      description: >
+        "网页摘要 / 解读网页内容". Takes a URL (pasted or shared in) and
+        summarizes the page. The chip prompts for a link if none is in the
+        clipboard.
+      example_prompts:
+        - "帮我总结这个网页：https://example.com/article"
+      executable: true
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 18
+      x_quick_chip:
+        text_or_desc: "网页摘要"
+
+provenance:
+  last_verified: "2026-05-25"
+  verified_app_version: "14.45.1"
+  verified_os: "android-16"
+  verified_device: "Pixel 9"
+  verification_method: scripted
+  evidence_url: ""
+  x_device_metrics:
+    resolution_px: [1080, 2424]
+    density_dpi: 420
+
+constraints:
+  app_version_min: "14.0.0"
+  region: ["CN"]
+  network_required: true
+  known_issues:
+    - "Chat surface is a WebView; the input <input> and the send button
+       are DOM elements, not native nodes. Tapping by bounds works,
+       tap_text via uiautomator does NOT — the planner must fall back to
+       fixed bounds for input + submit."
+    - "Send button and mic share the same right-side slot; the same
+       bounds give 'send' when input is non-empty and 'mic' when empty."
+    - "Quick-access chips (AI PPT / 快速写作 / 文档阅读 / 网页摘要) are
+       native TextViews overlaid above the WebView; uiautomator finds
+       them by `text=` reliably."
+    - "Home shortcut TextView (resource-id top_short_cut_big_title) has
+       clickable=false — taps land on the parent card via hit-testing."
+    - "First-time use of AI PPT / 快速写作 / 文档阅读 may pop a privacy
+       consent sheet; not handled yet."
+    - "x_quick_chip is a v0.1 extension (x_ prefix) — captures the
+       shortcut chip label for capabilities that have one."
