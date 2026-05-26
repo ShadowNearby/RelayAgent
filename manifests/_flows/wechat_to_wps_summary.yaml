@@ -1,0 +1,59 @@
+spec_version: "0.1"
+flow_version: "0.1.0"
+flow_id: "wechat_to_wps_summary"
+description: >
+  Two-app cowork: use WeChat AI 搜索 to pull public-account-only content on
+  a topic, then hand the captured text to WPS AI 快速写作 so it drafts a
+  summary article and exports it to a .docx in WPS storage.
+
+  Why this combo: WeChat AI 搜索 is one of the only surfaces that can cite
+  and excerpt 公众号 (subscription-account) articles — content the open
+  web doesn't see. WPS AI 快速写作 is the matching consumer: it takes a
+  long brief, drafts a structured piece, then materializes a .docx via
+  the "导出为文档" CTA.
+
+apps_required:
+  - app_id: com.tencent.mm
+    use_capability: ai_search
+  - app_id: cn.wps.moffice_eng
+    use_capability: quick_writing
+
+inputs:
+  topic:
+    type: string
+    default: "DeepSeek-V3 最新进展"
+  source_hint:
+    type: string
+    default: "只引用微信公众号文章里的内容，列出 3-5 篇文章的核心要点，每条带上公众号名"
+
+steps:
+  - id: gather
+    app: com.tencent.mm
+    capability: ai_search
+    prompt: "{topic}。{source_hint}"
+    # 微信 AI 搜索的完整回复经常 5+ 屏 / 数千字，超出 WPS 输入框
+    # max_chars=2000 的上限。这里用一个文本-only LLM call 先把回复
+    # 压成 ~1500 字的结构化要点（保留来源名），再喂给下一步。
+    extract:
+      prompt: |
+        把下面的微信 AI 搜索结果压缩成中文要点笔记，控制在 1500 字以内。
+        要求：
+          - 按公众号来源分组，每个公众号名作为小标题
+          - 每条要点保留具体数字/事件/观点，不要泛泛而谈
+          - 输出纯文本（无 markdown 链接、无脚注编号）
+        返回 JSON：{"notes": "<整段要点笔记字符串>"}
+      bind_to_array_key: notes
+    bind: source_material
+
+  - id: summarize
+    app: cn.wps.moffice_eng
+    capability: quick_writing
+    # WPS 快速写作 默认会按 "类型" 选择写作风格，这里在 brief 里显式说明
+    # 是 "总结整理"，让它走信息整合而不是凭空创作。
+    prompt: |
+      请根据下面这些微信公众号文章的要点，整理成一份《{topic}》的中文总结文档。
+      要求：开头一句话概览，正文分小标题（按主题/来源分组），结尾给出 3 条可执行建议。
+      最后保留素材里出现过的公众号名称作为来源列表。
+
+      素材：
+      {source_material}

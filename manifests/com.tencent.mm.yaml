@@ -1,0 +1,124 @@
+spec_version: "0.1"
+card_version: "0.1.0"
+app_id: "com.tencent.mm"
+app_name: "微信"
+platforms: ["android"]
+locale: ["zh-CN"]
+
+embedded_agent:
+  name: "微信"
+  type: native_in_app_agent
+  description: >
+    WeChat's built-in "AI搜索" surface. Entry: home top-right magnifier →
+    "AI搜索" link (sibling of the search bar). Backed by Tencent's
+    Yuanbao/Hunyuan-style search; can answer general questions, summarize
+    WeChat public-account articles, and pull web results.
+
+  entry:
+    primary:
+      method: tap_sequence
+      steps:
+        # 1. Tap magnifier (top-right of WeChat home).
+        #    Ratios from verified Pixel 9 (1080x2424); icon center ≈ (893, 236).
+        - tap_screen_fraction:
+            label: "open_search"
+            x_ratio: 0.827
+            y_ratio: 0.0975
+        - wait: { ms: 700 }
+        # 2. Tap "AI搜索" link on the right of the row under the search bar.
+        #    Center ≈ (965, 393) on 1080x2424.
+        - tap_screen_fraction:
+            label: "open_ai_search"
+            x_ratio: 0.894
+            y_ratio: 0.162
+        - wait: { ms: 800 }
+    fallback: []
+
+  invocation:
+    input:
+      # Whole input area at the top of the AI 搜索 page. No resource-id and
+      # uiautomator dump is empty (FLAG_SECURE) — must use bounds.
+      field:
+        x_bounds:
+          box: [80, 420, 1000, 600]
+          anchor: center
+      max_chars: 1000
+    submit:
+      # Green "问 AI" pill on the right side of the input row.
+      # Measured by isolating green pixels on a captured screenshot:
+      # bbox [770, 816, 1024, 944], center (897, 880).
+      trigger:
+        x_bounds:
+          box: [770, 816, 1024, 944]
+          anchor: center
+    prompt_template: "{{user_prompt}}"
+
+  output:
+    # After the answer renders, tap WeChat's built-in 复制 button so the
+    # answer lands on the device clipboard for the user / a downstream IME
+    # helper to consume. The adapter does NOT read the clipboard back from
+    # adb: `service call clipboard 2` returns a BadParcelableException on
+    # WeChat AI 搜索 copies because the payload (HTML + cited cards) busts
+    # Binder's ~1MB cap. The text the adapter persists to agent_reply.json
+    # still comes from the `x_capture_full_reply` VLM chunks.
+    method: copy_button
+    x_copy_button:
+      # The toolbar (⇄切换模型 🔍搜更多 [📋 copy] [↗ share] [⚠ report])
+      # sits directly below the answer body, so its absolute y depends on
+      # the answer's length (short reply → y≈855; long reply → y≈1711+).
+      # Primary locator is VLM grounding via `text`. Qwen-VL sometimes
+      # returns garbage x (e.g. x≈2, near screen edge) while keeping y
+      # correct — when that happens the adapter sanity-checks the result
+      # against `valid_x` and `valid_y` and:
+      #   - if y is valid but x is bogus → snap x to the spec midpoint
+      #     (copy icon is always at x≈788 on this Pixel 9 device, never
+      #     drifts; it's only the toolbar's y that floats with reply len);
+      #   - if both are off, hard-fall-back to bounds_center.
+      text: "复制按钮"
+      valid_x: [740, 830]   # copy icon's column on 1080-wide screen
+      valid_y: [200, 2300]  # toolbar can land anywhere in answer area
+      x_bounds:
+        box: [768, 1690, 808, 1732]
+        anchor: center
+
+  capabilities:
+
+    - id: ai_search
+      description: >
+        General AI-powered Q&A and web/article search. Pure model+search
+        response, no partner-app handoff.
+      example_prompts:
+        - "今天上海天气怎么样"
+        - "上海交通大学最近有什么新闻"
+        - "解释一下量子纠缠"
+      executable: false
+      side_effects: []
+      requires_login: false
+      reversible: true
+      handoff_to_user_required: false
+      # AI 搜索 streams a long, multi-section answer (often 5+ viewports) with
+      # citations and follow-ups appended at the bottom. Give the VLM-polled
+      # wait_for_reply plenty of headroom, and scroll-capture after done.
+      typical_latency_seconds: 40
+      x_capture_full_reply:
+        max_scrolls: 15
+
+provenance:
+  last_verified: "2026-05-25"
+  verified_app_version: "unknown"
+  verified_os: "android-16"
+  verified_device: "Pixel 9"
+  verification_method: scripted
+  evidence_url: ""
+  x_device_metrics:
+    resolution_px: [1080, 2424]
+    density_dpi: 420
+
+constraints:
+  app_version_min: ""
+  region: ["CN"]
+  network_required: true
+  known_issues:
+    - "WeChat sets FLAG_SECURE: `uiautomator dump` returns an empty hierarchy on almost every page, so text-based selectors fall through to VLM grounding (poor on CN UI). Entry steps and invocation selectors therefore use fixed bounds / screen fractions, not tap_label."
+    - "Neither the magnifier nor the 'AI搜索' link expose a11y descriptions."
+    - "Input field has no resource-id; the visible placeholder '提出你的问题...' belongs to an inner TextView that is not addressable via XML — bounds-only."
