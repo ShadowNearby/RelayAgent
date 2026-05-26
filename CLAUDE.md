@@ -73,21 +73,21 @@ uv run --python /home/yjs/AppAgentCards/.venv/bin/python mobile-world server &
    - 沉默失败禁忌：早期所有失败路径都是 `logger.debug`，被默认日志级别吞掉，看着像"功能不工作"实际上是 dump 出错。已全部升级到 `logger.info/warning`。
    - 局限：通义的输入框 placeholder TextView `clickable=false`，scoring 会给低分，但只要 `text` 字段精确匹配仍然命中并返回 bounds 中心；点击事件穿透到真正的 EditText 兄弟节点上。
 
-3.5. **App 冷启动由调用方负责，planner 默认会包含 `open_app`，但可关闭。** `scripts/run_test.py` 在调 `mw test` 之前用 `adb shell am force-stop + monkey LAUNCHER` 自己拉起目标 app，然后给子进程设 `APPCARDS_SKIP_OPEN_APP=1`；planner 看到这个环境变量就跳过最开头的 `open_app + 2.5s wait`。这样首张截图直接是 app 主页，无需依赖 MobileWorld 的 `open_app` 实现。如果绕过脚本直接 `mw test`，planner 仍会自带 `open_app` 步骤，不影响 standalone 使用。
+3.5. **App 冷启动由调用方负责，planner 默认会包含 `open_app`，但可关闭。** `scripts/run_test.py` / `agents/flow_runner.py` 在调 `mw test` 之前用共享 helper `agents/_adb.py:cold_launch()`（force-stop + monkey LAUNCHER + settle）自己拉起目标 app，然后给子进程设 `APPCARDS_SKIP_OPEN_APP=1`；planner 看到这个环境变量就跳过最开头的 `open_app + 2.5s wait`。这样首张截图直接是 app 主页，无需依赖 MobileWorld 的 `open_app` 实现。如果绕过脚本直接 `mw test`，planner 仍会发出 `open_app` 步骤；`_materialize` 在 open_app 分支里会先调 `agents/_adb.py:force_stop()` 再让 MobileWorld 走 launcher tap。三个调用点共用 `agents/_adb.py` 同一实现，并都支持 `APPCARDS_ANDROID_SERIAL` 选设备。
 
 4. **`x_prepare_fresh_conversation` 一定要接进 planner。** SPEC 用 `x_` 前缀表示非标扩展字段，老代码的 `build_plan()` 没读它，每次跑都带着上次的历史上下文。现在 `build_plan(... , fresh_conversation=True)` 默认在 `open_app + cold-launch wait` 之后插这段步骤。可用环境变量 `APPCARDS_FRESH_CONV=0` 关掉。
 
 5. **`wait_for_reply` 用 VLM 轮询而不是死等 `typical_latency_seconds`。** 系统 prompt 见 `_REPLY_WATCH_SYSTEM`，VLM 同时回 `{done, text}`。
    - **`done=True && text==None` 视为不可信**：VLM 自己都没读到文字，几乎肯定还没生成完。强行 distrust 继续 poll，比把弹窗误判成"回复"安全。
-   - 最长 `max(3×typical_latency, 30)` 秒（poll 间隔 ~1s，由 MobileWorld step_wait_time 控制，不是我们的代码）。
+   - 超时按 **墙钟秒** 计：`max_seconds = max(3×typical_latency, 30)`，用 `time.monotonic()` 比较 elapsed。每次 poll 本身是一次 VLM 调用（数秒），墙钟语义和"实际等了多久"对得上；早期版本按 poll 次数算的语义已经废弃。日志里会同时打 `poll N @ X.Xs/Ys`。
    - 抓到的 `text` 会注入到 handoff 的 `ask_user` 消息里给用户看，不是只用来判 done。
 
 ### `predict` 多次返回同一 plan 步的语义
 
-`wait_for_reply` 是**唯一一个不推进 cursor 的 step**——`_materialize` 返回 `(action, advance=False, note)`，runner 下一次还会调一次 predict 拿到下一个 poll。这导致：
+`wait_for_reply` 是**不推进 cursor 的 step**——`_materialize` 返回 `(action, advance=False, note)`，runner 下一次还会调一次 predict 拿到下一个 poll。`wait_for_reply` 的 `capture_full` 分支里 scroll 阶段同样保持 advance=False。这导致：
 
 - runner 的 step 计数 ≠ agent 的 plan cursor。例如 plan 第 8 步（wait_for_reply）会占多个 runner step。
-- `traj.json` 里看到的 prediction 字符串可能写"step 8/13"两次，第一次是 submit click，第二次是 wait poll —— 这是**正常**的，不是 bug。
+- `predict` 的 thought 字符串是 1-based **当前**步号：`step 8/13: wait_for_reply (...)`。当 step 还没推进 cursor（poll 还在继续）时会带 `[hold]` 后缀，例如 `step 8/13: wait_for_reply (... poll 3 @ 12.4s/45s) [hold]`。同一 step 号在 traj 里出现多次是**正常**的。
 
 ## Trajectory 日志的目录约定（容易看错）
 

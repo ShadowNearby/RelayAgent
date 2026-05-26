@@ -7,16 +7,27 @@ license = { text = "Apache-2.0" }
 authors = [
     { name = "Jingsheng Yan", email = "yan.jingsheng@outlook.com" },
 ]
-requires-python = ">=3.10"
+# 3.12 is required because the MobileWorld runtime that drives
+# agents/appcards_agent.py pins ">=3.12,<3.13". The bare card loader
+# (manifests + agents/card_loader.py) would work on older Pythons, but the
+# real-device runner won't, so we keep one floor.
+requires-python = ">=3.12,<3.13"
 dependencies = [
+    # Card loader + manifest parsing.
     "pyyaml>=6.0",
+    # Used across agents/ for structured logging.
+    "loguru>=0.7",
+    # FlowRunner's extract step talks to an OpenAI-compatible LLM endpoint.
+    "openai>=1.0",
+    # Screenshot encoding for the VLM grounding / reply-watch calls.
+    "pillow>=10.0",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
@@ -28,3 +39,26 @@ Issues = "https://github.com/jingsheng-yan/AppAgentCards/issues"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# We don't ship a Python package directory (the runtime modules live under
+# `agents/` and `scripts/`). Tell hatchling which directories to package so
+# `uv pip install .` / editable installs don't fail trying to auto-discover
+# a `src/` or `appagentcards/` layout that doesn't exist.
+[tool.hatch.build.targets.wheel]
+packages = ["agents"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "agents/",
+    "scripts/",
+    "manifests/",
+    "spec/",
+    "tests/",
+    "SPEC.md",
+    "SPEC-OPEN-QUESTIONS.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE",
+    ".env.example",
+]

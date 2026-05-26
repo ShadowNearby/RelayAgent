@@ -2,7 +2,7 @@
 
 A community registry of **machine-readable cards** describing the AI agents embedded inside mobile apps — so that an OS-level agent (HarmonyOS Xiaoyi, Apple Intelligence, etc.) can hand off a user's request to the in-app agent that already knows the user's account, context, and data.
 
-> **Status:** early draft. SPEC v0.1, five verified Android reference manifests, demo router included. Contributors welcome.
+> **Status:** early draft. SPEC v0.1, seven verified Android reference manifests, MobileWorld adapter + multi-app flow runner. Contributors welcome.
 
 ---
 
@@ -56,24 +56,10 @@ AppAgentCards/
 ├── spec/
 │   └── schema.json            # JSON Schema mirror of SPEC (normative)
 ├── manifests/                 # one YAML card per app; five Android cards
-├── examples/
-│   └── match_intent.py        # demo router: capability matching + plan output
+├── agents/                    # MobileWorld adapter, planner, card loader, flow runner
+├── scripts/                   # run_test.py (single app), run_flow.py (multi-app flows)
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
-```
-
-## Try the demo router
-
-The demo router requires an explicit package id via `--app`, scores that app's capability descriptions with a keyword-overlap heuristic, then prints the entry, invocation, `x_bounds` remapping, handoff, and output plan. It does not tap or operate any app UI.
-
-```bash
-uv venv && source .venv/bin/activate && uv pip install .
-
-python examples/match_intent.py --app com.autonavi.minimap "Navigate to the Bund in Shanghai"
-python examples/match_intent.py --app ctrip.android.view "Hotel near the Bund under 800 yuan"
-python examples/match_intent.py --app com.taobao.taobao "Find a tablet for students under 2000 yuan"
-python examples/match_intent.py --app com.xingin.xhs "Weekend activities with kids in Shanghai" \
-  --device-resolution 1440x3120 --device-density 480
 ```
 
 ## Run under MobileWorld (multi-VLM real-device runner)
@@ -93,24 +79,39 @@ uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
     --model_name anthropic/claude-sonnet-4-5
 ```
 
-Switch model by changing `--model_name` (`google/gemini-3`, `qwen/qwen3-vl-235b-a22b`, etc.). The agent makes one LLM call to pick a capability from the target app's card and (when a step uses a text selector) one small VLM grounding call per such step; all tap coordinates come from `x_bounds` in the card.
+Switch model by changing `--model_name` (`google/gemini-3`, `qwen/qwen3-vl-235b-a22b`, etc.). VLM token cost per task:
 
-Optional env vars:
+- 1 LLM call to pick a capability from the card.
+- For each text selector, `uiautomator dump` is tried first (precise, free); a small VLM grounding call only on miss.
+- `wait_for_reply` polls a VLM (`{done, text}`) on a wall-clock budget (`max(3×typical_latency, 30)` seconds) — this is usually the bulk of the VLM cost on chat-style capabilities.
+- Coordinates from card `x_bounds` are used only as a last-resort fallback when the a11y tree doesn't expose the element.
+
+Optional env vars (full list in `.env.example`):
 
 - `APPCARDS_MANIFESTS=/path/to/manifests` — override the default `./manifests/` location.
-- `APPCARDS_TARGET_DENSITY=480` — your phone's density in DPI for `x_bounds` remapping. Without it the adapter uses raw bi-axial scaling.
+- `APPCARDS_TARGET_DENSITY=480` — your phone's density in DPI for dp-aware `x_bounds` remapping. Without it the adapter falls back to raw bi-axial scaling.
+- `APPCARDS_FRESH_CONV=0` — keep the previous conversation context across runs (default starts a fresh one).
+- `APPCARDS_ANDROID_SERIAL=...` — pin every adb call to one device in multi-device setups.
 
 The adapter honors `handoff_to_user_required`: for any irreversible capability it emits `ask_user` before the terminal CTA rather than auto-confirming.
+
+### Multi-app flows
+
+`scripts/run_flow.py` runs a YAML flow that chains multiple app cards — each step cold-launches one app, pins a single capability, captures the in-app agent's reply, and feeds it forward to the next step via a small text-LLM extract call:
+
+```bash
+uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_coffee.yaml \
+    --input topic="上海安福路咖啡" --input city=上海
+```
 
 ## Run tests
 
 ```bash
 uv pip install .
-python -m unittest discover -s tests -v              # unit tests (no device needed)
-python -m unittest tests.test_manifest_cli -v        # CLI smoke tests only
+python -m unittest discover -s tests -v              # device-less discovery; real-device tests skip without adb
 ```
 
-Real-device tests require a connected Android device with target apps installed and `com.android.adbkeyboard/.AdbIME` enabled. Configure via `tests/config_local.py` (gitignored):
+Real-device tests require a connected Android device with target apps installed and `com.android.adbkeyboard/.AdbIME` enabled. Opt in via `tests/config_local.py` (gitignored):
 
 ```python
 RUN_REAL_ADB_TESTS = True
@@ -120,19 +121,21 @@ RUN_REAL_ADB_TESTS = True
 python -m unittest tests.test_manifest_real_adb -v
 ```
 
-Copy `.env.example` to `.env` and fill in your values for optional features (vision API, custom adb path). See `tests/config.py` for all settings (vision summary, trajectory capture, result timeouts). `test-results/` is gitignored — do not commit trajectories containing user data.
+Copy `.env.example` to `.env` and fill in your values (LLM endpoint is required; `ADB` path is optional). See `tests/config.py` for real-device test knobs (trajectory capture, result timeouts, screen recording). `test-results/` is gitignored — do not commit trajectories containing user data.
 
 ## MVP scope (v0.1)
 
-Five verified reference cards:
+Seven verified reference cards:
 
 | App | Package | Capabilities |
 | --- | --- | --- |
-| Amap | com.autonavi.minimap | POI search, navigation, ride hailing, trip planning |
-| Tongyi Qwen | com.aliyun.tongyi | Chat, train/ride/food/hotel/movie booking |
-| Ctrip | ctrip.android.view | Flights, hotels, trains, attractions, package tours |
-| Xiaohongshu | com.xingin.xhs | Community UGC Q&A via AI search |
-| Taobao | com.taobao.taobao | Product search, comparison, purchasing, order tracking |
+| Amap (高德地图) | com.autonavi.minimap | POI search, navigation, ride hailing, trip planning |
+| Tongyi Qwen (通义千问) | com.aliyun.tongyi | Chat, train/ride/food/hotel/movie booking |
+| Ctrip (携程旅行) | ctrip.android.view | Flights, hotels, trains, attractions, package tours |
+| Xiaohongshu (小红书) | com.xingin.xhs | Community UGC Q&A via AI search |
+| Taobao (淘宝) | com.taobao.taobao | Product search, comparison, purchasing, order tracking |
+| WeChat (微信) | com.tencent.mm | Yuanbao chat surface, AI search |
+| WPS Office | cn.wps.moffice_eng | AI doc generation (PPT / Doc / writing assist) |
 
 Quality bar per card: all required SPEC fields populated, ≥2 real example prompts per capability, verified manually within 30 days of submission, `handoff_to_user_required` correct for every irreversible capability.
 

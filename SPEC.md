@@ -312,6 +312,60 @@ A **conforming router** MUST:
 - **Authentication delegation** between OS agent and in-app agent. The user's existing in-app login is the trust anchor.
 - **Discovery protocol.** v0.1 ships as a static GitHub registry; a network discovery mechanism (à la `.well-known/agent-card.json`) is a candidate for v0.2.
 
+## 13.1 `x_` extensions used by the reference adapter
+
+SPEC §1 (Conformance) reserves the `x_` prefix for vendor/implementation
+extensions that conforming SDKs MAY ignore. The reference adapter
+(`agents/appcards_agent.py`) + planner (`agents/action_planner.py`) consume
+the following extensions in the seven shipped reference cards. They are
+**not normative** — a v0.1-conforming router is free to ignore any of them
+— but card authors targeting our adapter rely on them. Promotion to first-
+class fields is tracked in `SPEC-OPEN-QUESTIONS.md`.
+
+### Step kinds (extend §6.1)
+
+- **`wait_for_reply: { max_seconds?, poll_interval_seconds? }`** — wait for
+  the in-app agent to finish responding. The adapter polls a VLM with the
+  current screenshot until it returns `{done: true, text: "..."}` or the
+  wall-clock budget elapses. `max_seconds` defaults to
+  `max(3 × capability.typical_latency_seconds, 30)`.
+- **`tap_unless_present: { probe: <selector>, target: <selector> }`** —
+  conditional tap. If `probe` is currently visible (uiautomator-only check
+  for safety), skip the step; otherwise tap `target`. Used for idempotent
+  toggles like "switch to AI PPT chip if not already there."
+
+### Capability-level extensions (extend §8)
+
+- **`x_pre_invocation_steps: [<step>, ...]`** — extra steps run AFTER entry
+  but BEFORE focusing the input field. Used to lock the chat surface into
+  a sub-mode (e.g. WPS "AI PPT").
+- **`x_post_result_flow: { steps: [<step>, ...] }`** — extra steps run
+  AFTER `wait_for_reply` returns. Used for in-app confirmation flows
+  (e.g. tongyi's `order_food` taps through the order sheet, stopping
+  before payment).
+- **`x_capture_full_reply: true | { max_scrolls: N }`** — after the reply
+  is done, scroll the chat surface and capture each frame via VLM, then
+  stitch into one text blob. Default `max_scrolls=6`. Used for stacked
+  POI cards or multi-paragraph answers exceeding one viewport.
+
+### Entry / output extensions
+
+- **`entry.x_prepare_fresh_conversation: { description?, steps: [<step>, ...] }`** —
+  steps run at the very start of each task (after `open_app`) to clear
+  prior conversation context. Can be disabled per-run via the
+  `APPCARDS_FRESH_CONV=0` env var.
+- **`output.method: copy_button`** (extends §7.2 enum) +
+  **`output.x_copy_button: { text?, x_bounds?, valid_x?, valid_y? }`** —
+  after the reply lands, tap the in-app 复制 button so the answer ends up
+  on the device clipboard. Locator priority: VLM grounding via `text`,
+  then `x_bounds` center, with `valid_x` / `valid_y` ranges as a sanity
+  filter against VLM mis-grounding.
+
+### Provenance (already in §9 as `x_device_metrics`)
+
+`provenance.x_device_metrics: { resolution_px: [w, h], density_dpi: N }`
+is mandatory whenever any `x_bounds` selector is used; see §9.
+
 ## 14. Relationship to A2A and MCP
 
 This spec deliberately reuses concepts from Google's **A2A AgentCard** (`name`, `description`, `capabilities`, `skills`) and Anthropic's **MCP** tool descriptors (rich natural-language descriptions, structured side-effect metadata). The intent is forward compatibility: a future `to_a2a()` projection should be lossless for the subset of fields A2A expresses.
