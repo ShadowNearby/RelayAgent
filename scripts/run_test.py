@@ -25,14 +25,30 @@ MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
 def cold_launch(package: str, settle_seconds: float = 2.5) -> None:
-    """Force-stop the target app and (re-)launch it via the standard
-    launcher intent, so MobileWorld's first observation already shows
-    the app's home screen (not whatever was on screen before)."""
-    print(f"▶ cold-launching {package} ...", file=sys.stderr)
-    subprocess.run(
+    """Cold-launch policy — MANDATORY before any test run.
+
+    Always force-stop the target app FIRST, then (re-)launch via the
+    standard launcher intent. This guarantees MobileWorld's first
+    observation is the app's clean home surface — not a stale modal,
+    half-finished chat thread, expired session sheet, or whatever the
+    previous run left behind.
+
+    The agent (`appcards_agent._materialize`) mirrors this policy
+    independently when it handles the `open_app` step, so direct
+    `mw test` invocations that bypass this script still cold-start
+    cleanly. Both call sites must stay in sync — DO NOT remove
+    either one.
+    """
+    print(f"▶ cold-launching {package} (force-stop + monkey LAUNCHER) ...",
+          file=sys.stderr)
+    fs = subprocess.run(
         ["adb", "shell", "am", "force-stop", package],
         check=False, capture_output=True, text=True, timeout=10,
     )
+    if fs.returncode != 0:
+        # force-stop is best-effort; report and continue to launch.
+        print(f"  ! force-stop returned {fs.returncode}: "
+              f"{(fs.stderr or fs.stdout).strip()}", file=sys.stderr)
     res = subprocess.run(
         ["adb", "shell", "monkey", "-p", package,
          "-c", "android.intent.category.LAUNCHER", "1"],
