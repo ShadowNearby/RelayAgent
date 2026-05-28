@@ -328,7 +328,8 @@ class fields is tracked in `SPEC-OPEN-QUESTIONS.md`.
   the in-app agent to finish responding. The adapter polls a VLM with the
   current screenshot until it returns `{done: true, text: "..."}` or the
   wall-clock budget elapses. `max_seconds` defaults to
-  `max(3 × capability.typical_latency_seconds, 30)`.
+  `max(5 × capability.typical_latency_seconds, 60)`; override per capability
+  with `x_max_wait_seconds`.
 - **`tap_unless_present: { probe: <selector>, target: <selector> }`** —
   conditional tap. If `probe` is currently visible (uiautomator-only check
   for safety), skip the step; otherwise tap `target`. Used for idempotent

@@ -3,14 +3,16 @@
 ## Python 环境
 
 - venv 在 `.venv/`，**Python 3.12.3**（MobileWorld 要求 `>=3.12,<3.13`，3.11 不行）。
-- 因为 `pyproject.toml` 没有 `appagentcards/` 源码目录，hatchling editable 构建会失败，所以用：
+- 日常装依赖（**不**把本项目装进 venv，靠 `uv run` 直接跑源码）：
 
   ```bash
   uv venv --python 3.12
   uv sync --no-install-project
   ```
 
-  装项目本体之前需先在 `pyproject.toml` 加 `[tool.hatch.build.targets.wheel] packages = [...]`。
+- 如果要把项目本体也装进去（`uv pip install .`），`pyproject.toml` 里已经写好
+  `[tool.hatch.build.targets.wheel] packages = ["agents"]`，hatchling 能直接
+  打 wheel —— 不需要再像早期那样手工补 packages 字段。
 
 - MobileWorld 通过 `pyproject.toml` 里的 git 依赖 + `[tool.uv.sources]` 由 uv
   自动 clone 安装（详见下面 "MobileWorld 依赖" 一节），`mw` / `mobile-world` 可用。
@@ -19,7 +21,7 @@
   `pyproject.toml` 里写了 `"pydantic<2.11"`，当前锁在 `pydantic==2.10.6` /
   `pydantic-core==2.27.2`。如果未来升级 fastmcp 后这个限制可以放开。
 
-## 用户的 LLM 端点（运行 `mw test` 时的默认配置）
+## 用户的 LLM 端点
 
 具体值写在 `.env`（gitignore，**不要提交，也不要在回复里复述完整 key**）：
 
@@ -29,7 +31,18 @@
 | `LLM_API_KEY` | `sk-PqO0...` —— 仅从 `.env` 读取，勿在回复/提交中写出 |
 | `LLM_MODEL` | `qwen` |
 
-运行模板：
+**首选入口（canonical）**：`scripts/run_test.py`。它会自己 load `.env`、冷启动目标
+app、设 `APPCARDS_SKIP_OPEN_APP=1`，然后转发剩余 flag 给 `mw test`：
+
+```bash
+uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+# 多 app NL 路由：
+uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"
+# 多 app flow：
+uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml --nl "..."
+```
+
+**直接 `mw test`（只在调试 adapter 时用）**：
 
 ```bash
 set -a; source .env; set +a
@@ -43,7 +56,9 @@ uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
 ```
 
 参数名必须与 `agents/appcards_agent.py` 中 `AppCardsAgent.__init__` 签名一致：
-`model_name` / `llm_base_url` / `api_key`，**不是** `--base_url`。
+`model_name` / `llm_base_url` / `api_key`，**不是** `--base_url`。绕过
+`scripts/run_test.py` 直接走 `mw test` 时调用方没冷启动，planner 会自己发出
+`open_app` 步（见 §3.5）。
 
 ## MobileWorld 依赖
 
@@ -76,7 +91,7 @@ uv run mobile-world server &    # 启动 MW server
    - 沉默失败禁忌：早期所有失败路径都是 `logger.debug`，被默认日志级别吞掉，看着像"功能不工作"实际上是 dump 出错。已全部升级到 `logger.info/warning`。
    - 局限：通义的输入框 placeholder TextView `clickable=false`，scoring 会给低分，但只要 `text` 字段精确匹配仍然命中并返回 bounds 中心；点击事件穿透到真正的 EditText 兄弟节点上。
 
-3.5. **App 冷启动由调用方负责，planner 默认会包含 `open_app`，但可关闭。** `scripts/run_test.py` / `agents/flow_runner.py` 在调 `mw test` 之前用共享 helper `agents/_adb.py:cold_launch()`（force-stop + monkey LAUNCHER + settle）自己拉起目标 app，然后给子进程设 `APPCARDS_SKIP_OPEN_APP=1`；planner 看到这个环境变量就跳过最开头的 `open_app + 2.5s wait`。这样首张截图直接是 app 主页，无需依赖 MobileWorld 的 `open_app` 实现。如果绕过脚本直接 `mw test`，planner 仍会发出 `open_app` 步骤；`_materialize` 在 open_app 分支里会先调 `agents/_adb.py:force_stop()` 再让 MobileWorld 走 launcher tap。三个调用点共用 `agents/_adb.py` 同一实现，并都支持 `APPCARDS_ANDROID_SERIAL` 选设备。
+3.5. **App 冷启动由调用方负责，planner 默认会包含 `open_app`，但可关闭。** `scripts/run_test.py` / `scripts/run_nl.py` / `agents/flow_runner.py` 在调 `mw test` 之前用共享 helper `agents/_adb.py:cold_launch()`（force-stop + monkey LAUNCHER + settle）自己拉起目标 app，然后给子进程设 `APPCARDS_SKIP_OPEN_APP=1`；planner 看到这个环境变量就跳过最开头的 `open_app + 2.5s wait`。这样首张截图直接是 app 主页，无需依赖 MobileWorld 的 `open_app` 实现。如果绕过脚本直接 `mw test`，planner 仍会发出 `open_app` 步骤；`_materialize` 在 open_app 分支里会先调 `agents/_adb.py:force_stop()` 再让 MobileWorld 走 launcher tap。这四个调用点（三个脚本入口 + adapter 内的 open_app 分支）共用 `agents/_adb.py` 同一实现，并都支持 `APPCARDS_ANDROID_SERIAL` 选设备。
 
 4. **`x_prepare_fresh_conversation` 一定要接进 planner。** SPEC 用 `x_` 前缀表示非标扩展字段，老代码的 `build_plan()` 没读它，每次跑都带着上次的历史上下文。现在 `build_plan(... , fresh_conversation=True)` 默认在 `open_app + cold-launch wait` 之后插这段步骤。可用环境变量 `APPCARDS_FRESH_CONV=0` 关掉。
 

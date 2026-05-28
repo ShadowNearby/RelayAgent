@@ -2,6 +2,8 @@
 
 Design questions deferred from SPEC v0.1. Each will either get resolved into a SPEC change or explicitly closed as out-of-scope. Discuss in issues; reference the question id (e.g. `OQ-3`) in PRs.
 
+OQ ids are stable once assigned and never reused. Gaps in numbering (e.g. OQ-13 / OQ-14) reflect ids that were drafted, merged into another question, or closed before publication; they are intentionally not reassigned so that issue / PR references remain unambiguous.
+
 ---
 
 ## OQ-1 — Structured parameter schemas for capabilities

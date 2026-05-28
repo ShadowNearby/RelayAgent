@@ -6,6 +6,7 @@ This project lives or dies on **card quality**, not card count — please read t
 
 - **New cards** for apps not yet covered.
 - **Card updates** — `provenance` refresh, new capabilities, fixed selectors after an app update.
+- **New flows** — multi-app YAMLs under `manifests/_flows/` composing existing cards (see the two reference flows for the format).
 - **SPEC changes** — open an issue first; SPEC changes require a version bump and rationale.
 
 ## What we do not accept (yet)

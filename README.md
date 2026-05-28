@@ -73,19 +73,17 @@ AppAgentCards/
 Requires **Python 3.12** (MobileWorld pins `>=3.12,<3.13`) and a Linux/WSL host with adb + a USB-debugging phone running `com.android.adbkeyboard/.AdbIME`.
 
 ```bash
-# 1. set up the venv (project itself is not editable-installed; sync deps only)
+# 1. set up the venv. MobileWorld is declared as a git dep in pyproject.toml
+#    via [tool.uv.sources]; uv sync clones + installs it automatically.
+#    pydantic is pinned <2.11 in pyproject (fastmcp 2.9.2 incompatibility),
+#    so no manual pin needed.
 uv venv --python 3.12
 uv sync --no-install-project
 
-# 2. install MobileWorld into the same venv
-git clone https://github.com/Tongyi-MAI/MobileWorld && cd MobileWorld
-uv pip install . --python /path/to/AppAgentCards/.venv/bin/python
-# fastmcp 2.9.2 (a MobileWorld dep) breaks on pydantic ≥2.11 — pin it back
-VIRTUAL_ENV=/path/to/AppAgentCards/.venv uv pip install "pydantic<2.11"
+# 2. start the MobileWorld server
 uv run mobile-world server &
 
 # 3. fill in .env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL) then drive a goal
-cd /path/to/AppAgentCards
 uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
@@ -107,7 +105,8 @@ uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
 
 - 1 LLM call to pick a capability from the card.
 - For each text selector, `uiautomator dump` is tried first (precise, free); a small VLM grounding call only on miss.
-- `wait_for_reply` polls a VLM (`{done, text}`) on a wall-clock budget (`max(3×typical_latency, 30)` seconds) — this is usually the bulk of the VLM cost on chat-style capabilities.
+- `wait_for_reply` polls a VLM (`{done, text}`) on a wall-clock budget (`max(5×typical_latency, 60)` seconds). A two-stage precheck (screenshot perceptual hash, then a11y-tree text hash) skips the VLM call entirely while the reply is still streaming, typically cutting done-detection cost ~30–50%.
+- Reply text is scraped from the a11y dump instead of read out of the VLM response; for `x_capture_full_reply` capabilities every scroll-frame extract is also a scrape. The VLM is the fallback only when the scrape returns empty.
 - Coordinates from card `x_bounds` are used only as a last-resort fallback when the a11y tree doesn't expose the element.
 
 Optional env vars (full list in `.env.example`):
