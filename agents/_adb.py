@@ -85,7 +85,7 @@ def swipe_down(
             ratio = float(env)
         except ValueError:
             logger.warning(f"Invalid APPCARDS_CAPTURE_SCROLL_RATIO={env!r}, using {ratio}")
-    ratio = max(0.1, min(0.8, ratio))
+    ratio = max(0.1, min(0.5, ratio))
     w, h = _get_screen_size()
     x = w // 2
     travel = int(h * ratio)

@@ -77,6 +77,8 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 6
       failure_modes:
         - "City/time ambiguous → agent asks for clarification"
 
@@ -95,6 +97,8 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 6
 
     - id: search_train
       description: >
@@ -112,6 +116,8 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 18
+      x_capture_full_reply:
+        max_scrolls: 6
 
     - id: plan_trip
       description: >

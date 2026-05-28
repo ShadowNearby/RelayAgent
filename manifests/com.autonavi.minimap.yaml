@@ -76,6 +76,8 @@ embedded_agent:
       reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 5
+      x_capture_full_reply:
+        max_scrolls: 6
 
     - id: navigate_to
       description: >
@@ -133,6 +135,8 @@ embedded_agent:
       reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 40
+      x_capture_full_reply:
+        max_scrolls: 8
       failure_modes:
         - "Deep-search mode takes 30–60s; set generous UI timeout"
 

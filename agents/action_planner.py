@@ -165,7 +165,12 @@ def build_plan(
     # ceiling (3× typical latency, min 30 s) and let the VLM poll decide when
     # the reply is actually done — and capture the text while we are there.
     typical_latency = capability.get("typical_latency_seconds", 10)
-    max_wait = max(int(typical_latency * 3), 30)
+    # 5× multiplier + 60 s floor: typical_latency in cards is "first-token"
+    # latency, not "complete-reply" latency. A 千问 chat capability declares
+    # 8 s but a multi-paragraph reply streams for 30+ s; the previous 3× / 30
+    # formula timed out mid-stream. 5× / 60 gives the model room to finish.
+    # Per-capability override via `x_max_wait_seconds`.
+    max_wait = int(capability.get("x_max_wait_seconds") or max(typical_latency * 5, 60))
     # Long-form replies (stacked POI cards, multi-paragraph summaries) often
     # exceed one viewport — capability can opt in to a post-done scroll-and-
     # capture loop via `x_capture_full_reply: { max_scrolls: N }` (or just

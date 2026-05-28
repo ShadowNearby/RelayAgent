@@ -58,6 +58,7 @@ _DENSITY_ENV = "APPCARDS_TARGET_DENSITY"
 _FRESH_CONV_ENV = "APPCARDS_FRESH_CONV"  # set to "0" to disable
 _SKIP_OPEN_APP_ENV = "APPCARDS_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
 _REPLY_OUT_ENV = "APPCARDS_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
+_DISMISS_PERMS_ENV = "APPCARDS_DISMISS_PERMISSIONS"  # set to "0" to disable system permission popup auto-dismiss
 
 # MobileWorld writes the active run under traj_logs/user_task/ (see CLAUDE.md).
 # We append every LLM call into traj.json at top-level under "0".llm_calls so
@@ -95,6 +96,315 @@ _FENCE_ANY = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
 _BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
 
+# Common labels for in-app "stop generating" / "thinking" buttons. Used ONLY
+# as a chrome-filter for the reply-text scrape (so e.g. "停止生成" doesn't
+# leak into the extracted reply text). The done-detection signal is the
+# text-hash diff in wait_for_reply Stage 2, not these markers.
+_DEFAULT_STREAMING_MARKERS: tuple[str, ...] = (
+    "停止生成", "停止回答", "停止", "生成中", "正在生成", "思考中",
+    "Stop generating", "Stop", "Generating", "Thinking",
+)
+
+
+def _dump_window_xml_root(
+    dump_timeout: float = 8, pull_timeout: float = 5,
+) -> "ET.Element | None":
+    """Run `uiautomator dump`, pull, parse. Returns root element or None on
+    any failure (logged at info — dump can be flaky during animations).
+
+    Timeouts are parameterized because the wait_for_reply precheck wants a
+    tight budget (3s) — an 8s stall on every tick would burn the wall-clock
+    budget when uiautomator is persistently unhealthy."""
+    base = adb_base()
+    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
+        local_xml = fh.name
+    remote_xml = "/sdcard/appcards_window_dump.xml"
+    try:
+        dump = subprocess.run(
+            base + ["shell", "uiautomator", "dump", remote_xml],
+            capture_output=True, text=True, timeout=dump_timeout,
+        )
+        if dump.returncode != 0:
+            return None
+        pull = subprocess.run(
+            base + ["pull", remote_xml, local_xml],
+            capture_output=True, text=True, timeout=pull_timeout,
+        )
+        if pull.returncode != 0 or not os.path.getsize(local_xml):
+            return None
+        try:
+            return ET.parse(local_xml).getroot()
+        except ET.ParseError:
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    finally:
+        try:
+            os.unlink(local_xml)
+        except OSError:
+            pass
+
+
+def _dump_visible_text_hash(
+    dump_timeout: float = 3,
+    pull_timeout: float = 2,
+) -> "str | None":
+    """blake2b hash of all visible text + content-desc joined in document
+    order. Used by the wait_for_reply Stage-2 precheck: if this tick's hash
+    matches the previous tick's hash, no new text was rendered → the in-app
+    agent is done streaming. If it differs, the reply is still growing → skip
+    the VLM call. None on dump failure (caller falls through to VLM).
+
+    This is strictly better than the old "look for 停止生成 marker" heuristic:
+    app-agnostic (no per-app marker list to maintain), and it catches both
+    apps without a stop button AND apps whose stop button stays around after
+    generation completes."""
+    root = _dump_window_xml_root(dump_timeout=dump_timeout, pull_timeout=pull_timeout)
+    if root is None:
+        return None
+    parts: list[str] = []
+    for n in root.iter("node"):
+        t = (n.get("text") or "").strip()
+        d = (n.get("content-desc") or "").strip()
+        if t:
+            parts.append(t)
+        if d and d != t:
+            parts.append(d)
+    joined = "␟".join(parts)
+    import hashlib
+    return hashlib.blake2b(joined.encode("utf-8", "replace"), digest_size=12).hexdigest()
+
+
+# Chrome labels we never want to include in the extracted reply text.
+# Combined with the streaming-marker list at runtime.
+_REPLY_CHROME_LABELS: frozenset[str] = frozenset({
+    "复制", "重新生成", "重试", "分享", "收藏", "点赞", "踩", "更多", "发送",
+    "Copy", "Regenerate", "Retry", "Share", "Send", "More",
+    "发消息", "发消息或按住说话", "请输入", "输入",
+    "AI 内容仅供参考", "AI 生成内容可能存在错误",
+})
+
+
+def _extract_reply_text_from_dump(
+    user_input_text: str | None,
+    screen_h: int,
+    extra_excludes: tuple[str, ...] = (),
+) -> str | None:
+    """Scrape the assistant's most recent reply text directly from the
+    uiautomator XML, no VLM. Returns the joined text or None on dump failure
+    / nothing plausibly-reply found.
+
+    Heuristic (no per-app config needed for most chat UIs):
+      1. Dump XML.
+      2. Walk all visible text-bearing nodes in document order, recording
+         (top-y, text). Strip status-bar (top 8%) and input-bar (bottom 18%)
+         regions outright.
+      3. If `user_input_text` was supplied and appears in any node, take the
+         LAST such occurrence's y; keep only nodes whose top-y > that y.
+         (Those are siblings rendered below the user's own bubble — i.e. the
+         assistant's reply.)
+      4. Filter out chrome labels (Copy / Regenerate / streaming markers /
+         input placeholders).
+      5. Join with newlines, return None if the result is empty/whitespace.
+    """
+    root = _dump_window_xml_root(dump_timeout=3, pull_timeout=2)
+    if root is None:
+        return None
+    top_cutoff = int(screen_h * 0.08)
+    bot_cutoff = int(screen_h * 0.82)
+    # (top_y, text)
+    nodes: list[tuple[int, str]] = []
+    for n in root.iter("node"):
+        t = (n.get("text") or "").strip()
+        if not t:
+            continue
+        m = _BOUNDS_RE.match(n.get("bounds") or "")
+        if not m:
+            continue
+        x1, y1, x2, y2 = (int(v) for v in m.groups())
+        if y2 <= y1 or x2 <= x1:
+            continue
+        # Drop status bar / input area / off-screen nodes.
+        if y1 < top_cutoff or y1 > bot_cutoff:
+            continue
+        nodes.append((y1, t))
+    if not nodes:
+        return None
+    # Find y of last occurrence of user's typed input (their own bubble).
+    # We compare with substring containment to tolerate trailing spaces /
+    # avatar timestamps appended by some apps.
+    cut_y = -1
+    if user_input_text:
+        u = user_input_text.strip()
+        if u:
+            for y, t in nodes:
+                if u in t or t in u:
+                    cut_y = max(cut_y, y)
+    # Filter: above user bubble OR known chrome OR streaming markers.
+    excludes = set(_REPLY_CHROME_LABELS) | set(extra_excludes)
+    excludes |= set(_DEFAULT_STREAMING_MARKERS)
+    candidates: list[tuple[int, str]] = []
+    for y, t in nodes:
+        if cut_y >= 0 and y <= cut_y:
+            continue
+        if t in excludes:
+            continue
+        # Substring-match exclusion for noisy chrome variants ("AI 内容..." etc.)
+        if any(x and x in t and len(x) >= 4 for x in excludes):
+            continue
+        candidates.append((y, t))
+    if not candidates:
+        return None
+    # Drop short "quick-reply chip"-looking nodes IFF there's at least one
+    # substantial node — otherwise a one-line reply would itself be dropped.
+    # Threshold (25 chars) catches typical follow-up suggestion buttons
+    # ("复旦大学有哪些王牌专业？") while preserving real reply prose.
+    MIN_CHIP_LEN = 25
+    has_substantial = any(len(t) >= MIN_CHIP_LEN for _, t in candidates)
+    if has_substantial:
+        candidates = [(y, t) for y, t in candidates if len(t) >= MIN_CHIP_LEN]
+    joined = "\n".join(t for _, t in candidates).strip()
+    return joined or None
+
+
+def _hash_screenshot_region(image) -> str:
+    """Perceptual-ish hash of the message area of a phone screenshot.
+    Crops out the status bar (top ~8%) and the input/keyboard area (bottom
+    ~18%) so a ticking clock or a blinking input caret doesn't constantly
+    flip the hash. Downscales to 48×96 grayscale so a streaming cursor /
+    small fading dots don't either, while a growing reply paragraph still
+    changes enough pixels to register as different.
+
+    This is the *fast* precheck signal in wait_for_reply: comparing this
+    hash across ticks is essentially free, and lets us skip the expensive
+    uiautomator dump (and the VLM call) while text is actively streaming."""
+    w, h = image.size
+    top = int(h * 0.08)
+    bot = int(h * 0.82)
+    crop = image.crop((0, top, w, bot))
+    small = crop.convert("L").resize((48, 96))
+    import hashlib
+    return hashlib.blake2b(small.tobytes(), digest_size=12).hexdigest()
+
+
+# --- System permission popup auto-dismiss ------------------------------------
+#
+# Per CLAUDE.md, every fresh capability that needs a runtime permission (camera,
+# location, mic, contacts, ...) gets blocked by a system dialog like
+# `要允许"千问"拍摄照片和录制视频吗？`. We auto-tap the most-permissive Allow
+# button at the top of every `_materialize` so the planner doesn't have to know
+# anything about it. Constraints:
+#   * only fires when the FOREGROUND package is a known permission controller
+#     — protects against an in-app "允许" label triggering a spurious tap.
+#   * uses a cheap `dumpsys window` probe first (~200ms); only pays the full
+#     uiautomator dump (~2.5s) when the probe says a permission UI is up.
+#   * capped to MAX_DISMISSALS per task; a stuck dialog won't infinite-loop.
+#   * env opt-out via APPCARDS_DISMISS_PERMISSIONS=0.
+_PERMISSION_PACKAGES = (
+    "com.android.permissioncontroller",
+    "com.google.android.permissioncontroller",
+    "com.lbe.security.miui",        # MIUI / Xiaomi
+    "com.miui.securitycenter",
+    "com.huawei.systemmanager",     # Huawei / Honor
+    "com.coloros.safecenter",       # OPPO
+    "com.heytap.openid",            # OPPO/realme newer
+    "com.vivo.permissionmanager",   # vivo
+    "com.samsung.android.permissioncontroller",
+)
+# Preference order: most-permissive first so e.g. "始终允许" wins over "允许".
+_ALLOW_LABELS: tuple[str, ...] = (
+    "始终允许",
+    "Always allow",
+    "在使用应用时允许",
+    "仅在使用该应用时允许",
+    "使用该应用时允许",
+    "While using the app",
+    "Allow while using the app",
+    "本次允许",
+    "仅在本次使用允许",
+    "Only this time",
+    "允许",
+    "Allow",
+)
+_FOCUS_PKG_RE = re.compile(r"\b([\w.]+)/[\w.$]+\b")
+
+
+def _foreground_package() -> str | None:
+    """Return the current foreground app's package id via `dumpsys window`.
+    Cheap (~100-300ms). Returns None on any failure."""
+    try:
+        # Note: some Android builds (observed on this lab's pixel-class
+        # device) emit nothing for `dumpsys window windows` — `dumpsys window`
+        # without the subcommand returns the full state and is portable.
+        r = subprocess.run(
+            adb_base() + ["shell", "dumpsys", "window"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode != 0:
+            return None
+        for line in r.stdout.splitlines():
+            if "mCurrentFocus" not in line and "mFocusedApp" not in line:
+                continue
+            m = _FOCUS_PKG_RE.search(line)
+            if m:
+                return m.group(1)
+        return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
+def _maybe_dismiss_permission_popup() -> str | None:
+    """If a system permission/consent dialog is on top, tap the most-permissive
+    Allow button. Returns the label tapped (for logging) or None when nothing
+    was dismissed."""
+    pkg = _foreground_package()
+    if pkg is None or pkg not in _PERMISSION_PACKAGES:
+        return None
+    root = _dump_window_xml_root(dump_timeout=2, pull_timeout=1)
+    if root is None:
+        logger.info(
+            f"permission popup probe: foreground={pkg!r} but uiautomator "
+            "dump failed; cannot auto-dismiss"
+        )
+        return None
+    # Walk allow labels in preference order; tap the first match. Restrict to
+    # nodes belonging to a permission package (the dump can include overlays
+    # from other system surfaces).
+    for label in _ALLOW_LABELS:
+        for n in root.iter("node"):
+            if (n.get("package") or "") not in _PERMISSION_PACKAGES:
+                continue
+            t = (n.get("text") or "").strip()
+            d = (n.get("content-desc") or "").strip()
+            if t != label and d != label:
+                continue
+            if (n.get("clickable") or "").lower() != "true":
+                continue
+            m = _BOUNDS_RE.match(n.get("bounds") or "")
+            if not m:
+                continue
+            x1, y1, x2, y2 = (int(v) for v in m.groups())
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            try:
+                subprocess.run(
+                    adb_base() + ["shell", "input", "tap", str(cx), str(cy)],
+                    capture_output=True, text=True, timeout=3,
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                logger.warning(f"permission popup tap failed: {e}")
+                return None
+            logger.info(
+                f"dismissed system permission popup: tapped {label!r} at "
+                f"({cx},{cy}) on {pkg}"
+            )
+            return label
+    logger.warning(
+        f"permission popup probe: foreground={pkg!r} but no known Allow "
+        f"button found in dump (tried {len(_ALLOW_LABELS)} labels)"
+    )
+    return None
+
+
 # Strip whitespace + common punctuation noise so two VLM extractions of the
 # same paragraph compare equal even when one renders "2022年, 董..." and the
 # other "2022年，董...", or with/without inline numbering / bullet glyphs.
@@ -114,17 +424,17 @@ def _stitch_chunks(chunks: list[str]) -> str:
       1. Drop any chunk whose normalized form is a substring of another
          (sub-window dupes — same content captured at a slightly different
          scroll position).
-      2. If multiple chunks survive (none is a strict substring of another
-         but they DO overlap heavily because the VLM paraphrased the same
-         content slightly differently across frames), keep only the longest
-         single chunk. We do NOT attempt suffix/prefix stitching: VLM
-         paraphrase drift defeats char-level overlap matching, and returning
-         the longest coherent capture beats emitting a 2-3x duplicated mess.
+      2. Walk surviving chunks in capture order (top → bottom) and append
+         their lines, skipping any line whose normalized form was already
+         emitted. This handles both the heavy-overlap case (most lines
+         dedupe → output ≈ longest chunk) and the disjoint-content case
+         (chunks cover different parts of a long reply → output is the
+         union, in reading order).
 
-    Trade-off: long replies that span >1 viewport with genuinely distinct
-    paragraphs per frame will get truncated to the single-best frame. If
-    that becomes a real problem, the fix is a different capture strategy
-    (deterministic anchor-based scroll + a11y extraction), not stitching.
+    Char-level suffix/prefix stitching is intentionally avoided: VLM
+    paraphrase drift defeats it. Line-level dedup is robust because the
+    VLM tends to reproduce whole lines verbatim per frame even when the
+    surrounding wrap changes.
 
     Chunks are assumed to be in reading order (top → bottom)."""
     chunks = [c for c in chunks if c and c.strip()]
@@ -146,20 +456,35 @@ def _stitch_chunks(chunks: list[str]) -> str:
     if len(chunks) <= 1:
         return chunks[0] if chunks else ""
 
-    # (2) Multiple chunks survived step 1 (none is a strict substring of
-    # another). They DO have significant overlap though — VLM paraphrases
-    # the same content slightly differently across frames (whitespace,
-    # line wrap, bullet glyphs), so neither substring matching nor
-    # suffix/prefix stitching can collapse them cleanly. The honest
-    # fallback for VLM extraction noise is to keep just the longest
-    # single coherent capture; that beats a 2-3x duplicated mess.
-    longest = max(chunks, key=lambda c: len(_normalize_for_dedup(c)))
+    # (2) Line-level ordered-dedup merge. For each chunk in capture order,
+    # append its lines unless we've already emitted that line (normalized).
+    # Blank lines pass through unconditionally so paragraph breaks survive,
+    # but consecutive blanks are collapsed.
+    out_lines: list[str] = []
+    seen: set[str] = set()
+    new_line_counts: list[int] = []
+    for c in chunks:
+        added = 0
+        for line in c.splitlines():
+            if not line.strip():
+                if out_lines and out_lines[-1].strip():
+                    out_lines.append("")
+                continue
+            key = _normalize_for_dedup(line)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out_lines.append(line)
+            added += 1
+        new_line_counts.append(added)
+    while out_lines and not out_lines[-1].strip():
+        out_lines.pop()
+    merged = "\n".join(out_lines)
     logger.info(
-        f"_stitch_chunks: {len(chunks)} chunks survived substring dedup "
-        f"(VLM paraphrase drift); returning longest "
-        f"({len(longest)} of {sum(len(c) for c in chunks)} total chars)"
+        f"_stitch_chunks: merged {len(chunks)} chunks by line-dedup "
+        f"(new lines per chunk: {new_line_counts}) -> {len(merged)} chars"
     )
-    return longest
+    return merged
 
 
 def _ground_text_via_uiautomator(
@@ -440,9 +765,17 @@ class AppCardsAgent(MCPAgent):
         self.cursor: int = 0
         self._planned: bool = False
         self._reply_polls: int = 0
+        self._reply_precheck_skips: int = 0
+        self._reply_precheck_skips_since_vlm: int = 0
+        self._reply_dump_fail_streak: int = 0
+        self._reply_precheck_disabled: bool = False
+        self._reply_last_shot_hash: str | None = None
+        self._reply_last_dump_text_hash: str | None = None
+        self._reply_stable_streak: int = 0
         self._reply_start_ts: float | None = None
         self._wait_text_start_ts: float | None = None
         self._last_agent_reply: str | None = None
+        self._last_input_text: str | None = None
         # Multi-screen capture state for replies that exceed one viewport
         # (e.g. 小红书 点点 returns long answers with stacked POI cards). See
         # the `capture_full` branch in wait_for_reply.
@@ -452,6 +785,8 @@ class AppCardsAgent(MCPAgent):
         self._capture_idle: int = 0
         self.fresh_conversation: bool = os.getenv(_FRESH_CONV_ENV, "1") != "0"
         self.skip_open_app: bool = os.getenv(_SKIP_OPEN_APP_ENV, "0") == "1"
+        self.dismiss_permissions: bool = os.getenv(_DISMISS_PERMS_ENV, "1") != "0"
+        self._permission_dismissed_count: int = 0
 
     def openai_chat_completions_create(  # type: ignore[override]
         self,
@@ -550,13 +885,22 @@ class AppCardsAgent(MCPAgent):
         self.cursor = 0
         self._planned = False
         self._reply_polls = 0
+        self._reply_precheck_skips = 0
+        self._reply_precheck_skips_since_vlm = 0
+        self._reply_dump_fail_streak = 0
+        self._reply_precheck_disabled = False
+        self._reply_last_shot_hash = None
+        self._reply_last_dump_text_hash = None
+        self._reply_stable_streak = 0
         self._reply_start_ts = None
         self._wait_text_start_ts = None
         self._last_agent_reply = None
+        self._last_input_text = None
         self._capture_phase = None
         self._captured_chunks = []
         self._capture_scrolls = 0
         self._capture_idle = 0
+        self._permission_dismissed_count = 0
 
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
         screenshot = observation["screenshot"]
@@ -576,6 +920,26 @@ class AppCardsAgent(MCPAgent):
                 f"Plan ({len(self.plan)} steps) for capability={cap_id!r}: "
                 + " → ".join(f"{s.kind}" for s in self.plan)
             )
+
+        # System permission popup hook — runs BEFORE the planned step. If a
+        # known permission controller is foreground we tap the most-permissive
+        # Allow, return a no-op wait that does NOT advance the cursor, and let
+        # MW capture a fresh screenshot. Next predict re-enters cleanly with
+        # the popup gone. Bounded so a stuck dialog can't infinite-loop.
+        MAX_DISMISSALS = 8
+        if (
+            self.dismiss_permissions
+            and self._permission_dismissed_count < MAX_DISMISSALS
+        ):
+            label = _maybe_dismiss_permission_popup()
+            if label is not None:
+                self._permission_dismissed_count += 1
+                thought = (
+                    f"system permission popup: tapped {label!r} "
+                    f"(#{self._permission_dismissed_count}/{MAX_DISMISSALS})"
+                )
+                logger.info(thought)
+                return thought, JSONAction(action_type="wait")
 
         if self.cursor >= len(self.plan):
             return ("plan exhausted", JSONAction(action_type="finished", goal_status="complete"))
@@ -664,6 +1028,10 @@ class AppCardsAgent(MCPAgent):
             return JSONAction(action_type="click", x=x, y=y), True, note
 
         if kind == "input_text":
+            # Save the typed text so the reply-extraction heuristic in
+            # wait_for_reply can use it to locate the user's own bubble in
+            # the message list (everything visually BELOW is the reply).
+            self._last_input_text = p["text"]
             return JSONAction(action_type="input_text", text=p["text"], clear_text=True), True, ""
 
         if kind == "wait_ms":
@@ -707,12 +1075,24 @@ class AppCardsAgent(MCPAgent):
             capture_full = bool(p.get("capture_full"))
             max_capture_scrolls = int(p.get("max_capture_scrolls", 6))
 
-            # Phase 2: after VLM said done, walk backwards through the reply
-            # by swiping down (MW direction="down" reveals content ABOVE),
-            # capturing visible text per frame. Stops on max scrolls or when
-            # two consecutive frames produce no new text.
+            # Phase 2: after done, walk through the rest of the reply by
+            # swiping the visible portion off so the next chunk slides into
+            # view; capture each frame's reply text. Stops on max scrolls or
+            # when two consecutive frames produce no new text.
+            #
+            # We prefer the uiautomator scrape over a VLM call per frame —
+            # the scrape is free (no tokens) and returns the full visible
+            # text verbatim. VLM is only used as a fallback when the scrape
+            # finds nothing (e.g. WebView-rendered replies whose text isn't
+            # in the a11y tree).
             if self._capture_phase == "scrolling":
-                _, text = self._poll_agent_reply(screenshot)
+                text = _extract_reply_text_from_dump(
+                    self._last_input_text, screen_h
+                )
+                source = "scrape"
+                if not text:
+                    _, text = self._poll_agent_reply(screenshot)
+                    source = "vlm_fallback"
                 # Substring dedup with normalization: a new VLM-extracted
                 # frame often repeats text from a previous frame but with
                 # tiny formatting drift (whitespace, punctuation, markdown
@@ -741,7 +1121,7 @@ class AppCardsAgent(MCPAgent):
                     self._capture_idle = 0
                     logger.info(
                         f"Capture scroll {self._capture_scrolls}: +chunk "
-                        f"({len(text)} chars)"
+                        f"({len(text)} chars, via {source})"
                     )
                 else:
                     self._capture_idle += 1
@@ -781,21 +1161,147 @@ class AppCardsAgent(MCPAgent):
             # poll-count budget under-reports actual latency wildly.
             if self._reply_start_ts is None:
                 self._reply_start_ts = time.monotonic()
+            max_seconds = max(1, int(p.get("max_seconds", 30)))
+            elapsed = time.monotonic() - self._reply_start_ts
+
+            # Two-stage pre-check before paying for a VLM call. Stage 1 is
+            # essentially free; stage 2 only fires when stage 1 says the
+            # screen is stable.
+            #
+            #  Stage 1 — screenshot hash diff over the message-area crop
+            #    (see _hash_screenshot_region). Streaming text → pixels change
+            #    → hash flips → SKIP both the dump and the VLM. This is the
+            #    common case during the first few seconds of a reply and
+            #    cuts the bulk of dump cost.
+            #
+            #  Stage 2 — once the screen has been stable for one tick,
+            #    uiautomator dump and HASH the visible text. Compare to the
+            #    previous dump's text hash:
+            #      - first dump (no baseline): fall through to VLM
+            #      - hash CHANGED: text is still growing → skip VLM
+            #      - hash STABLE: two consecutive dumps with identical text →
+            #        call VLM to confirm done + extract text
+            #    This replaces the old "look for 停止生成 marker" heuristic,
+            #    which was brittle (not every app has a stop button; some
+            #    apps' stop buttons stay around after generation completes).
+            #    Text-diff is app-agnostic and directly measures the signal
+            #    we actually care about.
+            #
+            # Hardening so a broken uiautomator can't strand us:
+            #  * CIRCUIT BREAKER — 2 consecutive dump failures disable the
+            #    stage-2 dump for the rest of this wait_for_reply; once the
+            #    screen is stable we go straight to VLM.
+            #  * WATCHDOG — force a VLM poll after MAX_SKIPS_BEFORE_FORCE
+            #    consecutive precheck skips, so an animated UI element that
+            #    keeps flipping the hash cannot block detection of done.
+            MAX_DUMP_FAILS = 2
+            MAX_SKIPS_BEFORE_FORCE = 5
+            force_vlm = (
+                self._reply_precheck_skips_since_vlm >= MAX_SKIPS_BEFORE_FORCE
+            )
+            if not force_vlm and elapsed < max_seconds:
+                # Stage 1: free screenshot hash.
+                shot_hash = _hash_screenshot_region(screenshot)
+                shot_changed = shot_hash != self._reply_last_shot_hash
+                self._reply_last_shot_hash = shot_hash
+                if shot_changed:
+                    # Don't even dump — pixels are mutating.
+                    self._reply_stable_streak = 0
+                    self._reply_precheck_skips += 1
+                    self._reply_precheck_skips_since_vlm += 1
+                    time.sleep(0.8)
+                    return (
+                        JSONAction(action_type="wait"),
+                        False,
+                        (
+                            f"precheck skip #{self._reply_precheck_skips} "
+                            f"(screen changed) @ {elapsed:.1f}s/{max_seconds}s"
+                        ),
+                    )
+                # Screen pixels are stable — but pixel-stability at 48×96
+                # downscale can miss small text growth. Stage 2 is the
+                # semantic check.
+                self._reply_stable_streak += 1
+
+                # Stage 2: dump and hash visible text. Skipped if breaker
+                # tripped — stable screens then go straight to VLM.
+                if not self._reply_precheck_disabled:
+                    text_hash = _dump_visible_text_hash()
+                    if text_hash is None:
+                        self._reply_dump_fail_streak += 1
+                        if self._reply_dump_fail_streak >= MAX_DUMP_FAILS:
+                            self._reply_precheck_disabled = True
+                            logger.warning(
+                                "wait_for_reply stage-2 dump disabled for "
+                                f"this wait — {self._reply_dump_fail_streak} "
+                                "consecutive dump failures; stable screens "
+                                "will go straight to VLM"
+                            )
+                    else:
+                        self._reply_dump_fail_streak = 0
+                        prev = self._reply_last_dump_text_hash
+                        self._reply_last_dump_text_hash = text_hash
+                        # Skip VLM only when we have a baseline AND the text
+                        # changed since last tick — that's the "still growing"
+                        # signal. First dump (no baseline) or unchanged text
+                        # → fall through to VLM (it's the authoritative done
+                        # judge; pixel-stable + text-stable is when it lands).
+                        if prev is not None and text_hash != prev:
+                            self._reply_precheck_skips += 1
+                            self._reply_precheck_skips_since_vlm += 1
+                            time.sleep(0.8)
+                            return (
+                                JSONAction(action_type="wait"),
+                                False,
+                                (
+                                    f"precheck skip #{self._reply_precheck_skips} "
+                                    f"(text still growing) "
+                                    f"@ {elapsed:.1f}s/{max_seconds}s"
+                                ),
+                            )
+
+            if force_vlm:
+                logger.info(
+                    f"wait_for_reply watchdog: forcing VLM poll after "
+                    f"{self._reply_precheck_skips_since_vlm} consecutive "
+                    "precheck skips"
+                )
             done, text = self._poll_agent_reply(screenshot)
             self._reply_polls += 1
-            max_seconds = max(1, int(p.get("max_seconds", 30)))
+            self._reply_precheck_skips_since_vlm = 0
             elapsed = time.monotonic() - self._reply_start_ts
             # Trust `done` only if the VLM also produced text. If text is None,
             # the VLM is telling us it cannot read any reply on screen — which
             # almost always means generation has not actually finished. Keep
             # polling until we either get text or hit the timeout.
             if done and text:
+                # VLM said done and gave us a text snippet. Try to UPGRADE that
+                # text via direct uiautomator scrape — the VLM is asked to cap
+                # at 500 chars, and on long replies it summarizes the tail. The
+                # scrape returns the full visible text verbatim, no token cost.
+                scraped = _extract_reply_text_from_dump(
+                    self._last_input_text, screen_h
+                )
+                if scraped and len(scraped) > len(text):
+                    logger.info(
+                        f"reply text upgrade: VLM={len(text)} chars → "
+                        f"uiautomator scrape={len(scraped)} chars"
+                    )
+                    text = scraped
                 self._last_agent_reply = text
                 logger.info(
                     f"In-app agent reply DONE after {self._reply_polls} poll(s) "
+                    f"({self._reply_precheck_skips} precheck skip(s) saved) "
                     f"/ {elapsed:.1f}s; text={text!r}"
                 )
                 self._reply_polls = 0
+                self._reply_precheck_skips = 0
+                self._reply_precheck_skips_since_vlm = 0
+                self._reply_dump_fail_streak = 0
+                self._reply_precheck_disabled = False
+                self._reply_last_shot_hash = None
+                self._reply_last_dump_text_hash = None
+                self._reply_stable_streak = 0
                 self._reply_start_ts = None
                 if capture_full:
                     self._capture_phase = "scrolling"
@@ -816,6 +1322,19 @@ class AppCardsAgent(MCPAgent):
                     "distrusting, continuing"
                 )
             if elapsed >= max_seconds:
+                # Same upgrade as the happy path — VLM truncates at ~500 chars
+                # and on long-running replies that hit the timeout the scrape
+                # almost always has more (and verbatim) content.
+                scraped = _extract_reply_text_from_dump(
+                    self._last_input_text, screen_h
+                )
+                if scraped and (not text or len(scraped) > len(text)):
+                    logger.info(
+                        f"reply text upgrade on timeout: "
+                        f"VLM={len(text) if text else 0} chars → "
+                        f"uiautomator scrape={len(scraped)} chars"
+                    )
+                    text = scraped
                 logger.warning(
                     f"In-app agent reply did not finish within {max_seconds}s "
                     f"({self._reply_polls} poll(s)); advancing anyway "
@@ -823,12 +1342,22 @@ class AppCardsAgent(MCPAgent):
                 )
                 self._last_agent_reply = text
                 self._reply_polls = 0
+                self._reply_precheck_skips = 0
+                self._reply_precheck_skips_since_vlm = 0
+                self._reply_dump_fail_streak = 0
+                self._reply_precheck_disabled = False
+                self._reply_last_shot_hash = None
+                self._reply_last_dump_text_hash = None
+                self._reply_stable_streak = 0
                 self._reply_start_ts = None
                 return JSONAction(action_type="wait"), True, "timeout"
             return (
                 JSONAction(action_type="wait"),
                 False,
-                f"poll {self._reply_polls} @ {elapsed:.1f}s/{max_seconds}s",
+                (
+                    f"poll {self._reply_polls} @ {elapsed:.1f}s/{max_seconds}s "
+                    f"(+{self._reply_precheck_skips} precheck skips)"
+                ),
             )
 
         if kind == "tap_unless_present":

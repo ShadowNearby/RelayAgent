@@ -82,8 +82,44 @@ uv run mobile-world server &    # 启动 MW server
 
 5. **`wait_for_reply` 用 VLM 轮询而不是死等 `typical_latency_seconds`。** 系统 prompt 见 `_REPLY_WATCH_SYSTEM`，VLM 同时回 `{done, text}`。
    - **`done=True && text==None` 视为不可信**：VLM 自己都没读到文字，几乎肯定还没生成完。强行 distrust 继续 poll，比把弹窗误判成"回复"安全。
-   - 超时按 **墙钟秒** 计：`max_seconds = max(3×typical_latency, 30)`，用 `time.monotonic()` 比较 elapsed。每次 poll 本身是一次 VLM 调用（数秒），墙钟语义和"实际等了多久"对得上；早期版本按 poll 次数算的语义已经废弃。日志里会同时打 `poll N @ X.Xs/Ys`。
+   - 超时按 **墙钟秒** 计：`max_seconds = capability.x_max_wait_seconds or max(5×typical_latency, 60)`，用 `time.monotonic()` 比较 elapsed。每次 poll 本身是一次 VLM 调用（数秒），墙钟语义和"实际等了多久"对得上；早期版本按 poll 次数算的语义已经废弃。日志里会同时打 `poll N @ X.Xs/Ys`。**历史坑**：以前是 `max(3×latency, 30)`，对 single-bubble chat（千问/WPS chat lat=8-10s）来说 max_seconds=30 太紧 —— 多段落回复 30s 还没流完就 timeout，导致 scrape 抓到的是半截。改成 5× / 60 floor 后千问 chat 拿到 60s，长回复也能完整 stream 完。Per-cap 覆写写 `x_max_wait_seconds: 120` 之类。
    - 抓到的 `text` 会注入到 handoff 的 `ask_user` 消息里给用户看，不是只用来判 done。
+
+6. **`wait_for_reply` 用两段式 precheck 省 VLM 调用。** 每次 poll 前：
+   - **Stage 1（≈25 ms / tick）**：`_hash_screenshot_region` 对 MW 已经传进来的 PIL 截图做裁剪 + 灰度 + 48×96 下采样 + blake2b。裁掉顶部 8% 状态栏（不让时钟扰动 hash）和底部 18% 输入区。hash 跟上一 tick 不同 → 还在 streaming → 跳过 stage 2 和 VLM（日志 `precheck skip #N (screen changed)`）。
+   - **Stage 2（≈2.5 s / tick，只在屏幕稳定的那一拍才跑）**：`_dump_visible_text_hash` 对 uiautomator dump 里所有可见文本（`text` + `content-desc`）按文档顺序拼接后做 blake2b。**比较本 tick 和上 tick 的 dump 文本 hash**：
+     - 没 baseline（首次 dump）→ fall through 到 VLM
+     - hash 跟上次不同 → 文字还在长 → skip VLM（日志 `precheck skip #N (text still growing)`）
+     - hash 跟上次相同（连续两次 dump 文本完全相等）→ 真的稳定了 → 调 VLM 判 done
+   - **设计原则**：text-hash diff 是 app-agnostic 的语义信号（直接测"reply 还在长不"），不依赖 per-app 的 marker 列表。**历史坑**：早期 Stage 2 是扫 `停止生成 / Stop generating` 这类 marker —— 脆弱，理由：(a) 不是每个 app 都有 stop 按钮；(b) 有些 app 的 stop 按钮生成完也不消失（粘连 false-negative）。改成 text-diff 后两类都正确处理。`_DEFAULT_STREAMING_MARKERS` 仍保留，但仅作为 reply text scrape 的 chrome filter（防止 "停止生成" 字样混入提取的回复文本）。
+   - stage 2 dump 超时 3s/pull 2s（短于通用 8s/5s），避免 uiautomator 卡死时烧光 wall-clock budget。
+   - **熔断**：同一次 wait 内连续 ≥2 次 stage-2 dump 失败 → 关掉本次的 dump，稳定的屏直接走 VLM。stage 1 截图 hash 永远开。
+   - **看门狗**：连续 precheck-skip ≥5 次 → 强制跑一次 VLM。防某些 app 的动画一直翻 screenshot hash 或某种 chrome 文字一直微动让 text hash 一直变。
+   - 实测千问 chat 简短回复（清华介绍）：3 次 VLM poll 砍到 1 次 + 3 次 stage-1 skip，**~40% token 节省**（6740 → 3950），且没有一次 stage-2 dump 真的跑（屏从 streaming 直接稳定到 done）。回复越长，stage 1 省得越多；只有屏稳定那一拍才付 dump 成本。
+
+7. **系统权限弹窗自动 dismiss。** 每次 `predict` 入口先跑 `_maybe_dismiss_permission_popup`：
+   - 先用 `adb shell dumpsys window` 拿前台包（~130ms），不在 `_PERMISSION_PACKAGES` 白名单里直接 fast-exit，不付 uiautomator dump。
+   - 白名单命中才 dump XML，按 `_ALLOW_LABELS` 优先级（`始终允许 > 允许 > Always allow > Allow > ...`）找第一个 clickable 节点，`adb shell input tap` 中心点。
+   - 每个 task 上限 8 次 dismiss（`MAX_DISMISSALS`），防止卡死的对话框无限循环。
+   - 只点 Allow，永远不点 Deny；deny-only 对话框正常跳过。
+   - 关掉：`APPCARDS_DISMISS_PERMISSIONS=0`。
+   - 替代了之前"手动在系统设置预先授权"的临时解法。
+
+8. **回复文本优先从 uiautomator 抓，VLM 只判 done。** `_extract_reply_text_from_dump` 走 dump → 按 y 坐标筛"用户气泡之下"的文本节点（用 `self._last_input_text` 在 input_text step 时保存的字符串定位用户气泡）→ 过滤 chrome 标签（`_REPLY_CHROME_LABELS` + streaming markers）→ 启发式丢"快速回复 chip"（有长节点存在时，剔除 <25 chars 的节点；无长节点则全保留以兼容短回复）。
+   - **happy path**（VLM 判 done && text 不空）：抓一次 dump，如果 scraped 比 VLM text 更长就 upgrade，日志 `reply text upgrade: VLM=X chars → uiautomator scrape=Y chars`。
+   - **timeout path**（max_seconds 到了 VLM 还说 not done）：同样 upgrade。实测千问 chat "详细介绍十种损失函数" 这种回复：VLM text 卡在 ~120 chars（500-char cap + JSON 包裹），scrape 拿回 1732 chars，**约 14× 内容恢复**，零额外 VLM 调用，只多一次 ~2.5s dump。
+   - **`capture_full` scroll 阶段**：每次 scroll 后用 scrape 替代 VLM 提取当帧文本。dedup / stitch 逻辑不变（normalize 后比较，超集替换）。scrape 失败（如 WebView 渲染的回复 a11y 抓不到）才回落到 VLM，日志区分 `via scrape` / `via vlm_fallback`。
+   - 启发式不依赖 per-card 配置（chip-filter 25-char 阈值 + chrome labels 静态表 + user-bubble y 切割），但 `_REPLY_CHROME_LABELS` 和 `MIN_CHIP_LEN` 是常量，要补的话直接改源。后续如果某些 app（高德 POI 卡片、携程行程卡）需要保留 clickable 子节点，再加 `x_reply_scrape: {keep_clickable: true, exclude: [...]}` per-card 覆写。
+
+### `x_capture_full_reply` 该不该开？
+
+判断口诀：**回复是 single TextView ⇒ 不开；是 RecyclerView 多节点 ⇒ 开**。
+
+- **不开（single-bubble chat）**：千问 chat / WPS chat / WPS 长文写作 / WPS 文档阅读 / WPS 网页摘要 / 携程 chat_travel_qa / 携程 search_attraction_info。这类 app 把整段回复（哪怕几千字）渲染在**一个 TextView 节点**里，Android 的 uiautomator 一次 dump 拿的是节点 `text` 属性的**完整字符串**，跟可视裁剪无关 — scrape 一次就拿全。开 capture_full 反而会把后续 CTA（复制、handoff 按钮）滚出视口。这类需要拿全回复的是**调大 `max_seconds`**（已通过 5× / 60 默认覆盖），不是 capture_full。
+- **开（multi-node card list）**：千问 order_food / book_*、高德 find_nearby / plan_trip / hail_ride、淘宝 search_product / compare_products / track_order、携程 search_flight / search_hotel / search_train、微信 ai_search、小红书 qa_community_knowledge。这类 app 用 RecyclerView/ListView 渲染卡片列表，offscreen 卡片会被回收 → 不滚动 dump 不到。`max_scrolls` 按内容长度配：短列表 4，标准 6，多日行程 8，深度搜索 15（微信 ai_search 的经验值）。
+- **Skip（短 CTA / handoff 前奏）**：高德 navigate_to、淘宝 buy_product / order_local_delivery、千问 hail_ride（短确认对话）、WPS ai_ppt（outline + CTA）、携程 plan_trip（短 prompt + CTA，行程在 handoff 后）。
+
+要判断一个新 capability 属于哪类，最快办法是触发一次 reply，然后跑 `adb shell uiautomator dump` 看长文本节点数：1 个长 TextView（>200 字）→ single-bubble；多个中等节点（每个几十字，按卡片排）→ multi-node list。
 
 ### `predict` 多次返回同一 plan 步的语义
 
@@ -113,9 +149,11 @@ uv run mobile-world server &    # 启动 MW server
 | capability 路由（纯文本） | 1 |
 | `tap_text` → uiautomator 命中 | 0 |
 | `tap_text` → uiautomator miss 才走 VLM grounding | 0–N |
-| `wait_for_reply` poll | 1–N（典型 2–5）|
+| `wait_for_reply` done detection（**precheck 后**） | 1–N（典型 1–2）|
+| `wait_for_reply` 提取回复 text | **0**（scrape；失败才 VLM）|
+| `capture_full` scroll 阶段抓 chunk | **0/scroll**（scrape；失败才 VLM）|
 
-蜜雪冰城下单一条完整链路当前 token_usage 约 6800 total，主要在 wait_for_reply 的多张截图轮询。
+第 6 条的两段式 precheck 砍 done 检测的 VLM 次数（~30–50%）；第 8 条的 scrape upgrade 砍 text 提取的 VLM token 成本（capture_full 多帧场景从 N 次 VLM 直接到 0）。两条合起来：千问 chat 短回复 6740 → 4040 token；长回复（损失函数那种）VLM token 不变但**回复内容 ~14× 恢复**（绕开 500-char cap）。蜜雪冰城下单链路启用两条优化后预期降到 ~3500–4000 数量级。
 
 ### Capture-scroll 幅度可调
 
@@ -130,4 +168,4 @@ swipe。`agents/_adb.py:swipe_down(ratio=0.7)` 直接发 `input swipe`，幅度 
 
 ## 已知阻塞
 
-- **千问首次触发外卖类能力会弹相机权限**（`要允许"千问"拍摄照片和录制视频吗？`）。我们没加权限弹窗处理。临时解法：手动在系统设置里把千问的相机权限预先授掉。后续如果要做，可以在 `_materialize` 里加一个 step 之前的 "如检测到系统权限弹窗就点允许" 钩子。
+（目前无 — 历史阻塞"千问相机权限弹窗"已由第 7 条的 `_maybe_dismiss_permission_popup` hook 解决。）

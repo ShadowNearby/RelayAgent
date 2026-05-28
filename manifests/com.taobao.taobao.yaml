@@ -58,6 +58,8 @@ embedded_agent:
       reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 12
+      x_capture_full_reply:
+        max_scrolls: 6
       failure_modes:
         - "Too few constraints → follow-up questions (budget, size, brand, use case)"
         - "Clicking product cards may leave agent chat for product detail page"
@@ -75,6 +77,8 @@ embedded_agent:
       reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 15
+      x_capture_full_reply:
+        max_scrolls: 6
 
     - id: buy_product
       description: >
@@ -129,6 +133,8 @@ embedded_agent:
       reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 10
+      x_capture_full_reply:
+        max_scrolls: 4
       failure_modes:
         - "Multiple matching orders → user must pick the specific one"
 

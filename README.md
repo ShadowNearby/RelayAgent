@@ -181,6 +181,10 @@ Seven verified reference cards:
 
 Quality bar per card: all required SPEC fields populated, ≥2 real example prompts per capability, verified manually within 30 days of submission, `handoff_to_user_required` correct for every irreversible capability.
 
+## Known blockers
+
+- **Taobao server-side risk control ("访问被拒绝").** Some Taobao capabilities — currently observed on `buy_product` and `order_local_delivery` — land on a server-rendered "亲，访问被拒绝" wall (an orange mascot + a feedback QR code) instead of the product / local-delivery flow. This is account- and device-level风控 enforced by Taobao, **not** an adapter or manifest bug: the entry path executes correctly, the AI shopping assistant accepts the prompt, and the failure happens on the deep-link target page after the in-app agent fires. There is no in-app workaround from the OS-agent side. Mitigations to try before declaring a capability broken: sign the device into a Taobao account with normal purchase history, complete any pending real-name / device-trust checks in 我的淘宝 → 设置 → 账号与安全, and avoid running the same risk-controlled capability back-to-back on a freshly-imaged device. We keep these capabilities in the manifest because the entry path itself is sound and the wall lifts once the account passes风控.
+
 ## What this project is *not*
 
 - **Not a GUI agent.** We navigate to an in-app agent's input field, not the app's general UI. For general GUI agents, see AutoGLM / OMG-Agent.

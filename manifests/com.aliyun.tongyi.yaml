@@ -82,6 +82,8 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 6
       failure_modes:
         - "12306 not logged in → stops at login sheet; user must enter credentials"
         - "Fliggy returns no results → asks for time range clarification"
@@ -105,6 +107,8 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 8
+      x_capture_full_reply:
+        max_scrolls: 6
       failure_modes:
         - "OAuth bind required on first use; flow terminates if user declines"
       x_partner_app: "com.taobao.litetao"
@@ -164,6 +168,8 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 18
+      x_capture_full_reply:
+        max_scrolls: 6
       failure_modes:
         - "No results or sold out → agent asks to expand search criteria"
       x_partner_app: "com.taobao.trip"
@@ -184,6 +190,8 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 15
+      x_capture_full_reply:
+        max_scrolls: 6
       failure_modes:
         - "OAuth bind required on first use; flow terminates if user declines"
         - "Damai not in static auth management list; partner pool is runtime-expanded"
