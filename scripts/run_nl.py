@@ -7,7 +7,7 @@ text LLM to pick the best match for the user's sentence:
 
   - a flow (multi-app cowork) — dispatched via FlowRunner with --nl, OR
   - a single app + capability — dispatched via `mw test` with the
-    capability pinned through APPCARDS_FORCE_CAPABILITY.
+    capability pinned through RELAY_FORCE_CAPABILITY.
 
 Usage:
     scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
@@ -46,7 +46,7 @@ from agents.flow_runner import (  # noqa: E402
 MANIFEST_DIR = REPO_ROOT / "manifests"
 FLOW_DIR = MANIFEST_DIR / "_flows"
 ENV_FILE = REPO_ROOT / ".env"
-AGENT_FILE = REPO_ROOT / "agents" / "appcards_agent.py"
+AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
 MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
@@ -205,12 +205,12 @@ def dispatch_app(
     child_env = {
         **env,
         **os.environ,
-        "APPCARDS_TARGET_APP": app_id,
-        "APPCARDS_SKIP_OPEN_APP": "1",
+        "RELAY_TARGET_APP": app_id,
+        "RELAY_SKIP_OPEN_APP": "1",
     }
     if capability:
-        child_env["APPCARDS_FORCE_CAPABILITY"] = capability
-        child_env["APPCARDS_INVOCATION_TEXT"] = goal
+        child_env["RELAY_FORCE_CAPABILITY"] = capability
+        child_env["RELAY_INVOCATION_TEXT"] = goal
 
     cmd = [
         str(MW_BIN), "test", goal,

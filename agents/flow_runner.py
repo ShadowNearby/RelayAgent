@@ -8,13 +8,13 @@ last sub-run's captured reply into structured data.
 Design notes (see CLAUDE.md for project context):
 
 - Each app step is a fresh `mw test` subprocess. We DON'T reuse one long-
-  lived AppCardsAgent across apps because plan cursor / chat history are
+  lived RelayAgent across apps because plan cursor / chat history are
   scoped to a single card.
-- The capability router is bypassed via APPCARDS_FORCE_CAPABILITY +
-  APPCARDS_INVOCATION_TEXT, so each sub-run skips the routing LLM call
+- The capability router is bypassed via RELAY_FORCE_CAPABILITY +
+  RELAY_INVOCATION_TEXT, so each sub-run skips the routing LLM call
   and goes straight into plan building.
 - The captured in-app reply is shipped from the sub-process to the parent
-  via APPCARDS_REPLY_OUT (a JSON file written at handoff/done).
+  via RELAY_REPLY_OUT (a JSON file written at handoff/done).
 - Extract steps run a small text-only chat completion against the same
   LLM endpoint configured in `.env` (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL).
 - Templating: `{var}` and `{var.field}` substitution against a flat
@@ -46,7 +46,7 @@ from agents._adb import cold_launch as _cold_launch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
-AGENT_FILE = REPO_ROOT / "agents" / "appcards_agent.py"
+AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
 MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
@@ -71,7 +71,7 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 
 
 # cold-launch delegates to agents._adb so all three call sites (run_test.py,
-# flow_runner, appcards_agent open_app) share one implementation.
+# flow_runner, relay_agent open_app) share one implementation.
 
 
 # --------------------------------------------------------------------------- #
@@ -242,23 +242,23 @@ class FlowRunner:
         step_log_root.mkdir(parents=True, exist_ok=True)
 
         with tempfile.NamedTemporaryFile(
-            mode="w+", suffix=".json", prefix="appcards_reply_", delete=False
+            mode="w+", suffix=".json", prefix="relay_reply_", delete=False
         ) as fh:
             reply_path = Path(fh.name)
         try:
-            # Priority: explicit overrides (the per-step APPCARDS_* keys
+            # Priority: explicit overrides (the per-step RELAY_* keys
             # below) > shell env > .env file. Putting `self.env` (sourced
             # from .env) underneath `os.environ` lets a user override any
-            # LLM_* / APPCARDS_* setting from their shell without editing
+            # LLM_* / RELAY_* setting from their shell without editing
             # .env. The per-step keys at the end always win.
             child_env = {
                 **self.env,
                 **os.environ,
-                "APPCARDS_TARGET_APP": app,
-                "APPCARDS_SKIP_OPEN_APP": "1",
-                "APPCARDS_FORCE_CAPABILITY": capability,
-                "APPCARDS_INVOCATION_TEXT": prompt,
-                "APPCARDS_REPLY_OUT": str(reply_path),
+                "RELAY_TARGET_APP": app,
+                "RELAY_SKIP_OPEN_APP": "1",
+                "RELAY_FORCE_CAPABILITY": capability,
+                "RELAY_INVOCATION_TEXT": prompt,
+                "RELAY_REPLY_OUT": str(reply_path),
             }
             cmd = [
                 str(MW_BIN), "test", prompt,

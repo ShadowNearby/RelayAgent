@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/AppAgentCards/spec/v0.1/schema.json",
-  "title": "AppAgentCards Manifest",
-  "description": "Normative JSON Schema for the AppAgentCards SPEC v0.1. Cards are authored in YAML; this schema describes the equivalent JSON structure after parse.",
+  "$id": "https://github.com/RelayAgent/spec/v0.1/schema.json",
+  "title": "RelayAgent Manifest",
+  "description": "Normative JSON Schema for the RelayAgent SPEC v0.1. Cards are authored in YAML; this schema describes the equivalent JSON structure after parse.",
 
   "type": "object",
   "additionalProperties": false,

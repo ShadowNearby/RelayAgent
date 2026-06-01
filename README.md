@@ -1,4 +1,4 @@
-# AppAgentCards
+# RelayAgent
 
 A community registry of **machine-readable cards** describing the AI agents embedded inside mobile apps — so that an OS-level agent (HarmonyOS Xiaoyi, Apple Intelligence, etc.) can hand off a user's request to the in-app agent that already knows the user's account, context, and data.
 
@@ -54,7 +54,7 @@ uv run python scripts/run_nl.py "在上海找三家评价好的小众书店，�
 ## What's in the repo
 
 ```
-AppAgentCards/
+RelayAgent/
 ├── SPEC.md                    # manifest specification (v0.1)
 ├── SPEC-OPEN-QUESTIONS.md     # known design questions still in flight
 ├── spec/
@@ -68,7 +68,7 @@ AppAgentCards/
 
 ## Run under MobileWorld (multi-VLM real-device runner)
 
-`agents/appcards_agent.py` plugs AppAgentCards into [MobileWorld](https://github.com/Tongyi-MAI/MobileWorld) as an `--agent-type`. MobileWorld gives us a real-device runner with provider-agnostic VLM support (Claude, Gemini, Qwen-VL, Kimi, …); the card supplies the deterministic entry path and handoff policy.
+`agents/relay_agent.py` plugs RelayAgent into [MobileWorld](https://github.com/Tongyi-MAI/MobileWorld) as an `--agent-type`. MobileWorld gives us a real-device runner with provider-agnostic VLM support (Claude, Gemini, Qwen-VL, Kimi, …); the card supplies the deterministic entry path and handoff policy.
 
 Requires **Python 3.12** (MobileWorld pins `>=3.12,<3.13`) and a Linux/WSL host with adb + a USB-debugging phone running `com.android.adbkeyboard/.AdbIME`.
 
@@ -87,15 +87,15 @@ uv run mobile-world server &
 uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-`scripts/run_test.py` loads `.env`, cold-launches the target app via `agents/_adb.py` (force-stop + monkey LAUNCHER), sets `APPCARDS_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, and forwards any extra flags (e.g. `--max-step 40`) straight through to `mw test`.
+`scripts/run_test.py` loads `.env`, cold-launches the target app via `agents/_adb.py` (force-stop + monkey LAUNCHER), sets `RELAY_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, and forwards any extra flags (e.g. `--max-step 40`) straight through to `mw test`.
 
 If you prefer to call `mw test` yourself, pass the LLM config explicitly:
 
 ```bash
 set -a; source .env; set +a
-export APPCARDS_TARGET_APP=com.aliyun.tongyi
+export RELAY_TARGET_APP=com.aliyun.tongyi
 uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
-    --agent-type   "$PWD/agents/appcards_agent.py" \
+    --agent-type   "$PWD/agents/relay_agent.py" \
     --model_name   "$LLM_MODEL" \
     --llm_base_url "$LLM_BASE_URL" \
     --api_key      "$LLM_API_KEY"
@@ -111,10 +111,10 @@ uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
 
 Optional env vars (full list in `.env.example`):
 
-- `APPCARDS_MANIFESTS=/path/to/manifests` — override the default `./manifests/` location.
-- `APPCARDS_TARGET_DENSITY=480` — your phone's density in DPI for dp-aware `x_bounds` remapping. Without it the adapter falls back to raw bi-axial scaling.
-- `APPCARDS_FRESH_CONV=0` — keep the previous conversation context across runs (default starts a fresh one).
-- `APPCARDS_ANDROID_SERIAL=...` — pin every adb call to one device in multi-device setups.
+- `RELAY_MANIFESTS=/path/to/manifests` — override the default `./manifests/` location.
+- `RELAY_TARGET_DENSITY=480` — your phone's density in DPI for dp-aware `x_bounds` remapping. Without it the adapter falls back to raw bi-axial scaling.
+- `RELAY_FRESH_CONV=0` — keep the previous conversation context across runs (default starts a fresh one).
+- `RELAY_ANDROID_SERIAL=...` — pin every adb call to one device in multi-device setups.
 
 The adapter honors `handoff_to_user_required`: for any irreversible capability it emits `ask_user` before the terminal CTA rather than auto-confirming.
 

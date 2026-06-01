@@ -1,4 +1,4 @@
-# AppAgentCards — Claude 项目记忆
+# RelayAgent — Claude 项目记忆
 
 ## Python 环境
 
@@ -32,7 +32,7 @@
 | `LLM_MODEL` | `qwen` |
 
 **首选入口（canonical）**：`scripts/run_test.py`。它会自己 load `.env`、冷启动目标
-app、设 `APPCARDS_SKIP_OPEN_APP=1`，然后转发剩余 flag 给 `mw test`：
+app、设 `RELAY_SKIP_OPEN_APP=1`，然后转发剩余 flag 给 `mw test`：
 
 ```bash
 uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
@@ -46,16 +46,16 @@ uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml --nl "
 
 ```bash
 set -a; source .env; set +a
-export APPCARDS_TARGET_APP=com.aliyun.tongyi   # 目标 app 包名，必填
+export RELAY_TARGET_APP=com.aliyun.tongyi   # 目标 app 包名，必填
 
 uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
-    --agent-type   "$PWD/agents/appcards_agent.py" \
+    --agent-type   "$PWD/agents/relay_agent.py" \
     --model_name   "$LLM_MODEL" \
     --llm_base_url "$LLM_BASE_URL" \
     --api_key      "$LLM_API_KEY"
 ```
 
-参数名必须与 `agents/appcards_agent.py` 中 `AppCardsAgent.__init__` 签名一致：
+参数名必须与 `agents/relay_agent.py` 中 `RelayAgent.__init__` 签名一致：
 `model_name` / `llm_base_url` / `api_key`，**不是** `--base_url`。绕过
 `scripts/run_test.py` 直接走 `mw test` 时调用方没冷启动，planner 会自己发出
 `open_app` 步（见 §3.5）。
@@ -77,7 +77,7 @@ uv run mobile-world server &    # 启动 MW server
 
 需要 adb + 真机 USB 调试 + `com.android.adbkeyboard/.AdbIME`。
 
-## Adapter 关键设计点（`agents/appcards_agent.py` + `agents/action_planner.py`）
+## Adapter 关键设计点（`agents/relay_agent.py` + `agents/action_planner.py`）
 
 ### 已修的坑
 
@@ -91,9 +91,9 @@ uv run mobile-world server &    # 启动 MW server
    - 沉默失败禁忌：早期所有失败路径都是 `logger.debug`，被默认日志级别吞掉，看着像"功能不工作"实际上是 dump 出错。已全部升级到 `logger.info/warning`。
    - 局限：通义的输入框 placeholder TextView `clickable=false`，scoring 会给低分，但只要 `text` 字段精确匹配仍然命中并返回 bounds 中心；点击事件穿透到真正的 EditText 兄弟节点上。
 
-3.5. **App 冷启动由调用方负责，planner 默认会包含 `open_app`，但可关闭。** `scripts/run_test.py` / `scripts/run_nl.py` / `agents/flow_runner.py` 在调 `mw test` 之前用共享 helper `agents/_adb.py:cold_launch()`（force-stop + monkey LAUNCHER + settle）自己拉起目标 app，然后给子进程设 `APPCARDS_SKIP_OPEN_APP=1`；planner 看到这个环境变量就跳过最开头的 `open_app + 2.5s wait`。这样首张截图直接是 app 主页，无需依赖 MobileWorld 的 `open_app` 实现。如果绕过脚本直接 `mw test`，planner 仍会发出 `open_app` 步骤；`_materialize` 在 open_app 分支里会先调 `agents/_adb.py:force_stop()` 再让 MobileWorld 走 launcher tap。这四个调用点（三个脚本入口 + adapter 内的 open_app 分支）共用 `agents/_adb.py` 同一实现，并都支持 `APPCARDS_ANDROID_SERIAL` 选设备。
+3.5. **App 冷启动由调用方负责，planner 默认会包含 `open_app`，但可关闭。** `scripts/run_test.py` / `scripts/run_nl.py` / `agents/flow_runner.py` 在调 `mw test` 之前用共享 helper `agents/_adb.py:cold_launch()`（force-stop + monkey LAUNCHER + settle）自己拉起目标 app，然后给子进程设 `RELAY_SKIP_OPEN_APP=1`；planner 看到这个环境变量就跳过最开头的 `open_app + 2.5s wait`。这样首张截图直接是 app 主页，无需依赖 MobileWorld 的 `open_app` 实现。如果绕过脚本直接 `mw test`，planner 仍会发出 `open_app` 步骤；`_materialize` 在 open_app 分支里会先调 `agents/_adb.py:force_stop()` 再让 MobileWorld 走 launcher tap。这四个调用点（三个脚本入口 + adapter 内的 open_app 分支）共用 `agents/_adb.py` 同一实现，并都支持 `RELAY_ANDROID_SERIAL` 选设备。
 
-4. **`x_prepare_fresh_conversation` 一定要接进 planner。** SPEC 用 `x_` 前缀表示非标扩展字段，老代码的 `build_plan()` 没读它，每次跑都带着上次的历史上下文。现在 `build_plan(... , fresh_conversation=True)` 默认在 `open_app + cold-launch wait` 之后插这段步骤。可用环境变量 `APPCARDS_FRESH_CONV=0` 关掉。
+4. **`x_prepare_fresh_conversation` 一定要接进 planner。** SPEC 用 `x_` 前缀表示非标扩展字段，老代码的 `build_plan()` 没读它，每次跑都带着上次的历史上下文。现在 `build_plan(... , fresh_conversation=True)` 默认在 `open_app + cold-launch wait` 之后插这段步骤。可用环境变量 `RELAY_FRESH_CONV=0` 关掉。
 
 5. **`wait_for_reply` 用 VLM 轮询而不是死等 `typical_latency_seconds`。** 系统 prompt 见 `_REPLY_WATCH_SYSTEM`，VLM 同时回 `{done, text}`。
    - **`done=True && text==None` 视为不可信**：VLM 自己都没读到文字，几乎肯定还没生成完。强行 distrust 继续 poll，比把弹窗误判成"回复"安全。
@@ -117,7 +117,7 @@ uv run mobile-world server &    # 启动 MW server
    - 白名单命中才 dump XML，按 `_ALLOW_LABELS` 优先级（`始终允许 > 允许 > Always allow > Allow > ...`）找第一个 clickable 节点，`adb shell input tap` 中心点。
    - 每个 task 上限 8 次 dismiss（`MAX_DISMISSALS`），防止卡死的对话框无限循环。
    - 只点 Allow，永远不点 Deny；deny-only 对话框正常跳过。
-   - 关掉：`APPCARDS_DISMISS_PERMISSIONS=0`。
+   - 关掉：`RELAY_DISMISS_PERMISSIONS=0`。
    - 替代了之前"手动在系统设置预先授权"的临时解法。
 
 8. **回复文本优先从 uiautomator 抓，VLM 只判 done。** `_extract_reply_text_from_dump` 走 dump → 按 y 坐标筛"用户气泡之下"的文本节点（用 `self._last_input_text` 在 input_text step 时保存的字符串定位用户气泡）→ 过滤 chrome 标签（`_REPLY_CHROME_LABELS` + streaming markers）→ 启发式丢"快速回复 chip"（有长节点存在时，剔除 <25 chars 的节点；无长节点则全保留以兼容短回复）。
@@ -175,7 +175,7 @@ uv run mobile-world server &    # 启动 MW server
 `wait_for_reply` 的 `capture_full` 阶段不再用 MW 的固定 0.4×width 小幅度
 swipe。`agents/_adb.py:swipe_down(ratio=0.7)` 直接发 `input swipe`，幅度 =
 `ratio × wm size height`（clamp 0.1–0.95）。环境变量
-`APPCARDS_CAPTURE_SCROLL_RATIO` 覆写默认值。
+`RELAY_CAPTURE_SCROLL_RATIO` 覆写默认值。
 
 - 调大（0.8–0.9）→ 砍 VLM poll 次数，但相邻帧重叠少，seam 处可能丢词。
 - 调小（0.4–0.5）→ 重叠多更稳，但 VLM 调用更多。

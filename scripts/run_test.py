@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run AppCardsAgent against a goal via MobileWorld's `mw test`.
+"""Run RelayAgent against a goal via MobileWorld's `mw test`.
 
 Loads LLM_* config from the repo-root `.env`, points --agent-type at
-`agents/appcards_agent.py`, and forwards any extra args straight to
+`agents/relay_agent.py`, and forwards any extra args straight to
 `mw test` so flags like --max-step are pass-through.
 
 Usage:
@@ -24,7 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 from agents._adb import cold_launch as _cold_launch  # noqa: E402
 
 ENV_FILE = REPO_ROOT / ".env"
-AGENT_FILE = REPO_ROOT / "agents" / "appcards_agent.py"
+AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
 MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
@@ -87,15 +87,15 @@ def main() -> int:
     # app's home screen. The planner then skips its own open_app step.
     cold_launch(args.app)
 
-    # The adapter reads APPCARDS_TARGET_APP at construction time.
-    # Priority: explicit overrides (APPCARDS_*) > shell env > .env file.
+    # The adapter reads RELAY_TARGET_APP at construction time.
+    # Priority: explicit overrides (RELAY_*) > shell env > .env file.
     # `env_vars` from .env is the lowest layer so a user can override any
-    # LLM_* / APPCARDS_* setting from their shell without editing .env.
+    # LLM_* / RELAY_* setting from their shell without editing .env.
     child_env = {
         **env_vars,
         **os.environ,
-        "APPCARDS_TARGET_APP": args.app,
-        "APPCARDS_SKIP_OPEN_APP": "1",
+        "RELAY_TARGET_APP": args.app,
+        "RELAY_SKIP_OPEN_APP": "1",
     }
 
     cmd = [
@@ -107,7 +107,7 @@ def main() -> int:
         *extra,
     ]
     print(
-        f"▶ APPCARDS_TARGET_APP={args.app}  goal={args.goal!r}  "
+        f"▶ RELAY_TARGET_APP={args.app}  goal={args.goal!r}  "
         f"model={model}  (base_url + key from .env / flags, key redacted)",
         file=sys.stderr,
     )

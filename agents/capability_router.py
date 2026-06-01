@@ -14,8 +14,8 @@ from typing import Any
 
 from loguru import logger
 
-_FORCE_CAP_ENV = "APPCARDS_FORCE_CAPABILITY"
-_FORCE_INVOCATION_ENV = "APPCARDS_INVOCATION_TEXT"
+_FORCE_CAP_ENV = "RELAY_FORCE_CAPABILITY"
+_FORCE_INVOCATION_ENV = "RELAY_INVOCATION_TEXT"
 
 _SYSTEM = """You route a user instruction to one in-app AI agent capability.
 
@@ -70,9 +70,9 @@ def route_capability(
     Returns (capability_id, invocation_text). Raises if the LLM reply is
     unparseable or names an unknown capability.
 
-    If APPCARDS_FORCE_CAPABILITY is set (used by the flow runner to skip
+    If RELAY_FORCE_CAPABILITY is set (used by the flow runner to skip
     routing in single-capability sub-runs), it is validated against the
-    card and returned as-is, paired with APPCARDS_INVOCATION_TEXT (falling
+    card and returned as-is, paired with RELAY_INVOCATION_TEXT (falling
     back to the original instruction).
     """
     forced = os.getenv(_FORCE_CAP_ENV)
