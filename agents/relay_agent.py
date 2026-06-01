@@ -43,7 +43,14 @@ if str(_REPO_ROOT) not in sys.path:
 
 from loguru import logger
 
-from mobile_world.agents.base import MCPAgent
+# Aliased to a leading-underscore name on purpose: MobileWorld's agent
+# registry (mobile_world/agents/registry.py) collects every BaseAgent subclass
+# in this module via inspect.getmembers (alphabetically sorted) and instantiates
+# agent_classes[0]. If the base is exposed as "MCPAgent" it sorts before
+# "RelayAgent" and the registry tries to instantiate the abstract base → "Can't
+# instantiate abstract class MCPAgent". "_MCPAgentBase" sorts AFTER "RelayAgent"
+# (ASCII '_' > 'R'), so RelayAgent is picked.
+from mobile_world.agents.base import MCPAgent as _MCPAgentBase
 from mobile_world.agents.utils.helpers import pil_to_base64
 from mobile_world.runtime.utils.models import JSONAction
 
@@ -59,6 +66,10 @@ _FRESH_CONV_ENV = "RELAY_FRESH_CONV"  # set to "0" to disable
 _SKIP_OPEN_APP_ENV = "RELAY_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
 _REPLY_OUT_ENV = "RELAY_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
 _DISMISS_PERMS_ENV = "RELAY_DISMISS_PERMISSIONS"  # set to "0" to disable system permission popup auto-dismiss
+# A/B benchmark gates (default on; "0" reverts to the pre-optimization path so
+# baseline vs optimized token/time can be measured — see CLAUDE.md §6/§8).
+_PRECHECK_ENV = "RELAY_PRECHECK"  # set to "0" to disable the wait_for_reply two-stage precheck (baseline = VLM-poll every tick)
+_SCRAPE_ENV = "RELAY_SCRAPE"  # set to "0" to disable uiautomator reply-text scrape (baseline = VLM-only extraction)
 
 # MobileWorld writes the active run under traj_logs/user_task/ (see CLAUDE.md).
 # We append every LLM call into traj.json at top-level under "0".llm_calls so
@@ -732,7 +743,7 @@ def _llm_purpose_from_messages(messages: list[dict]) -> str:
     return "other"
 
 
-class RelayAgent(MCPAgent):
+class RelayAgent(_MCPAgentBase):
     """Card-driven agent. The model only picks capabilities and grounds text
     selectors; tap coordinates come from the card's `x_bounds`."""
 
@@ -786,6 +797,8 @@ class RelayAgent(MCPAgent):
         self.fresh_conversation: bool = os.getenv(_FRESH_CONV_ENV, "1") != "0"
         self.skip_open_app: bool = os.getenv(_SKIP_OPEN_APP_ENV, "0") == "1"
         self.dismiss_permissions: bool = os.getenv(_DISMISS_PERMS_ENV, "1") != "0"
+        self.precheck_enabled: bool = os.getenv(_PRECHECK_ENV, "1") != "0"
+        self.scrape_enabled: bool = os.getenv(_SCRAPE_ENV, "1") != "0"
         self._permission_dismissed_count: int = 0
 
     def openai_chat_completions_create(  # type: ignore[override]
@@ -1086,13 +1099,16 @@ class RelayAgent(MCPAgent):
             # finds nothing (e.g. WebView-rendered replies whose text isn't
             # in the a11y tree).
             if self._capture_phase == "scrolling":
-                text = _extract_reply_text_from_dump(
-                    self._last_input_text, screen_h
-                )
-                source = "scrape"
+                text = ""
+                source = "vlm"
+                if self.scrape_enabled:
+                    text = _extract_reply_text_from_dump(
+                        self._last_input_text, screen_h
+                    )
+                    source = "scrape"
                 if not text:
                     _, text = self._poll_agent_reply(screenshot)
-                    source = "vlm_fallback"
+                    source = "vlm_fallback" if self.scrape_enabled else "vlm"
                 # Substring dedup with normalization: a new VLM-extracted
                 # frame often repeats text from a previous frame but with
                 # tiny formatting drift (whitespace, punctuation, markdown
@@ -1199,7 +1215,7 @@ class RelayAgent(MCPAgent):
             force_vlm = (
                 self._reply_precheck_skips_since_vlm >= MAX_SKIPS_BEFORE_FORCE
             )
-            if not force_vlm and elapsed < max_seconds:
+            if self.precheck_enabled and not force_vlm and elapsed < max_seconds:
                 # Stage 1: free screenshot hash.
                 shot_hash = _hash_screenshot_region(screenshot)
                 shot_changed = shot_hash != self._reply_last_shot_hash
@@ -1279,15 +1295,16 @@ class RelayAgent(MCPAgent):
                 # text via direct uiautomator scrape — the VLM is asked to cap
                 # at 500 chars, and on long replies it summarizes the tail. The
                 # scrape returns the full visible text verbatim, no token cost.
-                scraped = _extract_reply_text_from_dump(
-                    self._last_input_text, screen_h
-                )
-                if scraped and len(scraped) > len(text):
-                    logger.info(
-                        f"reply text upgrade: VLM={len(text)} chars → "
-                        f"uiautomator scrape={len(scraped)} chars"
+                if self.scrape_enabled:
+                    scraped = _extract_reply_text_from_dump(
+                        self._last_input_text, screen_h
                     )
-                    text = scraped
+                    if scraped and len(scraped) > len(text):
+                        logger.info(
+                            f"reply text upgrade: VLM={len(text)} chars → "
+                            f"uiautomator scrape={len(scraped)} chars"
+                        )
+                        text = scraped
                 self._last_agent_reply = text
                 logger.info(
                     f"In-app agent reply DONE after {self._reply_polls} poll(s) "
@@ -1325,16 +1342,17 @@ class RelayAgent(MCPAgent):
                 # Same upgrade as the happy path — VLM truncates at ~500 chars
                 # and on long-running replies that hit the timeout the scrape
                 # almost always has more (and verbatim) content.
-                scraped = _extract_reply_text_from_dump(
-                    self._last_input_text, screen_h
-                )
-                if scraped and (not text or len(scraped) > len(text)):
-                    logger.info(
-                        f"reply text upgrade on timeout: "
-                        f"VLM={len(text) if text else 0} chars → "
-                        f"uiautomator scrape={len(scraped)} chars"
+                if self.scrape_enabled:
+                    scraped = _extract_reply_text_from_dump(
+                        self._last_input_text, screen_h
                     )
-                    text = scraped
+                    if scraped and (not text or len(scraped) > len(text)):
+                        logger.info(
+                            f"reply text upgrade on timeout: "
+                            f"VLM={len(text) if text else 0} chars → "
+                            f"uiautomator scrape={len(scraped)} chars"
+                        )
+                        text = scraped
                 logger.warning(
                     f"In-app agent reply did not finish within {max_seconds}s "
                     f"({self._reply_polls} poll(s)); advancing anyway "
