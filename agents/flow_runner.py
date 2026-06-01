@@ -34,6 +34,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -274,7 +275,24 @@ class FlowRunner:
             )
             # Feed empty stdin so the final ask_user handoff (when present)
             # closes cleanly with EOF rather than blocking the flow.
+            # Optional per-leg wall-clock (RELAY_TIMING=1): time just this
+            # sub-run and drop wall_clock.json next to its traj so
+            # aggregate_metrics.py can read it.
+            timing = os.getenv("RELAY_TIMING", "0") == "1"
+            t0 = time.monotonic()
             rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
+            if timing:
+                wall_s = round(time.monotonic() - t0, 1)
+                traj_dir = step_log_root / "user_task"
+                try:
+                    if traj_dir.is_dir():
+                        (traj_dir / "wall_clock.json").write_text(
+                            json.dumps({"wall_s": wall_s, "phase": "mw_test"}),
+                            encoding="utf-8",
+                        )
+                except OSError as e:
+                    logger.warning(f"timing write failed: {e}")
+                logger.info(f"leg wall_s={wall_s}")
             if rc != 0:
                 logger.warning(f"mw test exited rc={rc}; continuing if reply was captured")
 

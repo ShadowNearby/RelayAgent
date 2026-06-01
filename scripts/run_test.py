@@ -12,9 +12,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -111,7 +113,27 @@ def main() -> int:
         f"model={model}  (base_url + key from .env / flags, key redacted)",
         file=sys.stderr,
     )
-    return subprocess.call(cmd, cwd=REPO_ROOT, env=child_env)
+    # Optional wall-clock timing. Gated by RELAY_TIMING=1 so normal runs pay
+    # nothing; when on, we time just the `mw test` call (not cold-launch, to
+    # match the manual-run measurements) and drop a wall_clock.json into the
+    # live traj dir so it travels with the traj when the caller mv's it.
+    # aggregate_metrics.py reads this file for the wall_s column.
+    timing = os.getenv("RELAY_TIMING", "0") == "1"
+    t0 = time.monotonic()
+    rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env)
+    if timing:
+        wall_s = round(time.monotonic() - t0, 1)
+        traj_dir = REPO_ROOT / "traj_logs" / "user_task"
+        try:
+            if traj_dir.is_dir():
+                (traj_dir / "wall_clock.json").write_text(
+                    json.dumps({"wall_s": wall_s, "phase": "mw_test"}),
+                    encoding="utf-8",
+                )
+        except OSError as e:
+            print(f"▶ timing write failed: {e}", file=sys.stderr)
+        print(f"▶ wall_s={wall_s}", file=sys.stderr)
+    return rc
 
 
 if __name__ == "__main__":
