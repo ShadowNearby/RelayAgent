@@ -5,7 +5,7 @@ app open MUST be preceded by force-stop so MobileWorld's first observation
 is the app's clean home surface — not a stale modal / chat thread / session
 sheet from the previous run.
 
-`APPCARDS_ANDROID_SERIAL` selects a specific device in multi-device setups
+`RELAY_ANDROID_SERIAL` selects a specific device in multi-device setups
 and is honored by every helper here.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import time
 
 from loguru import logger
 
-_SERIAL_ENV = "APPCARDS_ANDROID_SERIAL"
+_SERIAL_ENV = "RELAY_ANDROID_SERIAL"
 
 
 def adb_base() -> list[str]:
@@ -77,14 +77,14 @@ def swipe_down(
 
     `ratio` is the vertical travel distance as a fraction of screen height
     (clamped to [0.1, 0.8]). Overridable per-call by env
-    `APPCARDS_CAPTURE_SCROLL_RATIO`.
+    `RELAY_CAPTURE_SCROLL_RATIO`.
     """
-    env = os.getenv("APPCARDS_CAPTURE_SCROLL_RATIO")
+    env = os.getenv("RELAY_CAPTURE_SCROLL_RATIO")
     if env:
         try:
             ratio = float(env)
         except ValueError:
-            logger.warning(f"Invalid APPCARDS_CAPTURE_SCROLL_RATIO={env!r}, using {ratio}")
+            logger.warning(f"Invalid RELAY_CAPTURE_SCROLL_RATIO={env!r}, using {ratio}")
     ratio = max(0.1, min(0.5, ratio))
     w, h = _get_screen_size()
     x = w // 2

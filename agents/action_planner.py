@@ -2,7 +2,7 @@
 
 Steps are deliberately semantic, not raw JSONActions, because text-based
 selectors need runtime visual grounding from the current screenshot. The
-adapter (`appcards_agent.py`) walks this list and turns each step into a
+adapter (`relay_agent.py`) walks this list and turns each step into a
 MobileWorld JSONAction at predict() time.
 """
 

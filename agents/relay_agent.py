@@ -1,10 +1,10 @@
-"""MobileWorld adapter for AppAgentCards.
+"""MobileWorld adapter for RelayAgent.
 
 Run with:
 
-    APPCARDS_TARGET_APP=com.aliyun.tongyi \\
+    RELAY_TARGET_APP=com.aliyun.tongyi \\
     mw test "在通义里点一杯蜜雪冰城" \\
-        --agent-type /abs/path/AppAgentCards/agents/appcards_agent.py \\
+        --agent-type /abs/path/RelayAgent/agents/relay_agent.py \\
         --model_name anthropic/claude-sonnet-4-5
 
 Design:
@@ -52,13 +52,13 @@ from agents.action_planner import Step, build_plan
 from agents.capability_router import route_capability
 from agents.card_loader import bounds_center, load_card_by_app_id
 
-_TARGET_APP_ENV = "APPCARDS_TARGET_APP"
-_MANIFESTS_ENV = "APPCARDS_MANIFESTS"
-_DENSITY_ENV = "APPCARDS_TARGET_DENSITY"
-_FRESH_CONV_ENV = "APPCARDS_FRESH_CONV"  # set to "0" to disable
-_SKIP_OPEN_APP_ENV = "APPCARDS_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
-_REPLY_OUT_ENV = "APPCARDS_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
-_DISMISS_PERMS_ENV = "APPCARDS_DISMISS_PERMISSIONS"  # set to "0" to disable system permission popup auto-dismiss
+_TARGET_APP_ENV = "RELAY_TARGET_APP"
+_MANIFESTS_ENV = "RELAY_MANIFESTS"
+_DENSITY_ENV = "RELAY_TARGET_DENSITY"
+_FRESH_CONV_ENV = "RELAY_FRESH_CONV"  # set to "0" to disable
+_SKIP_OPEN_APP_ENV = "RELAY_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
+_REPLY_OUT_ENV = "RELAY_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
+_DISMISS_PERMS_ENV = "RELAY_DISMISS_PERMISSIONS"  # set to "0" to disable system permission popup auto-dismiss
 
 # MobileWorld writes the active run under traj_logs/user_task/ (see CLAUDE.md).
 # We append every LLM call into traj.json at top-level under "0".llm_calls so
@@ -118,7 +118,7 @@ def _dump_window_xml_root(
     base = adb_base()
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
         local_xml = fh.name
-    remote_xml = "/sdcard/appcards_window_dump.xml"
+    remote_xml = "/sdcard/relay_window_dump.xml"
     try:
         dump = subprocess.run(
             base + ["shell", "uiautomator", "dump", remote_xml],
@@ -299,7 +299,7 @@ def _hash_screenshot_region(image) -> str:
 #   * uses a cheap `dumpsys window` probe first (~200ms); only pays the full
 #     uiautomator dump (~2.5s) when the probe says a permission UI is up.
 #   * capped to MAX_DISMISSALS per task; a stuck dialog won't infinite-loop.
-#   * env opt-out via APPCARDS_DISMISS_PERMISSIONS=0.
+#   * env opt-out via RELAY_DISMISS_PERMISSIONS=0.
 _PERMISSION_PACKAGES = (
     "com.android.permissioncontroller",
     "com.google.android.permissioncontroller",
@@ -506,7 +506,7 @@ def _ground_text_via_uiautomator(
 
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
         local_xml = fh.name
-    remote_xml = "/sdcard/appcards_window_dump.xml"
+    remote_xml = "/sdcard/relay_window_dump.xml"
     try:
         dump = subprocess.run(
             base + ["shell", "uiautomator", "dump", remote_xml],
@@ -732,7 +732,7 @@ def _llm_purpose_from_messages(messages: list[dict]) -> str:
     return "other"
 
 
-class AppCardsAgent(MCPAgent):
+class RelayAgent(MCPAgent):
     """Card-driven agent. The model only picks capabilities and grounds text
     selectors; tap coordinates come from the card's `x_bounds`."""
 
@@ -864,7 +864,7 @@ class AppCardsAgent(MCPAgent):
             logger.warning(f"Failed to append LLM call to traj.json: {e}")
 
     def initialize_hook(self, instruction: str) -> None:
-        logger.info(f"AppCardsAgent init: instruction={instruction!r}")
+        logger.info(f"RelayAgent init: instruction={instruction!r}")
         if not self.target_app:
             raise RuntimeError(
                 f"{_TARGET_APP_ENV} must be set to the target app's package id "
@@ -1531,7 +1531,7 @@ class AppCardsAgent(MCPAgent):
 
     def _maybe_persist_reply(self) -> None:
         """Dump the captured in-app agent reply as JSON to:
-          1. APPCARDS_REPLY_OUT (if set) — for parent processes like FlowRunner;
+          1. RELAY_REPLY_OUT (if set) — for parent processes like FlowRunner;
           2. <MW traj dir>/agent_reply.json — always, so the reply lives next
              to traj.json / screenshots and survives MW's per-run backup of
              traj_logs/user_task/. Best-effort; never raises."""
