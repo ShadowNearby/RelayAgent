@@ -1,5 +1,5 @@
 [project]
-name = "appagentcards"
+name = "relayagent"
 version = "0.1.0"
 description = "Community registry of machine-readable cards describing AI agents embedded inside mobile apps"
 readme = "README.md"
@@ -8,7 +8,7 @@ authors = [
     { name = "Jingsheng Yan", email = "yan.jingsheng@outlook.com" },
 ]
 # 3.12 is required because the MobileWorld runtime that drives
-# agents/appcards_agent.py pins ">=3.12,<3.13". The bare card loader
+# agents/relay_agent.py pins ">=3.12,<3.13". The bare card loader
 # (manifests + agents/card_loader.py) would work on older Pythons, but the
 # real-device runner won't, so we keep one floor.
 requires-python = ">=3.12,<3.13"
@@ -42,9 +42,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jingsheng-yan/AppAgentCards"
-Repository = "https://github.com/jingsheng-yan/AppAgentCards"
-Issues = "https://github.com/jingsheng-yan/AppAgentCards/issues"
+Homepage = "https://github.com/ShadowNearby/RelayAgent"
+Repository = "https://github.com/ShadowNearby/RelayAgent"
+Issues = "https://github.com/ShadowNearby/RelayAgent/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -53,7 +53,7 @@ build-backend = "hatchling.build"
 # We don't ship a Python package directory (the runtime modules live under
 # `agents/` and `scripts/`). Tell hatchling which directories to package so
 # `uv pip install .` / editable installs don't fail trying to auto-discover
-# a `src/` or `appagentcards/` layout that doesn't exist.
+# a `src/` or `relayagent/` layout that doesn't exist.
 [tool.hatch.build.targets.wheel]
 packages = ["agents"]
 
