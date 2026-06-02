@@ -80,4 +80,4 @@ include = [
 # (rev 8179d7c) making the server's WAIT-action sleep tunable via
 # MW_WAIT_SECONDS. SSH URL so uv clones with the local key. To track upstream
 # again, point back at Tongyi-MAI/MobileWorld and rebase the patch.
-mobile-world = { git = "ssh://git@github.com/ShadowNearby/MobileWorld.git", rev = "8179d7c" }
+mobile-world = { git = "ssh://git@github.com/ShadowNearby/MobileWorld.git", rev = "ca71772" }
