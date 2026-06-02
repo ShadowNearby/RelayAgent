@@ -30,6 +30,7 @@ dependencies = [
     # below — there is no PyPI release yet. Override the path with the
     # MOBILEWORLD_PATH env var or by editing the source entry.
     "mobile-world",
+    "socksio>=1.0.0",
 ]
 
 classifiers = [
@@ -75,4 +76,8 @@ include = [
 
 [tool.uv.sources]
 # MobileWorld is not on PyPI; uv clones it directly. Bump `rev` to upgrade.
-mobile-world = { git = "https://github.com/Tongyi-MAI/MobileWorld", rev = "9baaa2b" }
+# Pinned to the ShadowNearby fork: it is upstream 9baaa2b + a single patch
+# (rev 8179d7c) making the server's WAIT-action sleep tunable via
+# MW_WAIT_SECONDS. SSH URL so uv clones with the local key. To track upstream
+# again, point back at Tongyi-MAI/MobileWorld and rebase the patch.
+mobile-world = { git = "ssh://git@github.com/ShadowNearby/MobileWorld.git", rev = "8179d7c" }
