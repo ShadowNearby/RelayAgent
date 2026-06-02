@@ -66,16 +66,55 @@ uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
 `pyproject.toml` 的 `[tool.uv.sources]` 声明为 git 依赖（pin 到某个 commit）。
 `uv sync` 会自动 clone+安装到 venv，不需要手动 `git clone`。
 
+**当前 pin 的是 fork `ShadowNearby/MobileWorld@8179d7c`**（`relay-patch` 分支，
+SSH URL，靠本机 key clone）。它 = 上游 `9baaa2b` + **一个 patch**：把 server 端
+`WAIT` 动作里硬编码的 `time.sleep(1.0)` 改成读环境变量 `MW_WAIT_SECONDS`
+（`core/server.py` 的 `/step` handler，默认 1.0 → 对上游行为无影响）。改这个是因为
+`wait_for_reply` 用 no-op `WAIT` 轮询、自带稳定性检测，server 那 1s 纯属每个 poll
+拍上叠的死等。要回到上游：把 `mobile-world` 那条指回 `Tongyi-MAI/MobileWorld` 并
+把 patch rebase 过去即可。
+
 ```bash
-uv sync --no-install-project    # 装本项目依赖（含 mobile-world）
-uv run mobile-world server &    # 启动 MW server
+uv sync --no-install-project    # 装本项目依赖（含 mobile-world fork）
+uv run mobile-world server &    # 启动 MW server（或用 tmux，见下）
 ```
 
-升级 MobileWorld：编辑 `pyproject.toml` 里 `mobile-world` 那条的 `rev` 然后
+升级 MobileWorld：编辑 `pyproject.toml` 里 `mobile-world` 那条的 `git`/`rev` 然后
 重新 `uv sync` 即可。pydantic 的 `<2.11` 上限同样写在 `pyproject.toml`，不会被
 `uv run` 自动 bump 回去（CLAUDE.md 顶部那段历史背景仍适用）。
 
 需要 adb + 真机 USB 调试 + `com.android.adbkeyboard/.AdbIME`。
+
+### 每步延迟的三个旋钮（perf）
+
+每个 runner step / `wait_for_reply` poll 拍的墙钟开销 ≈ 三个固定 sleep 叠加 + 一次
+~0.85s 截图（`exec-out screencap -p`，PNG/raw 一样快，不是瓶颈）。截图压不动，三个
+sleep 都调小了，order_food 实测冷启动→handoff **~70s → ~51s**、poll 拍 **4.0s → 1.8s**：
+
+| 旋钮 | 默认 | 位置 | 作用范围 |
+| --- | --- | --- | --- |
+| `--step_wait_time` | **0.2**（`run_test.py` 自动注入；原 MW 默认 1.0） | MW client `runtime/client.py`，每次 observe 前 sleep | **每一步**（tap/input/poll 全部） |
+| `MW_WAIT_SECONDS` | **0.2**（`run_test.py` 写进 child_env；fork 默认 1.0） | MW server fork `core/server.py` 的 `WAIT` 分支 | 只有 `wait`/poll 拍 |
+| `RELAY_POLL_SKIP_SLEEP` | **0.3**（原 0.8） | `agents/relay_agent.py` 常量 `_POLL_SKIP_SLEEP`，precheck skip 防忙等 | 只有 `wait_for_reply` 的 skip 拍 |
+
+`MW_WAIT_SECONDS` 经 child_env → `mw test` → 它 Popen 的 uvicorn server 继承生效；
+自起 server（`run_test.py` 默认，不带 `--aw_host`）和外部 server 两条路都验证过 tick=1.8s。
+
+**坑（排查 server 端改动"看似不生效"必看）**：MW server 是 `subprocess.Popen` 起的
+uvicorn，stdout/stderr 被 PIPE 吞掉，看不到 `[STEP] Executing wait for ...` 日志。
+更阴的是：如果端口 6800 上**已经有一个之前手动 `mw server` 起的常驻 server**（可能挂
+了几十小时），新 run 会复用它——于是你刚 `uv sync` 装的新 server 代码 + 新环境变量
+**全都不生效**，所有请求打到老 server 上。排查时先
+`ss -ltnp | grep 6800` 看是谁在占、`ps -o etime` 看它跑了多久，必要时 `kill -9` 再重跑。
+想干净验证 server 端行为：自己用 **tmux** 起一个带已知 env 的 server 并把日志重定向到
+文件，再用 `--aw_host http://localhost:6800` 连它（注意带 `http://` scheme，否则
+`No connection adapters were found`）：
+
+```bash
+tmux new-session -d -s mwserver \
+  "MW_WAIT_SECONDS=0.2 uv run mobile-world server --port 6800 > /tmp/mwserver.log 2>&1"
+# 然后 run_test.py ... --aw_host http://localhost:6800
+```
 
 ## Adapter 关键设计点（`agents/relay_agent.py` + `agents/action_planner.py`）
 

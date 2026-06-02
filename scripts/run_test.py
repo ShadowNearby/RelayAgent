@@ -98,6 +98,12 @@ def main() -> int:
         **os.environ,
         "RELAY_TARGET_APP": args.app,
         "RELAY_SKIP_OPEN_APP": "1",
+        # MobileWorld's server sleeps on every no-op WAIT action (default 1.0s).
+        # Our wait_for_reply polls with WAIT and runs its own stability
+        # detection, so the full second just inflates each poll tick. Trim it.
+        # Honoured only by the patched MW fork (MW_WAIT_SECONDS); harmless on
+        # upstream. Caller can override by exporting MW_WAIT_SECONDS.
+        "MW_WAIT_SECONDS": os.getenv("MW_WAIT_SECONDS", "0.2"),
     }
 
     cmd = [
@@ -106,8 +112,16 @@ def main() -> int:
         "--model_name", model,
         "--llm_base_url", base_url,
         "--api_key", api_key,
-        *extra,
     ]
+    # MobileWorld sleeps `step_wait_time` (default 1.0s) before *every* step's
+    # screenshot to let UI animations settle. Our grounding goes through
+    # uiautomator (its own retries) and wait_for_reply has its own stability
+    # detection, so the full 1.0s settle is overkill — trim to 0.2s, shaving
+    # ~0.8s off every step across the whole run. Overridable: only injected
+    # when the caller didn't pass their own --step_wait_time.
+    if not any(a == "--step_wait_time" or a.startswith("--step_wait_time=") for a in extra):
+        cmd += ["--step_wait_time", os.getenv("RELAY_STEP_WAIT", "0.2")]
+    cmd += [*extra]
     print(
         f"▶ RELAY_TARGET_APP={args.app}  goal={args.goal!r}  "
         f"model={model}  (base_url + key from .env / flags, key redacted)",

@@ -71,6 +71,13 @@ _DISMISS_PERMS_ENV = "RELAY_DISMISS_PERMISSIONS"  # set to "0" to disable system
 _PRECHECK_ENV = "RELAY_PRECHECK"  # set to "0" to disable the wait_for_reply two-stage precheck (baseline = VLM-poll every tick)
 _SCRAPE_ENV = "RELAY_SCRAPE"  # set to "0" to disable uiautomator reply-text scrape (baseline = VLM-only extraction)
 
+# Inter-tick sleep on a wait_for_reply precheck skip. Keeps the poll loop from
+# busy-spinning while the reply streams, but stacks on top of MobileWorld's own
+# per-step settle (client step_wait_time + server WAIT sleep), so a large value
+# just inflates every poll tick. 0.3s is enough to avoid a tight spin while
+# letting the next observe happen promptly. Tunable via RELAY_POLL_SKIP_SLEEP.
+_POLL_SKIP_SLEEP = float(os.getenv("RELAY_POLL_SKIP_SLEEP", "0.3"))
+
 # MobileWorld writes the active run under traj_logs/user_task/ (see CLAUDE.md).
 # We append every LLM call into traj.json at top-level under "0".llm_calls so
 # the calls live alongside the per-step traj entries. MW's log_traj rewrites
@@ -1225,7 +1232,7 @@ class RelayAgent(_MCPAgentBase):
                     self._reply_stable_streak = 0
                     self._reply_precheck_skips += 1
                     self._reply_precheck_skips_since_vlm += 1
-                    time.sleep(0.8)
+                    time.sleep(_POLL_SKIP_SLEEP)
                     return (
                         JSONAction(action_type="wait"),
                         False,
@@ -1265,7 +1272,7 @@ class RelayAgent(_MCPAgentBase):
                         if prev is not None and text_hash != prev:
                             self._reply_precheck_skips += 1
                             self._reply_precheck_skips_since_vlm += 1
-                            time.sleep(0.8)
+                            time.sleep(_POLL_SKIP_SLEEP)
                             return (
                                 JSONAction(action_type="wait"),
                                 False,
