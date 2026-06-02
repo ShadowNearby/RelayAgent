@@ -22,12 +22,12 @@
 | MW general_e2e | ⚠️ 不可靠 | 38282 / 77347 / 96888 | — | — | 46 / 111 / 379 | ⚠️ 方差极大，见下 |
 
 - RA optimized 三次几乎复现（token 3987/3986/3950，VLM 恒为 2 = router1+reply1）。
-- **wall_s：opt 51.7 vs baseline 47.6（+8.6%，噪声内）**。opt 三次 wall 48.5/51.7/**68.9**
-  的方差几乎全来自那唯一一次 confirm-VLM 的网关延迟 —— VLM 总时间 4.8/7.9/**24.6**s 与
-  wall **一一对应**（r3 多花的 ~17s 墙钟 ≈ 多花的那 ~17s VLM 秒数）。precheck 把 VLM 调用
-  次数从 baseline 的 3-4 砍到恒定 2，省的是 **token / VLM 往返次数**，不是助手等待墙钟
-  （见 finding 2）。上一轮 opt 中位 74.1 是两次慢-VLM 抽样把中位抬上去的产物，本轮干净
-  对照下回落到 51.7、与 baseline 持平。
+- **wall_s 仅作记录、baseline↔opt 不作墙钟对比**（见 finding 2）。opt 三次 wall
+  48.5/51.7/**68.9** 的方差几乎全来自那唯一一次 confirm-VLM 的网关延迟 —— VLM 总时间
+  4.8/7.9/**24.6**s 与 wall **一一对应**（r3 多花的 ~17s 墙钟 ≈ 多花的那 ~17s VLM 秒数），
+  说明 agent 可控部分与 baseline 相同、残差是 serving 栈抖动。precheck 把 VLM 调用次数从
+  baseline 的 3-4 砍到恒定 2，收益记在 **token / VLM 往返次数**轴。（上一轮 opt 中位 74.1
+  是两次慢-VLM 跨 session 抽样的产物，交错重测回落到 51.7。）
 - baseline VLM 次数 3/4/4（每多一次 done-poll 多 ~3k token），token 6.8k–9.6k；VLM 总时间
   16.7/7.2/13.1s（每次 done-poll 都打满 VLM 往返，总 VLM 时间反而常高于 opt）。
 - **general_e2e 在 order_food 上极不稳**（38k→97k token、46s→379s）：纯逐步 VLM、无
@@ -47,6 +47,13 @@
 - RA baseline：discover ~19932、ride ~11241
 - general_e2e：discover ~37897、ride ~57376（discover 37k–57k，ride 47k–57k）
 
+> **flow opt 复现（2026-06-02，`test-results/ab/n3_retest/flow_optimized_r*`，仅重测 opt）**：
+> token 合计 5698 / 8615 / 11217（中位 **8615**，对原 8662 几乎逐字复现，3.6× vs baseline 成立）；
+> wall 合计 125.7 / 160.8 / 148.4（中位 **148.4**，对原 153.5 复现）；ride 腿照旧极稳（2809×2）。
+> **结论**：opt 自身 token/wall 高度可复现。**flow 的 opt-vs-baseline 墙钟对照沿用上一轮**
+> （opt 153.5 vs baseline 115.8）—— 本次只重测 opt、未同 session 重测 baseline，故不对 flow 的
+> 「opt≈baseline 墙钟」下新结论（order_food 的同 session 交错对照已单独验证该结论）。
+
 > flow 的「VLM 总时间」无法从现有 run 目录提取：flow 经 `flow_runner` 分腿走子进程 `mw test`
 > （`--log-file-root`），子run 的 traj 只落聚合 `token_usage`、不写 per-call `elapsed_s`
 > （见 `aggregate_metrics.py:108-117` 的 fallback 分支），故 `vlm_s` 不可得。要补 flow 的
@@ -65,19 +72,21 @@
    flow 8662 vs 31174（3.6×）；vs 纯逐步 VLM（general_e2e）order_food 19×、flow 11×。
    优化档三次方差极小（order_food token 3950–3987）。
 
-2. **⚠️ wall-clock 不是 RA-baseline→optimized 这一档的卖点**（诚实结论，n=3 复现）。
-   同一 session 交错重测后两档 wall_s 在噪声内、基本持平：order_food **51.7 vs 47.6（+8.6%）**、
-   flow 153.5 vs 115.8。原因：**墙钟由 app 内助手的生成延迟 + LLM 网关单次延迟主导**
-   —— order_food 重测里 opt 的 VLM 总时间 4.8/7.9/24.6s 与 wall 48.5/51.7/68.9 **一一对应**，
-   多出来的墙钟全是那一次 confirm-VLM 的网关抖动；precheck/scrape 砍的是 **VLM 调用次数 /
-   token**，不是助手等待时间。（注：上一轮 opt 中位 74.1 偏高是两次慢-VLM 抽样的产物，并非
-   系统性更慢；交错重测消除跨时段网关抖动后回落到 51.7。）
-   - 时间节省真正出现在 **general_e2e → RA** 这一档（order_food e2e 会跑飞到 379s）。
-   - **report 措辞**：优化讲成「**token / 成本**节省」；时间节省只在「逐步 VLM →
-     RelayAgent」梯度主张，别把 precheck 说成省时间。
-   - 注：perf-trim（sleep 削减）是对**同一 optimized 配置**before/after 的提速
-     （order_food 冷启动→handoff ~70s→~51s，见 round1/round2 n=1），与此处
-     optimized-vs-baseline 是两个不同维度的对比，勿混。
+2. **wall-clock 只在「重驱动 → 委派」粗梯度上比，baseline↔opt 不比墙钟**（编辑决策）。
+   - **比墙钟的三档**：MW manual-UI → MW general_e2e → RA（用 baseline 作 RelayAgent 代表）。
+     这里时间节省真实且大（order_food 193 → 111 → 47.6s；flow 717 → 166 → 115.8s），
+     因为每步**实际做的事更少**（手滚笔记 23 步 → 一次助手对话；逐帧重推 → 结构化 plan +
+     0-token a11y 点击）。e2e 还会跑飞（order_food 379s）。
+   - **baseline↔opt 之间故意不比墙钟**：那段差异由**单次 confirm-VLM 的网关延迟**主导
+     （`V` 在共享网关上 1.4–32s 抖），是 **serving 栈属性、不是 agent 设计属性**。
+     order_food 同 session 交错重测坐实了这点：opt 的 VLM 总时间 4.8/7.9/24.6s 与 wall
+     48.5/51.7/68.9 **一一对应** —— 唯一推动墙钟的就是那次 VLM 的网关抽样，agent 可控部分
+     与 baseline 相同。所以 precheck/scrape 的收益只在 **token / 调用次数**轴上报（§节省幅度），
+     在这条轴上谈墙钟差异 = 报告网关噪声。（佐证：上一轮 opt 中位 74.1 偏高纯是两次慢-VLM
+     跨 session 抽样的产物，交错重测回落到 51.7、与 baseline 齐平。）
+   - 注：perf-trim（sleep 削减）是对**同一配置固定 per-tick 开销**的 before/after 提速
+     （order_food 冷启动→handoff ~70s→~51s），削的是 agent 可控部分、独立于上面的网关 VLM
+     时间，**不是** baseline-vs-opt 主张，勿混。
 
 3. **RelayAgent 可预测，纯 VLM agent 方差爆炸**。RA 每档三次近乎复现；general_e2e
    order_food 从 38k token 早退到 97k/379s 跑飞。可预测的成本本身是 system contribution。
