@@ -66,13 +66,23 @@ uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
 `pyproject.toml` 的 `[tool.uv.sources]` 声明为 git 依赖（pin 到某个 commit）。
 `uv sync` 会自动 clone+安装到 venv，不需要手动 `git clone`。
 
-**当前 pin 的是 fork `ShadowNearby/MobileWorld@8179d7c`**（`relay-patch` 分支，
-SSH URL，靠本机 key clone）。它 = 上游 `9baaa2b` + **一个 patch**：把 server 端
-`WAIT` 动作里硬编码的 `time.sleep(1.0)` 改成读环境变量 `MW_WAIT_SECONDS`
-（`core/server.py` 的 `/step` handler，默认 1.0 → 对上游行为无影响）。改这个是因为
-`wait_for_reply` 用 no-op `WAIT` 轮询、自带稳定性检测，server 那 1s 纯属每个 poll
-拍上叠的死等。要回到上游：把 `mobile-world` 那条指回 `Tongyi-MAI/MobileWorld` 并
-把 patch rebase 过去即可。
+**当前 pin 的是 fork `ShadowNearby/MobileWorld@ca71772`**（`relay-patch` 分支，
+SSH URL，靠本机 key clone）。它 = 上游 `9baaa2b` + **三个 patch**（默认行为都对上游无影响）：
+
+1. **`8179d7c`** — server 端 `WAIT` 动作的硬编码 `time.sleep(1.0)` 改成读
+   `MW_WAIT_SECONDS`（`core/server.py` 的 `/step`，默认 1.0）。`wait_for_reply` 用
+   no-op `WAIT` 轮询、自带稳定性检测，那 1s 是每个 poll 拍上叠的死等。见下"三旋钮"。
+2. **`e8214d7`** — `execute_adb`（`runtime/utils/helpers.py`）的 `subprocess.run`
+   原本**没有 timeout**，任何 adb 调用卡住就永久阻塞。加 `MW_ADB_TIMEOUT`（默认 30s），
+   超时返回失败 `AdbResponse` 而非冻死。纵深防御。
+3. **`ca71772`（关键）** — `_start_server_background`（`core/user_task_runner/prerequisite.py`）
+   原本用 `stdout/stderr=subprocess.PIPE` 起自起 server 且启动后**从不排空**，
+   日志填满 ~64KB 管道缓冲后 server 的写日志线程卡死（`anon_pipe_write`）、停止响应、
+   把客户端拖死（表现为 run 中途偶发冻住，常落在 input_text 之后）。改成把输出
+   重定向到 `$TMPDIR/mw_server_<port>.log`（文件不会阻塞写端，还留了日志）。
+
+要回到上游：把 `mobile-world` 那条指回 `Tongyi-MAI/MobileWorld` 并把这三个 patch
+rebase 过去即可。
 
 ```bash
 uv sync --no-install-project    # 装本项目依赖（含 mobile-world fork）
@@ -100,15 +110,18 @@ sleep 都调小了，order_food 实测冷启动→handoff **~70s → ~51s**、po
 `MW_WAIT_SECONDS` 经 child_env → `mw test` → 它 Popen 的 uvicorn server 继承生效；
 自起 server（`run_test.py` 默认，不带 `--aw_host`）和外部 server 两条路都验证过 tick=1.8s。
 
-**坑（排查 server 端改动"看似不生效"必看）**：MW server 是 `subprocess.Popen` 起的
-uvicorn，stdout/stderr 被 PIPE 吞掉，看不到 `[STEP] Executing wait for ...` 日志。
-更阴的是：如果端口 6800 上**已经有一个之前手动 `mw server` 起的常驻 server**（可能挂
-了几十小时），新 run 会复用它——于是你刚 `uv sync` 装的新 server 代码 + 新环境变量
-**全都不生效**，所有请求打到老 server 上。排查时先
-`ss -ltnp | grep 6800` 看是谁在占、`ps -o etime` 看它跑了多久，必要时 `kill -9` 再重跑。
-想干净验证 server 端行为：自己用 **tmux** 起一个带已知 env 的 server 并把日志重定向到
-文件，再用 `--aw_host http://localhost:6800` 连它（注意带 `http://` scheme，否则
-`No connection adapters were found`）：
+**坑 1（自起 server 的日志）**：自起 server 的日志现在写到
+`$TMPDIR/mw_server_<port>.log`（fork patch `ca71772` 之前是 PIPE 吞掉、且会把 server
+**卡死**，见上 fork patch 3）。要看 `[STEP] Executing wait for ...` 这类 server 日志，
+直接 `tail -f /tmp/mw_server_6800.log`。
+
+**坑 2（僵尸 server 让 server 端改动"看似不生效"）**：如果端口 6800 上**已经有一个
+之前手动 `mw server` 起的常驻 server**（可能挂了几十小时），新 run 会复用它——于是你
+刚 `uv sync` 装的新 server 代码 + 新环境变量**全都不生效**，所有请求打到老 server 上。
+排查时先 `ss -ltnp | grep 6800` 看是谁在占、`ps -o etime` 看它跑了多久，必要时
+`kill -9` 再重跑。想干净验证 server 端行为：自己用 **tmux** 起一个带已知 env 的 server
+并把日志重定向到文件，再用 `--aw_host http://localhost:6800` 连它（注意带 `http://`
+scheme，否则 `No connection adapters were found`）：
 
 ```bash
 tmux new-session -d -s mwserver \
