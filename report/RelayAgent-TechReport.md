@@ -42,7 +42,7 @@ precheck and an accessibility-scrape-first text path) reduces VLM token cost by
 pure step-by-step VLM agent driving the same in-app assistant** (and 19–34× versus
 a pure-VLM agent driving the native UI by hand), while producing **far more
 predictable** cost: RelayAgent's per-task token count is nearly identical across
-repetitions (e.g. 3989 / 3950 / 3989 on the food-order task), whereas the pure-VLM
+repetitions (e.g. 3987 / 3986 / 3950 on the food-order task), whereas the pure-VLM
 agent ranged across two orders of magnitude (premature termination to runaway
 looping) on the identical task.
 
@@ -188,7 +188,7 @@ with and without using the app's embedded assistant, and measure the cost gap
 (§8). The pure-GUI agent is not only an order of magnitude more expensive but
 **far less predictable** — on one task it ranged from a 1-step premature exit to a
 50-step runaway, a two-order-of-magnitude spread, while RelayAgent reproduced its
-cost nearly identically (3989 / 3950 / 3989 tokens, VLM-calls fixed at 2).
+cost nearly identically (3987 / 3986 / 3950 tokens, VLM-calls fixed at 2).
 
 ### 2.3 Naming clarification: "Agent Card" (A2A) vs. RelayAgent cards
 
@@ -535,8 +535,8 @@ Median token cost per task (n=3 for RA / general_e2e; manual-UI n=1):
 | --- | ---: | --- | ---: | ---: |
 | MW manual-UI (no assistant) | 75463 | (n=1) | — | 18.9× |
 | MW general_e2e (uses assistant) | ~38k* | 38282 / 77347 / 96888 | — | ~9.5× |
-| RA baseline | 9566 | 6790 / 9566 / 12423 | 3–5 (med 4) | 2.4× |
-| **RA optimized** | **3989** | 3989 / 3950 / 3989 | **2** | **1×** |
+| RA baseline | 9585 | 6788 / 9585 / 9594 | 3–4 (med 4) | 2.4× |
+| **RA optimized** | **3986** | 3987 / 3986 / 3950 | **2** | **1×** |
 
 \* general_e2e on T1 is **not stable** (see §8.4); the clean-run cost is ~38k
 (this round's r1 = 38282; Round-1 = 38081), used as its representative value.
@@ -562,7 +562,7 @@ Reading the gradients answers Q1–Q3:
   from full screenshots (general_e2e also re-sends a 3-image visual history each
   step) versus RelayAgent's structured plan with zero-token a11y taps and a
   discovery manifest that pins the assistant's entry path.
-- **Q3 (the two optimizations).** RA baseline → RA optimized: **−58.3% / 2.4×** on
+- **Q3 (the two optimizations).** RA baseline → RA optimized: **−58.4% / 2.4×** on
   T1 and **−72.2% / 3.6×** on T2, from precheck (fewer done-detection VLM polls:
   T1 VLM 4→2) and scrape (zero-token text extraction).
 
@@ -570,20 +570,25 @@ Reading the gradients answers Q1–Q3:
 
 | Config | T1 wall_s (median) | T2 wall_s (median) |
 | --- | ---: | ---: |
-| RA optimized | 74.1 | 153.5 |
+| RA optimized | 51.7 | 153.5 |
 | RA baseline | 47.6 | 115.8 |
 | MW general_e2e | 111 (46 / 111 / 379) | 166 |
 | MW manual-UI | 193 (n=1) | 717 (n=1) |
 
 The optimizations of §7 are a **token/cost** win, **not** a wall-clock win at the
 RA-baseline→RA-optimized step: the two configs' medians sit within run-to-run
-noise and the optimized config is in fact *higher* here (T1 74.1 vs 47.6 s; T2
-153.5 vs 115.8 s). The cause is structural — end-to-end latency is **dominated by
-(a) the in-app assistant's own generation time and (b) per-call LLM-gateway
-latency** (the single done-confirming VLM poll ranged 6–43 s across reps, pure
-gateway jitter). Precheck/scrape remove VLM *calls and tokens*, not the wait for
-the assistant to finish. We report this plainly rather than claim time savings the
-data does not support. Wall-clock savings *do* appear at the coarser gradient: a
+noise (T1 51.7 vs 47.6 s, +8.6%; T2 153.5 vs 115.8 s). The cause is structural —
+end-to-end latency is **dominated by (a) the in-app assistant's own generation time
+and (b) per-call LLM-gateway latency**. T1 makes this concrete: in a same-session
+interleaved re-test, the optimized config's *total VLM time* tracked its wall-clock
+one-for-one across reps — 4.8 / 7.9 / **24.6** s of VLM ↔ 48.5 / 51.7 / **68.9** s
+wall, i.e. the only thing moving the wall is the single done-confirming VLM poll's
+gateway latency. Precheck/scrape remove VLM *calls and tokens* (T1 fixed at 2 VLM
+vs baseline's 3–4), not the wait for the assistant to finish. We report this plainly
+rather than claim time savings the data does not support. (An earlier round put the
+optimized T1 median at 74.1 s; that was a two-slow-draw sampling artifact of the
+gateway, not a systematic regression — the interleaved re-test removes the
+cross-session jitter and lands at 51.7 s, level with baseline.) Wall-clock savings *do* appear at the coarser gradient: a
 pure-VLM agent re-driving the UI is materially slower (T2 166 s vs 154 s), and its
 failure modes are far slower still (T1 runaway: 379 s; manual-UI T2: 717 s).
 
@@ -596,8 +601,8 @@ failure modes are far slower still (T1 runaway: 379 s; manual-UI T2: 717 s).
 ### 8.4 Predictability — RelayAgent is deterministic-ish; the pure-VLM agent is not
 
 The most striking n=3 finding is variance. RA token counts are nearly identical
-across repetitions — T1 optimized **3989 / 3950 / 3989** (VLM fixed at 2),
-baseline **6790 / 9566 / 12423** (VLM 3/4/5, each extra done-poll ≈ +3k). The
+across repetitions — T1 optimized **3987 / 3986 / 3950** (VLM fixed at 2),
+baseline **6788 / 9585 / 9594** (VLM 3/4/4, each extra done-poll ≈ +3k). The
 pure-VLM `general_e2e` on the *same* T1 produced **38282 / 77347 / 96888 tokens at
 46 / 111 / 379 s** — driven by two opposite failure modes:
 
@@ -649,12 +654,13 @@ Two end-to-end trajectories make the cost numbers concrete. Demo recordings:
 `assets/RelayAgentDemoFlow/RelayAgentDemoFlow.gif` (T2). Step strings below are
 verbatim from the run `prediction` fields in `traj.json`.
 
-#### 8.8.1 T1 order_food — RA optimized (run `order_food_optimized_r1`, 3989 tokens, 2 VLM calls)
+#### 8.8.1 T1 order_food — RA optimized (run `n3_retest/order_food_optimized_r1`, 3987 tokens, 2 VLM calls)
 
 The 11-step plan expanded to 16 runner steps (the single `wait_for_reply` step
 held for 6 of them — see §5.3's non-advancing semantics). Only **two** LLM calls
 were made in the entire task: one text-only `capability_router` pick (1054→75
-tok) and one `reply_watch` done-judgment (2783→77 tok). Reply text was scraped
+tok, 1.4 s) and one `reply_watch` done-judgment (2783→75 tok, 3.4 s) — total VLM
+time 4.8 s, ≈ all the wall-clock that isn't fixed-overhead. Reply text was scraped
 from the a11y tree at zero token cost.
 
 | Plan step | Action | Note |
@@ -665,17 +671,17 @@ from the a11y tree at zero token cost.
 | 4/11 | tap_text | focus input (uiautomator) |
 | 5/11 | input_text | `帮我点三杯蜜雪冰城蜜桃四季春，温度和糖度都用默认` |
 | 6/11 | tap_bounds | submit |
-| 7/11 | wait_for_reply | **precheck skip ×5** (screen changing, 0.0→7.3 s), then **1 VLM poll → done** @ ~9 s |
+| 7/11 | wait_for_reply | **precheck skip ×5** (screen changing, 0.0→7.2 s), then **1 VLM poll → done** @ 13.0 s |
 | 8/11 | tap_text | select store (uiautomator) |
 | 9/11 | tap_text | add to cart (uiautomator) |
 | 10/11 | wait_ms | settle |
 | 11/11 | **handoff** | `ask_user` carrying the scraped reply, stops at the order/payment screen |
 
 The captured reply handed to the user: *"已为你找到附近多家蜜雪冰城门店的蜜桃四季春，
-请选择你想要下单的店铺… 选好后我帮你加购3杯，温度和糖度都用默认～"*. This is the
+请选择你想要下单的店铺… 选好后我帮你加购3杯默认规格的蜜桃四季春。"*. This is the
 canonical low-cost path: the two-stage precheck (§7.1) collapsed the streaming
 window into a single done-poll, and the a11y scrape (§7.2) kept text extraction
-at zero VLM calls — hence the near-constant 3989 / 3950 / 3989 token figure
+at zero VLM calls — hence the near-constant 3987 / 3986 / 3950 token figure
 (§8.4).
 
 For contrast, `general_e2e` on the identical task and backend spent
