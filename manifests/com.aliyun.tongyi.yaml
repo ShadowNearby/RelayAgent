@@ -107,8 +107,10 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 8
-      x_capture_full_reply:
-        max_scrolls: 6
+      # Mixue/Taobao-Flash order_food renders the store recommendation in a single
+      # bubble already fully visible at done-detection — capture_full scrolling only
+      # added latency (and risked scrolling the CTA out of view) without recovering
+      # more text. Treat as single-bubble: rely on done-detection scrape, no scroll.
       failure_modes:
         - "OAuth bind required on first use; flow terminates if user declines"
       x_partner_app: "com.taobao.litetao"
