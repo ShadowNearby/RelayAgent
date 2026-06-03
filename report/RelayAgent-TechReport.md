@@ -588,6 +588,21 @@ Reading the gradients answers Q1–Q3:
   T1 and **−72.2% / 3.6×** on T2, from precheck (fewer done-detection VLM polls:
   T1 VLM 4→2) and scrape (zero-token text extraction).
 
+**Token composition — the gap is screenshots, and the dollar gap is smaller.**
+Across every config the count is **~97–99% *prompt* tokens**, not completion
+(manual-UI 98.9%, general_e2e ~98.8%, RA baseline 97.5–98.1%, RA optimized
+96.2–97.1%): the cost is dominated by the screenshots fed to the VLM, not by what
+it writes back. Per-call instrumentation makes the mechanism concrete — one
+screenshot costs **≈2783 prompt tokens** on this gateway, and RA optimized issues
+**exactly one** image (the single done-confirming poll; its 3987 = a 1054-token
+text-only router call + one 2783-token image), RA baseline two-to-three (one per
+extra done-poll), whereas general_e2e and manual-UI send a screenshot **per step
+plus a 3-frame history** — on the order of **~30 screenshots** over a 9-step run.
+The headline 19× is therefore, concretely, **~1 image vs ~30**. Because
+prompt/image tokens are priced well below completion tokens and are cacheable, the
+**dollar** gap is smaller than this token gap; we report the token / call-count
+axis and flag a $-normalized restatement as future work (§8.9).
+
 **What the 19× is — and isn't — attributable to.** The lever is *delegation*, not
 the manifest. The expensive, run-to-run-variable cognition — which stores exist,
 what goes in the cart, which route — is performed by the in-app assistant and
@@ -791,13 +806,18 @@ them, so the claims above are read at their actual strength.
    e.g. `RELAY_NO_MANIFEST=1`; not yet implemented.)
 2. **Baseline token-efficiency, and token ≠ dollars.** general_e2e re-sends a full
    screenshot plus a 3-image visual history each step, so its count is dominated by
-   image-*prompt* tokens. We report `total_tokens`; image/prompt tokens are
-   typically priced well below completion tokens and are cacheable, so the
-   **dollar** gap is smaller than the token gap, and a more frugal pure-VLM
-   baseline (a11y-text / set-of-marks input rather than raw screenshots) would
-   narrow Q2. We therefore frame Q2 as a *token / call-count* result, not a
-   cost-in-dollars claim; the prompt/completion/image split and a frugal-baseline
-   comparison are future work.
+   image-*prompt* tokens. We now report the prompt/completion split (§8.2): every
+   config is ~97–99% prompt tokens, one screenshot ≈2783 prompt tokens, and the
+   19× is concretely ~1 image (RA) vs ~30 (general_e2e). Because prompt/image
+   tokens are priced well below completion tokens and are cacheable, the **dollar**
+   gap is smaller than the token gap, and a more frugal pure-VLM baseline (a11y-text
+   / set-of-marks input rather than raw screenshots) would narrow Q2. We therefore
+   frame Q2 as a *token / call-count* result, not a cost-in-dollars claim. Two
+   strengthenings remain future work: a $-normalized restatement using public
+   Qwen-VL input/output pricing, and a frugal-input rerun — the cheapest being
+   `HISTORY_N_IMAGES=1` (drop the 3-frame history, keep one screenshot/step), whose
+   prompt-token delta vs the 3-image runs directly measures the history tax without
+   a code change.
 3. **Sample size and task breadth.** The instrumented cost/variance study is two
    tasks at n=3 (RA/general_e2e), manual-UI at n=1; the 28-capability table
    (§8.2.1) is n=1 author-run functional passes, not repeated success-rate
