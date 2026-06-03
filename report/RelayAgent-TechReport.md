@@ -568,12 +568,17 @@ Reading the gradients answers Q1–Q3:
   costs about the same as hand-driving the native UI. (The cheapest general_e2e
   run, 38282, is not an outlier failure — it also reached the payment screen; it
   was just the run where the assistant auto-assembled the cart in one turn. See the
-  table footnote and §8.4.) So on T1 the assistant's value is **not**
-  realized by a re-driving agent; it is realized only by *delegation* (RA), which
-  is exactly Q2. Where using the assistant does collapse work, it does so by
-  turning a long native-UI navigation into one conversational turn: on T2's
-  discover leg, finding restaurants took **23 native-UI steps** (scrolling notes)
-  by hand vs. **7 steps** with the assistant.
+  table footnote and §8.4.) This is the key asymmetry: **the payoff of *using the
+  in-app assistant at all* scales with task complexity** — negligible on a short
+  order whose native path is already shallow (T1: +2.5%, ~9 steps either way),
+  but large on a discovery-heavy task where the assistant collapses a long
+  navigation into one conversational turn (T2 discover: **23 native-UI steps by
+  hand → 7 with the assistant**, −68% tokens). Crucially this is the payoff of the
+  *assistant*, not of RelayAgent, and a re-driving agent (general_e2e) only banks
+  it on the heavy task. **RelayAgent's structured delegation, by contrast, wins on
+  *both* (T1 19.4×, T2 11.0×, Q2)** — because what it removes, per-step VLM
+  re-driving, is paid on every task regardless of complexity. So on T1, merely
+  *using* the assistant buys almost nothing; only the structure does.
 - **Q2 (delegate vs. re-drive).** general_e2e → RA optimized: **−94.8% / 19.4×** on
   T1 and **−90.9% / 11.0×** on T2. The gap is the cost of re-deriving every step
   from full screenshots (general_e2e also re-sends a 3-image visual history each
@@ -859,8 +864,15 @@ shows the practical payoff of delegation: an order-of-magnitude token reduction
 versus a pure-VLM agent on the same task and the same in-app assistant, a further
 2.4–3.6× from two app-agnostic optimizations, and — the result we did not anticipate —
 **predictable** per-task cost where the pure-VLM baseline varied several-fold run
-to run (and far more in earlier exploration). We are deliberate about what the optimizations buy: token/cost, not
-wall-clock (which the in-app assistant's own latency dominates).
+to run (and far more in earlier exploration). Two regimes matter here. The payoff
+of *using an in-app assistant at all* scales with task complexity — it is
+negligible on a short task whose native path is already shallow but large on a
+discovery-heavy one (T2: 23 native-UI steps collapse to 7). RelayAgent's
+*structured* delegation, however, pays off on **both** simple and complex tasks
+(T1 19.4×, T2 11.0×), because it removes the per-step VLM re-driving cost that a
+pure-VLM agent incurs regardless of task complexity. We are deliberate about what
+the optimizations buy: token/cost, not wall-clock (which the in-app assistant's
+own latency dominates).
 
 Future work: more cards (and OEM-published cards); richer handoff semantics;
 cross-app flow planning; non-Android platforms; and **A2A forward-compatibility** —
