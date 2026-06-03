@@ -125,6 +125,33 @@ token gap 19.4×**（~14% 压缩，源于 1:8 比 + RA opt completion 占比略�
   (15789) 仍是 RA optimized 的 ~4×。→ **3-image 是 general_e2e 的承重工作配置、非注水**,
   RA 的差距不是"比了个过重 baseline"的产物。换**输入模态**(a11y-text/SoM)仍未测。
 
+## 附：RELAY_NO_MANIFEST 消融（manifest-isolation，2026-06-03 补）
+
+**目的**：拆开 Q2 的 19×——到底是「委派(delegation)」还是「手写 manifest」的功劳。
+新建 adapter 模式 `RELAY_NO_MANIFEST=1`（`agents/relay_agent.py`：**不加载任何 card**，
+驱动同一委派骨架——开新对话→把整条用户请求一次性打进助手→wait_for_reply→accept-defaults
+推进→不可逆 CTA 前 handoff——但入口/输入框/发送/推进/CTA stop **全部运行时 VLM grounding**，
+唯一用到的 app 事实是包名，跟 general_e2e 一样）。T1 order_food，n=3，`test-results/ab/nm/`。
+
+| run | total | prompt | compl | VLM calls | 结果 |
+|---|---:|---:|---:|---:|---|
+| nm r1 | **14147** | 13958 | 189 | 5 | ✅ clean：助手一轮组好购物车→付款页，nm_advance 测到 `支付宝付款` CTA→handoff |
+| nm r2 | 14105 | 13958 | 147 | 5 | ❌ fail：输入框被 VLM 误定位到屏幕上部，查询没发出去，停在主页 |
+| nm r3 | 17141 | 16929 | 212 | 6 | ◐ partial：发出查询→选店页→点「选这个」→停在付款前(done) |
+
+**token 拆解（用 r1 clean，单图 ≈2783 prompt）**：nm = 5 次 VLM image（3 grounding +
+1 reply_watch + 1 advance，**无 router**）≈ 14k。排序正好是预测的
+**RA 3987 < no-manifest 14147 < general_e2e 77347**：
+- general_e2e → no-manifest = **5.5×**（杠杆 **B**：结构化委派骨架替代逐帧自由重驱动，~30 图→5 图）
+- no-manifest → RA opt = **3.5×**（杠杆 **C**：manifest 的 0-token uiautomator 点击替代 ~4 次 VLM grounding + 省掉 advance 探针）
+- → **19× 主要是 delegation（B 更大），manifest 是真实但次要的优化** —— 实测支撑 §8.2 归因。
+
+**可靠性 1/3（重要 nuance）**：只有 r1 干净到付款；r3 接上了订单流程但提前停（安全但没到付款）；
+r2 的输入框 grounding 落错区域、查询没发。同一 prompt r1 定位对、r2 定位错——CN UI 上纯 VLM
+grounding 不稳。→ **manifest 不只省 token，还买可靠性**（正是它把这些 affordance 编码成
+selector/bounds 的理由），与 HISTORY_N_IMAGES 实验同性质。**未加 uiautomator 拐杖**（那会让 nm
+滑向 RA、抹掉杠杆 C 的隔离），纯 VLM grounding 才是 §8.9 #1 定义的忠实 ablation。
+
 ## 备注
 - RA 各档 wall_s 由 `RELAY_TIMING=1` 写入各 run 的 `wall_clock.json`；general_e2e 由
   `run_n3.sh` 的 `run_e2e()` 手动计时。

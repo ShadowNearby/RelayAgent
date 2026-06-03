@@ -629,10 +629,12 @@ recommended, then stop before `支付宝付款`), not a decision about which sto
 item; genuine choices are deferred to the user via `ask_user`. A re-driving agent
 (general_e2e) is expensive precisely because the task it performs is *not*
 fixed-step and cannot be scripted — delegation is what makes the relay scriptable
-in the first place. What the four configs do **not** isolate is the manifest's
-marginal contribution *over a manifest-free delegation relay* (same delegation,
-but the fixed prefix VLM-grounded at runtime); §8.9 names this as the key missing
-ablation.
+in the first place. A manifest-free delegation relay (`RELAY_NO_MANIFEST=1`, §8.9
+item 1) measures the manifest's marginal contribution directly: it lands between
+general_e2e and RA (≈14k tokens), splitting the 19× into **≈5.5× from the
+delegation skeleton and ≈3.5× from the manifest's zero-token taps** — i.e. mostly
+delegation, with the manifest a real but secondary optimization (that also buys
+reliability — see §8.9 item 1).
 
 ### 8.3 Wall-clock — only at the re-drive→delegate gradient
 
@@ -805,18 +807,26 @@ Q1) with 6 plan steps.
 We surface the evaluation's main soft spots and the experiments that would close
 them, so the claims above are read at their actual strength.
 
-1. **Manifest-isolation ablation (the key missing config).** Q2's 19× / 11× is
-   attributed to delegation (§8.2, "what the 19× is attributable to"), but the four
-   configs do not isolate how much the *manifest optimization* adds on top of
-   delegation itself. The missing fifth config is a **manifest-free delegation
-   relay**: same delegation (type the prompt into the in-app agent, wait, hand off)
-   but with the entry path and post-result affordances VLM-grounded at runtime
-   instead of read from the card. If our framing holds, it should sit *between*
-   general_e2e and RA — much cheaper than general_e2e (delegation already removed
-   the task cognition) yet pricier and less deterministic than RA (it re-derives
-   the fixed prefix each run). Observing that ordering is what cleanly separates
-   delegation's contribution from the manifest's. (Requires a new adapter mode,
-   e.g. `RELAY_NO_MANIFEST=1`; not yet implemented.)
+1. **Manifest-isolation ablation — now run (`RELAY_NO_MANIFEST=1`).** To separate
+   *delegation* from the *authored manifest* in Q2's 19×, we built a manifest-free
+   delegation relay: it loads **no card** and drives the same delegation skeleton
+   (fresh conversation → type the whole request → wait → accept-defaults advance →
+   hand off before the irreversible CTA) with every affordance VLM-grounded at
+   runtime; the only app fact it uses is the package id, exactly as general_e2e
+   does. On T1 (n=3, `test-results/ab/nm/`) it lands where the framing predicts —
+   **RA optimized 3987 < no-manifest ≈14147 < general_e2e 77347** — which
+   decomposes the gap: general_e2e→no-manifest is **≈5.5×** (the delegation
+   skeleton replacing free-form per-step re-driving — ~30 screenshots collapse to 5
+   VLM calls), and no-manifest→RA is **≈3.5×** (the manifest's zero-token
+   uiautomator taps replacing ~4 runtime VLM groundings). So the 19× is **mostly
+   delegation**, with the manifest a real but secondary optimization — confirming
+   §8.2. **Nuance:** reliability was **1/3** — only one run cleanly reached the
+   payment handoff; one engaged the order then stopped early (safe but incomplete),
+   and one mis-grounded the input box so the query never sent. So the manifest also
+   buys *robustness*, not just tokens: runtime VLM grounding of affordances is flaky
+   on this CN UI (the reason the card encodes them as selectors/bounds), echoing the
+   `HISTORY_N_IMAGES` finding (item 2). n=3 is small and the token figure is from
+   the successful path.
 2. **Baseline token-efficiency, and token ≠ dollars.** general_e2e re-sends a full
    screenshot plus a 3-image visual history each step, so its count is dominated by
    image-*prompt* tokens. We now report the prompt/completion split (§8.2): every
