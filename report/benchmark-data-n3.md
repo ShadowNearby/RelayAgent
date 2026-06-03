@@ -30,9 +30,13 @@
   是两次慢-VLM 跨 session 抽样的产物，交错重测回落到 51.7。）
 - baseline VLM 次数 3/4/4（每多一次 done-poll 多 ~3k token），token 6.8k–9.6k；VLM 总时间
   16.7/7.2/13.1s（每次 done-poll 都打满 VLM 往返，总 VLM 时间反而常高于 opt）。
-- **general_e2e 在 order_food 上极不稳**（38k→97k token、46s→379s）：纯逐步 VLM、无
-  「开新对话」步，撞千问残留会话时要么早退要么跑飞。**这是 finding：纯 VLM agent 对
-  初始状态敏感、方差爆炸。** 干净成功路径参考 `benchmark-data-n1.md` 的 38081 tok。
+- **general_e2e 在 order_food 上方差大**（38282/77347/96888 token、5/9/11 步、
+  46/111/379s，2.5× token / 8× wall 跨度）：**三次都成功**——都到订单确认/付款页、
+  购物车已组好（3 杯默认规格）、停在支付前。差异来自助手每次弹出多少张中间选择卡片
+  要 agent 逐张点（5/9/11 步）+ 每步网关延迟，是**成功之间的方差**而非成败之差
+  （已逐帧核对 r1/r2/r3 轨迹：r2=38282 是助手一轮直接组好购物车、agent 无中间卡可点）。
+  更剧烈的失败模式（撞千问残留会话提前退出 / 失控循环到 50 步/531k）是早期 n=1 探索
+  里见到的，**不在本 trio**。干净成功路径同样可参考 `benchmark-data-n1.md` 的 38081 tok。
 
 ## flow（xhs→amap，合计 discover+ride）
 
@@ -76,7 +80,7 @@
    - **比墙钟的三档**：MW manual-UI → MW general_e2e → RA（用 baseline 作 RelayAgent 代表）。
      这里时间节省真实且大（order_food 193 → 111 → 47.6s；flow 717 → 166 → 115.8s），
      因为每步**实际做的事更少**（手滚笔记 23 步 → 一次助手对话；逐帧重推 → 结构化 plan +
-     0-token a11y 点击）。e2e 还会跑飞（order_food 379s）。
+     0-token a11y 点击）。e2e 慢跑也更慢（order_food 379s = 11 步成功跑被每步网关延迟拖长，非死循环）。
    - **baseline↔opt 之间故意不比墙钟**：那段差异由**单次 confirm-VLM 的网关延迟**主导
      （`V` 在共享网关上 1.4–32s 抖），是 **serving 栈属性、不是 agent 设计属性**。
      order_food 同 session 交错重测坐实了这点：opt 的 VLM 总时间 4.8/7.9/24.6s 与 wall
@@ -88,8 +92,10 @@
      （order_food 冷启动→handoff ~70s→~51s），削的是 agent 可控部分、独立于上面的网关 VLM
      时间，**不是** baseline-vs-opt 主张，勿混。
 
-3. **RelayAgent 可预测，纯 VLM agent 方差爆炸**。RA 每档三次近乎复现；general_e2e
-   order_food 从 38k token 早退到 97k/379s 跑飞。可预测的成本本身是 system contribution。
+3. **RelayAgent 可预测，纯 VLM agent run-to-run 方差大**。RA 每档三次近乎复现
+   （order_food token 3950–3987，1.01×）；general_e2e order_food 三次 38282/77347/96888
+   token、46/111/379s（2.5× token / 8× wall），虽三次都成功但成本随助手中间卡片数 + 网关
+   抖动大幅波动；更剧烈的早退/失控模式见早期探索。可预测的成本本身是 system contribution。
 
 ## 备注
 - RA 各档 wall_s 由 `RELAY_TIMING=1` 写入各 run 的 `wall_clock.json`；general_e2e 由
