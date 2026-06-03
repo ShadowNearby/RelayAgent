@@ -26,7 +26,11 @@ if str(REPO_ROOT) not in sys.path:
 from agents._adb import cold_launch as _cold_launch  # noqa: E402
 
 ENV_FILE = REPO_ROOT / ".env"
-AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
+# Default agent; override with RELAY_AGENT_FILE (e.g. the a11y-text baseline,
+# agents/a11y_agent.py, used for the §8.9 input-modality ablation).
+AGENT_FILE = Path(os.environ["RELAY_AGENT_FILE"]).resolve() if os.getenv(
+    "RELAY_AGENT_FILE"
+) else REPO_ROOT / "agents" / "relay_agent.py"
 MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
