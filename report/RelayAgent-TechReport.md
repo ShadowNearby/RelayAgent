@@ -827,9 +827,18 @@ them, so the claims above are read at their actual strength.
    / set-of-marks input rather than raw screenshots) would narrow Q2. We therefore
    frame Q2 as a *token / call-count* result; a dollar restatement (§8.2,
    `report/cost-dollar-analysis.md`) shows the gap is 16.6× in dollars vs 19.4× in
-   tokens — modestly compressed but the same order. The remaining check is a
-   frugal-input rerun (`HISTORY_N_IMAGES=1`, dropping the 3-frame history) to
-   measure the history tax directly without a code change.
+   tokens — modestly compressed but the same order. We also ran the frugal-input
+   variant (`HISTORY_N_IMAGES=1`, one screenshot/step instead of the 3-frame
+   history; `test-results/ab/n3_hist1/`, n=3). It confirms the history is ~53% of
+   general_e2e's per-step prompt load (~2.2k tokens/frame) — but a leaner baseline
+   is *not* cheaper or fairer: success fell to **1/3** (the dropped frames carry
+   task-critical prior state, so the agent loops on the quantity selector), and the
+   two failures ran to the 50-step cap at **~332k tokens, 4× the 3-image runs**;
+   even the one success (15,789 tokens) is still ~4× RA optimized. So the 3-image
+   config is general_e2e's load-bearing working setup, not inflated padding, and
+   RA's gap is not an artifact of an over-heavy baseline. A different input
+   *modality* (a11y-text / set-of-marks rather than fewer screenshots) remains
+   untested.
 3. **Sample size and task breadth.** The instrumented cost/variance study is two
    tasks at n=3 (RA/general_e2e), manual-UI at n=1; the 28-capability table
    (§8.2.1) is n=1 author-run functional passes, not repeated success-rate
