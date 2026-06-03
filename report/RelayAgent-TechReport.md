@@ -583,7 +583,11 @@ Reading the gradients answers Q1–Q3:
   T1 and **−90.9% / 11.0×** on T2. The gap is the cost of re-deriving every step
   from full screenshots (general_e2e also re-sends a 3-image visual history each
   step) versus RelayAgent's structured plan with zero-token a11y taps and a
-  discovery manifest that pins the assistant's entry path.
+  discovery manifest that pins the assistant's entry path. This gap is **not a
+  screenshot artifact**: a token-efficient *a11y-text* re-driving baseline (no
+  screenshots, §8.9 item 2) still costs **11.9×** RA optimized (median 47302 tok),
+  because re-driving pays one LLM round-trip per UI step (≈50) regardless of
+  per-call input size, whereas RA issues 2.
 - **Q3 (the two optimizations).** RA baseline → RA optimized: **−58.4% / 2.4×** on
   T1 and **−72.2% / 3.6×** on T2, from precheck (fewer done-detection VLM polls:
   T1 VLM 4→2) and scrape (zero-token text extraction).
@@ -833,8 +837,9 @@ them, so the claims above are read at their actual strength.
    config is ~97–99% prompt tokens, one screenshot ≈2783 prompt tokens, and the
    19× is concretely ~1 image (RA) vs ~30 (general_e2e). Because prompt/image
    tokens are priced well below completion tokens and are cacheable, the **dollar**
-   gap is smaller than the token gap, and a more frugal pure-VLM baseline (a11y-text
-   / set-of-marks input rather than raw screenshots) would narrow Q2. We therefore
+   gap is smaller than the token gap; a more frugal pure-VLM input *modality*
+   (a11y-text rather than raw screenshots) narrows Q2 only modestly — measured at
+   11.9× RA below, not single digits. We therefore
    frame Q2 as a *token / call-count* result; a dollar restatement (§8.2,
    `report/cost-dollar-analysis.md`) shows the gap is 16.6× in dollars vs 19.4× in
    tokens — modestly compressed but the same order. We also ran the frugal-input
@@ -846,9 +851,25 @@ them, so the claims above are read at their actual strength.
    two failures ran to the 50-step cap at **~332k tokens, 4× the 3-image runs**;
    even the one success (15,789 tokens) is still ~4× RA optimized. So the 3-image
    config is general_e2e's load-bearing working setup, not inflated padding, and
-   RA's gap is not an artifact of an over-heavy baseline. A different input
-   *modality* (a11y-text / set-of-marks rather than fewer screenshots) remains
-   untested.
+   RA's gap is not an artifact of an over-heavy baseline. We then tested the input
+   *modality* directly with an **a11y-text baseline** (`agents/a11y_agent.py`,
+   `test-results/ab/a11y/`, n=3): a pure re-driving agent fed the accessibility
+   tree as text instead of screenshots, everything else held constant (uses the
+   assistant, free-form per-step decisions, same task/model/gateway, and a
+   fresh-conversation start matching general_e2e's input-box state). It came in at
+   **37422 / 47302 / 49008 tokens (median 47302)** — only **1.6× cheaper than
+   screenshot-fed general_e2e (77347)** and still **11.9× RA optimized**. The
+   mechanism confirms the thesis: the a11y modality *did* cut per-call input ~3.5×
+   (~770–970 prompt tokens/call vs. one screenshot's ~2783), but re-driving's call
+   *count* did not shrink — it grew, to **48–50 LLM calls** (vs. RA's 2), because
+   text-only navigation on this CN UI is harder (two of three runs looped to the
+   50-step cap; reliability **1/3**, matching the no-manifest and
+   `HISTORY_N_IMAGES=1` ablations). So Q2's gap is **not** a screenshot-modality
+   artifact: a leaner-per-call input still leaves an ~12× gap, because delegation's
+   durable lever is collapsing the task to ~2 round-trips, not shrinking each one.
+   (Even granting a hypothetical a11y run at general_e2e's ~9-step count,
+   9 × ~900 ≈ 8k tokens is still ~2× RA optimized.) set-of-marks input remains the
+   one untested modality.
 3. **Sample size and task breadth.** The instrumented cost/variance study is two
    tasks at n=3 (RA/general_e2e), manual-UI at n=1; the 28-capability table
    (§8.2.1) is n=1 author-run functional passes, not repeated success-rate
@@ -1046,8 +1067,8 @@ single irreversible payment tap.
 - [x] Add §8.9 Threats to Validity (baseline cost, eval scope, predictability provenance, safety, cross-round, a11y hit-rate).
 
 Threats-to-validity follow-ups (newly opened, §8.9):
-- [ ] **Manifest-isolation ablation** — 5th config `RELAY_NO_MANIFEST=1` (delegation, VLM-grounded prefix); expect general_e2e > no-manifest > RA. *(needs new adapter mode)*
-- [ ] **Frugal pure-VLM baseline** — re-run general_e2e with a11y-text / set-of-marks input (not 3-image history); report prompt/completion/image token split + rough $ to re-state Q2 as cost, not just tokens.
+- [x] **Manifest-isolation ablation** — `RELAY_NO_MANIFEST=1` (`agents/relay_agent.py`); n=3 `test-results/ab/nm/`. → §8.9 item 1 (no-manifest ≈14k, splits 19× into ≈5.5× delegation + ≈3.5× manifest).
+- [x] **Frugal pure-VLM baseline** — `HISTORY_N_IMAGES=1` (`test-results/ab/n3_hist1/`) + **a11y-text-input baseline** (`agents/a11y_agent.py`, `test-results/ab/a11y/`, n=3; driver `test-results/ab/run_a11y.sh`, fresh-start `scripts/fresh_conv.py`). → §8.9 item 2 (a11y-text median 47302 = 11.9× RA, only 1.6× under general_e2e; prompt/completion split + $ restatement in §8.2). *(set-of-marks still untested.)*
 - [ ] **Reproduce the failure modes** — instrumented runs that trigger premature-exit (seeded stale conversation) and runaway, to put §8.4's sharp variance on tracked data.
 - [ ] **Adversarial handoff tests** — assistant auto-submits in one turn / mis-annotated flag / CTA label ≠ `stop_before`; show the contract holds or where it leaks.
 - [ ] **Catalog-wide a11y hit-rate** — % taps resolved by uiautomator vs VLM-fallback across the 28 capabilities.
