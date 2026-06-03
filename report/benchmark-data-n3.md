@@ -97,6 +97,34 @@
    token、46/111/379s（2.5× token / 8× wall），虽三次都成功但成本随助手中间卡片数 + 网关
    抖动大幅波动；更剧烈的早退/失控模式见早期探索。可预测的成本本身是 system contribution。
 
+## 附：token 计价 + 历史图差分（2026-06-03 补）
+
+**prompt/completion 拆分**（现有 traj.json 直接读，零重跑）：全配置 ~96–99% prompt
+token，completion <2%。单图 ≈ **2783 prompt token**（RA 的 reply_watch 一张图）。
+RA optimized = 1054（文本 router）+ 1×2783 = 3987，恰好 1 张图；baseline 1 router +
+2–3 张；general_e2e/manual 每步 1 张 + 3 张历史 ≈ 9 步 30 张。**19× ≈ 1 张图 vs ~30 张**。
+
+**美元换算**（OpenRouter 公开价 `qwen3.5-27b`：$0.195/M in、$1.56/M out，2026-06-03
+联网核实，含 35% 促销折扣但结论只依赖 1:8 比值）：RA opt $0.00098 / baseline $0.0021
+(2.2×) / general_e2e $0.0163 (16.6×) / manual $0.0158 (16.1×)。**$ gap 16.6× 略小于
+token gap 19.4×**（~14% 压缩，源于 1:8 比 + RA opt completion 占比略高）。详
+`report/cost-dollar-analysis.md`。
+
+**HISTORY_N_IMAGES=1 差分**（`test-results/ab/n3_hist1/`，T1 n=3，砍掉 3 张历史图只留当前帧）：
+
+| 条件 | steps | prompt | total | prompt/step | 成功 |
+|---|---:|---:|---:|---:|---|
+| 1img r1 | 4 | 15521 | 15789 | 3880 | ✅ 到付款页 |
+| 1img r2 | 50 | 327245 | 332100 | 6545 | ❌ 卡数量选择器 |
+| 1img r3 | 50 | 328326 | 333228 | 6567 | ❌ 卡数量选择器 |
+| 3img(n3) 均值 | — | — | — | **8259** | 3/3 ✅ |
+
+- 3 张历史图税 ≈ **4378 prompt token/step ≈ 53%**，单帧 ≈ 1.8–2.2k token/step。
+- **但砍历史图不是更省的 baseline**：成功率 3/3 → **1/3**（丢帧丢了任务关键的前态上下文，
+  agent 在数量选择器上死循环），两次失败烧 **~332k token = 3img 的 4×**；唯一成功那次
+  (15789) 仍是 RA optimized 的 ~4×。→ **3-image 是 general_e2e 的承重工作配置、非注水**,
+  RA 的差距不是"比了个过重 baseline"的产物。换**输入模态**(a11y-text/SoM)仍未测。
+
 ## 备注
 - RA 各档 wall_s 由 `RELAY_TIMING=1` 写入各 run 的 `wall_clock.json`；general_e2e 由
   `run_n3.sh` 的 `run_e2e()` 手动计时。
