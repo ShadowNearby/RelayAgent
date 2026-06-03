@@ -38,13 +38,15 @@ real-device benchmark over two representative tasks (a food order and a
 cross-app discover-then-ride flow), delegating through the in-app agent and
 applying two app-agnostic efficiency optimizations (a two-stage reply-completion
 precheck and an accessibility-scrape-first text path) reduces VLM token cost by
-**2.4–3.6× versus an un-optimized delegation baseline** and by **9.5–11× versus a
+**2.4–3.6× versus an un-optimized delegation baseline** and by **11–19× versus a
 pure step-by-step VLM agent driving the same in-app assistant** (and 19–34× versus
 a pure-VLM agent driving the native UI by hand), while producing **far more
 predictable** cost: RelayAgent's per-task token count is nearly identical across
 repetitions (e.g. 3987 / 3986 / 3950 on the food-order task), whereas the pure-VLM
-agent ranged across two orders of magnitude (premature termination to runaway
-looping) on the identical task.
+agent's cost varied several-fold run to run on the identical task (38k–97k tokens
+at 46–379 s, all three runs reaching the same pre-payment screen), with still
+larger swings — premature termination and runaway looping — seen in earlier
+exploration.
 
 **Keywords:** mobile agents, GUI agents, agent interoperability, in-app AI assistants, task delegation, handoff.
 
@@ -88,8 +90,8 @@ per-task reasoning than a GUI agent that re-derives every step from pixels. Our
 benchmark (§8) quantifies this: across the same task and the same in-app
 assistant, delegation plus two app-agnostic optimizations cut token cost by an
 order of magnitude and — equally important for a system — made the cost
-**predictable**, where the pure-VLM baseline's cost varied across two orders of
-magnitude run to run.
+**predictable**, where the pure-VLM baseline's cost varied several-fold run to run
+(and far more in earlier exploration).
 
 ### 1.1 Contributions
 
@@ -186,9 +188,10 @@ Our evaluation makes the contrast concrete and quantitative: we run a pure
 step-by-step VLM agent (MobileWorld's `general_e2e`) on the *same* tasks, both
 with and without using the app's embedded assistant, and measure the cost gap
 (§8). The pure-GUI agent is not only an order of magnitude more expensive but
-**far less predictable** — on one task it ranged from a 1-step premature exit to a
-50-step runaway, a two-order-of-magnitude spread, while RelayAgent reproduced its
-cost nearly identically (3987 / 3986 / 3950 tokens, VLM-calls fixed at 2).
+**far less predictable** — on T1 its cost varied 2.5× in tokens (38k–97k) and 8×
+in wall (46–379 s) across three runs, with larger swings (premature exit, runaway
+looping) seen in earlier exploration, while RelayAgent reproduced its cost nearly
+identically (3987 / 3986 / 3950 tokens, VLM-calls fixed at 2).
 
 ### 2.3 Naming clarification: "Agent Card" (A2A) vs. RelayAgent cards
 
@@ -208,7 +211,7 @@ avoid colliding with the Tencent "AppAgent" line and Google's "Agent Card".)
 | User context (login, address, payment) | Re-provided / token exchange | Re-navigated each run | **Already present** in the in-app agent |
 | Irreversible-action safety | API-level | Ad-hoc | **`handoff_to_user_required` contract** |
 | Brittleness surface | Low (typed) | High (whole UI) | Low (short entry path only) |
-| Cost predictability | High | **Low (2-order-of-magnitude spread, §8)** | **High (nearly identical, §8)** |
+| Cost predictability | High | **Low (high run-to-run variance, §8)** | **High (nearly identical, §8)** |
 | Novelty locus | — | Automation model | **Discovery layer + handoff contract** |
 
 ---
@@ -293,9 +296,9 @@ home, independent of prior state. The run scripts perform the launch and set
 `RELAY_SKIP_OPEN_APP=1`; the planner then omits its own `open_app` step. (When
 invoked without the scripts, the planner emits `open_app`, and the adapter's
 `open_app` branch force-stops first, then lets MobileWorld tap the launcher icon
-by **label, not package** — see §4.) Cold launch is not a detail: §8.4 shows that
-a pure-VLM agent *without* a fresh-conversation step misread stale on-screen state
-and terminated prematurely; RelayAgent's explicit fresh-conversation step
+by **label, not package** — see §4.) Cold launch is not a detail: §8.4 notes that
+a pure-VLM agent *without* a fresh-conversation step can misread stale on-screen
+state and terminate prematurely; RelayAgent's explicit fresh-conversation step
 (`x_prepare_fresh_conversation`) is what makes its behavior reproducible.
 
 ### 5.2 a11y-tree-first grounding (`tap_text`)
@@ -534,12 +537,18 @@ Median token cost per task (n=3 for RA / general_e2e; manual-UI n=1):
 | Configuration | Median tokens | Token runs (n=3) | VLM calls | vs RA optimized |
 | --- | ---: | --- | ---: | ---: |
 | MW manual-UI (no assistant) | 75463 | (n=1) | — | 18.9× |
-| MW general_e2e (uses assistant) | ~38k* | 38282 / 77347 / 96888 | — | ~9.5× |
+| MW general_e2e (uses assistant) | 77347* | 38282 / 77347 / 96888 | — | 19.4× |
 | RA baseline | 9585 | 6788 / 9585 / 9594 | 3–4 (med 4) | 2.4× |
 | **RA optimized** | **3986** | 3987 / 3986 / 3950 | **2** | **1×** |
 
-\* general_e2e on T1 is **not stable** (see §8.4); the clean-run cost is ~38k
-(this round's r1 = 38282; Round-1 = 38081), used as its representative value.
+\* general_e2e on T1 is **high-variance** (see §8.4); we report the full-set
+median, **77347** (of 38282 / 77347 / 96888, at 5 / 9 / 11 steps). All three runs
+*succeeded* — each reached the order-confirmation/payment screen with the cart
+assembled (3 cups, default spec) and stopped before paying. The spread reflects
+how many intermediate selection cards the assistant surfaced for the re-driving
+agent to click through (plus per-step gateway latency), **not** success vs.
+failure: the cheapest run (38282) is simply the one where the assistant
+auto-assembled the cart in a single turn, leaving the agent nothing to click.
 
 **T2 — flow** (xhs→amap, sum of discover + ride legs):
 
@@ -552,12 +561,20 @@ Median token cost per task (n=3 for RA / general_e2e; manual-UI n=1):
 
 Reading the gradients answers Q1–Q3:
 
-- **Q1 (use the in-app agent at all).** manual-UI → general_e2e: 75463 → ~38k
-  (−50%) on T1, 294695 → 95296 (−68%) on T2. Merely *using* the app's assistant
-  collapses a long native-UI navigation into one conversational turn. On T2's
-  discover leg this is starkest: finding restaurants took **23 native-UI steps**
-  (scrolling notes) by hand vs. **7 steps** with the assistant.
-- **Q2 (delegate vs. re-drive).** general_e2e → RA optimized: **−89.5% / 9.5×** on
+- **Q1 (use the in-app agent at all).** On T2 the assistant clearly pays off:
+  294695 → 95296 (**−68%**). On T1 it does *not*: 75463 → 77347 (**+2.5%,
+  essentially flat**). A pure-VLM agent driving the assistant re-derives every
+  store-pick / add-to-cart step from full screenshots, so completing the order
+  costs about the same as hand-driving the native UI. (The cheapest general_e2e
+  run, 38282, is not an outlier failure — it also reached the payment screen; it
+  was just the run where the assistant auto-assembled the cart in one turn. See the
+  table footnote and §8.4.) So on T1 the assistant's value is **not**
+  realized by a re-driving agent; it is realized only by *delegation* (RA), which
+  is exactly Q2. Where using the assistant does collapse work, it does so by
+  turning a long native-UI navigation into one conversational turn: on T2's
+  discover leg, finding restaurants took **23 native-UI steps** (scrolling notes)
+  by hand vs. **7 steps** with the assistant.
+- **Q2 (delegate vs. re-drive).** general_e2e → RA optimized: **−94.8% / 19.4×** on
   T1 and **−90.9% / 11.0×** on T2. The gap is the cost of re-deriving every step
   from full screenshots (general_e2e also re-sends a 3-image visual history each
   step) versus RelayAgent's structured plan with zero-token a11y taps and a
@@ -565,6 +582,24 @@ Reading the gradients answers Q1–Q3:
 - **Q3 (the two optimizations).** RA baseline → RA optimized: **−58.4% / 2.4×** on
   T1 and **−72.2% / 3.6×** on T2, from precheck (fewer done-detection VLM polls:
   T1 VLM 4→2) and scrape (zero-token text extraction).
+
+**What the 19× is — and isn't — attributable to.** The lever is *delegation*, not
+the manifest. The expensive, run-to-run-variable cognition — which stores exist,
+what goes in the cart, which route — is performed by the in-app assistant and
+**never enters RelayAgent's plan**; that is why RA's plan is a short, *fixed*
+sequence (cold-launch → open conversation → type → wait → handoff) that the card
+can capture once. The manifest is therefore an **optimization downstream of
+delegation**, not an independent prior that does the task. Even the one
+task-touching part of the order_food card — its post-result taps — is the fixed
+accept-defaults pattern `选这个` → `选好了` (tap whatever store/spec the assistant
+recommended, then stop before `支付宝付款`), not a decision about which store or
+item; genuine choices are deferred to the user via `ask_user`. A re-driving agent
+(general_e2e) is expensive precisely because the task it performs is *not*
+fixed-step and cannot be scripted — delegation is what makes the relay scriptable
+in the first place. What the four configs do **not** isolate is the manifest's
+marginal contribution *over a manifest-free delegation relay* (same delegation,
+but the fixed prefix VLM-grounded at runtime); §8.9 names this as the key missing
+ablation.
 
 ### 8.3 Wall-clock — only at the re-drive→delegate gradient
 
@@ -586,8 +621,9 @@ Here the savings are **real and large**, because each step *does less work*:
 hand-scrolling notes (T2 discover: 23 native-UI steps) collapses to one assistant
 turn; re-deriving every action from full screenshots + a 3-image history collapses
 to a structured plan with zero-token a11y taps. A pure-VLM agent re-driving the UI
-is materially slower (T2 166 vs 116 s), and its failure modes far slower still (T1
-runaway 379 s; manual-UI T2 717 s).
+is materially slower (T2 166 vs 116 s), and its slowest runs far slower still (T1
+379 s — an 11-step completion dragged out by per-step gateway latency; manual-UI
+T2 717 s).
 
 **Why we exclude RA baseline ↔ RA optimized from the wall-clock comparison.** That
 delta is dominated by per-call LLM-gateway latency `V` (1.4–32 s on the shared lab
@@ -616,20 +652,26 @@ The most striking n=3 finding is variance. RA token counts are nearly identical
 across repetitions — T1 optimized **3987 / 3986 / 3950** (VLM fixed at 2),
 baseline **6788 / 9585 / 9594** (VLM 3/4/4, each extra done-poll ≈ +3k). The
 pure-VLM `general_e2e` on the *same* T1 produced **38282 / 77347 / 96888 tokens at
-46 / 111 / 379 s** — driven by two opposite failure modes:
+46 / 111 / 379 s** — a 2.5× token / 8× wall spread. All three runs *succeeded*:
+each reached the order-confirmation/payment screen with the cart assembled and
+stopped before paying. The spread is **among successes**, set by how many
+intermediate selection cards the assistant surfaced for the re-driving agent to
+click through (5 / 9 / 11 steps) plus per-step gateway latency — not success vs.
+failure. The re-driving design also admits two sharper failure modes, observed in
+earlier (n=1) exploration outside this trio:
 
 - **Premature termination:** after cold launch the Qwen app restores a prior
-  conversation/order card; lacking a fresh-conversation step, the agent reads it
-  as done and exits in 1–2 steps.
+  conversation/order card; lacking a fresh-conversation step, the agent can read
+  it as done and exit in 1–2 steps.
 - **Runaway:** the agent never recognizes completion and loops toward the step
-  cap, re-sending the full screenshot + 3-image history each step (in Round 1 this
-  ran to a 50-step / 531,597-token tail).
+  cap, re-sending the full screenshot + 3-image history each step (one such
+  exploration run reached a 50-step / 531,597-token tail).
 
 The lesson is a system one: RelayAgent's explicit fresh-conversation step
 (`x_prepare_fresh_conversation`) and structured plan make its cost *predictable*,
 which a pure-VLM screenshot-to-action loop is not. For an operator paying per
-token, a predictable ~4 k beats a 38 k–530 k lottery. **Predictable cost is itself
-a system contribution.**
+token, a predictable ~4 k beats a 38 k–97 k spread (and a ~530 k tail in the worst
+observed run). **Predictable cost is itself a system contribution.**
 
 ### 8.5 Reply-content quality recovery
 
@@ -697,9 +739,11 @@ at zero VLM calls — hence the near-constant 3987 / 3986 / 3950 token figure
 (§8.4).
 
 For contrast, `general_e2e` on the identical task and backend spent
-**38282–96888 tokens over 5–11 steps** in the same n=3 round, re-deriving each
-step (cart, store pick, quantity) from full screenshots plus a 3-image visual
-history — an order of magnitude more, with two-order-of-magnitude variance.
+**38282–96888 tokens over 5–11 steps** in the same n=3 round — all three runs
+reached the same payment screen, but re-deriving each step (cart, store pick,
+quantity) from full screenshots plus a 3-image visual history cost an order of
+magnitude more than RA, and the step count (hence cost) swung run to run with how
+much the assistant auto-resolved.
 
 #### 8.8.2 T2 flow — RA optimized (run `flow_optimized_r1`, 8662 tokens total)
 
@@ -723,14 +767,72 @@ cost less than a *single* general_e2e order leg. The discover leg alone replaced
 the **23 native-UI steps** a manual run needed to scroll notes by hand (§8.2,
 Q1) with 6 plan steps.
 
+### 8.9 Threats to validity
+
+We surface the evaluation's main soft spots and the experiments that would close
+them, so the claims above are read at their actual strength.
+
+1. **Manifest-isolation ablation (the key missing config).** Q2's 19× / 11× is
+   attributed to delegation (§8.2, "what the 19× is attributable to"), but the four
+   configs do not isolate how much the *manifest optimization* adds on top of
+   delegation itself. The missing fifth config is a **manifest-free delegation
+   relay**: same delegation (type the prompt into the in-app agent, wait, hand off)
+   but with the entry path and post-result affordances VLM-grounded at runtime
+   instead of read from the card. If our framing holds, it should sit *between*
+   general_e2e and RA — much cheaper than general_e2e (delegation already removed
+   the task cognition) yet pricier and less deterministic than RA (it re-derives
+   the fixed prefix each run). Observing that ordering is what cleanly separates
+   delegation's contribution from the manifest's. (Requires a new adapter mode,
+   e.g. `RELAY_NO_MANIFEST=1`; not yet implemented.)
+2. **Baseline token-efficiency, and token ≠ dollars.** general_e2e re-sends a full
+   screenshot plus a 3-image visual history each step, so its count is dominated by
+   image-*prompt* tokens. We report `total_tokens`; image/prompt tokens are
+   typically priced well below completion tokens and are cacheable, so the
+   **dollar** gap is smaller than the token gap, and a more frugal pure-VLM
+   baseline (a11y-text / set-of-marks input rather than raw screenshots) would
+   narrow Q2. We therefore frame Q2 as a *token / call-count* result, not a
+   cost-in-dollars claim; the prompt/completion/image split and a frugal-baseline
+   comparison are future work.
+3. **Sample size and task breadth.** The instrumented cost/variance study is two
+   tasks at n=3 (RA/general_e2e), manual-UI at n=1; the 28-capability table
+   (§8.2.1) is n=1 author-run functional passes, not repeated success-rate
+   measurement. We make no strong statistical claim from n=3 and report ranges, not
+   confidence intervals.
+4. **Predictability evidence provenance.** Within the reproducible n=3 trio the
+   general_e2e spread is 2.5× tokens / 8× wall, all successes; the sharper
+   premature-exit and runaway modes (§8.4) come from earlier *untracked*
+   exploration and are not reproduced here. The claim is strongest as
+   *RA-is-near-constant* (1.01×) and weaker as *general_e2e-is-wildly-unstable*
+   until those modes are reproduced under instrumentation.
+5. **Handoff safety is happy-path only.** §8.6 shows the handoff held across a
+   handful of non-adversarial runs; we have not stress-tested the boundary — an
+   assistant that auto-submits in one turn, a mis-annotated
+   `handoff_to_user_required`, or a CTA whose label differs from the manifest's
+   `stop_before`. The contract's robustness is asserted, not yet adversarially
+   evaluated.
+6. **Cross-round / cross-host comparison.** The manual-UI column is Round-1 n=1
+   (pre-perf-trim) against a later n=3 RA round, and T1's manual leg runs in the
+   Taobao host app while the assistant legs run in Qwen (shared fulfillment
+   backend). The 18.9× / 34× manual-UI multipliers are therefore *indicative*; the
+   strictly controlled, same-round comparisons are 19.4× / 11.0×.
+7. **a11y hit-rate underpins the token story.** Zero-token taps assume uiautomator
+   resolves nearly every selector; WebView-rendered content defeats it (§9). We do
+   not yet report a catalog-wide a11y hit-rate / VLM-fallback rate; where a11y
+   misses, grounding cost reappears.
+
 ---
 
 ## 9. Limitations & Known Blockers
 
+Evaluation-internal threats (baseline cost, sample size, predictability
+provenance, handoff safety, manifest-isolation ablation) are itemized in §8.9;
+this section covers the broader system-level limits.
+
 - **Sample size & scope.** The benchmark covers two tasks at n=3 (RA /
   general_e2e); MW manual-UI is n=1. Full 7-card / per-capability success rates
   (§8.2) are not yet measured. T1's manual leg uses a different host app (Taobao)
-  than the assistant legs (Qwen), though the fulfillment backend is shared.
+  than the assistant legs (Qwen), though the fulfillment backend is shared. (See
+  §8.9 for the planned experiments that close these.)
 - **Taobao server-side risk-control wall.** `buy_product` /
   `order_local_delivery` can hit an account/device-level "访问被拒绝" wall (and a
   one-time identity-verification gate we hit mid-benchmark); this is not an adapter
@@ -756,8 +858,8 @@ to apps' own logged-in AI agents, not another automation model. The benchmark
 shows the practical payoff of delegation: an order-of-magnitude token reduction
 versus a pure-VLM agent on the same task and the same in-app assistant, a further
 2.4–3.6× from two app-agnostic optimizations, and — the result we did not anticipate —
-**predictable** per-task cost where the pure-VLM baseline varied across two orders
-of magnitude. We are deliberate about what the optimizations buy: token/cost, not
+**predictable** per-task cost where the pure-VLM baseline varied several-fold run
+to run (and far more in earlier exploration). We are deliberate about what the optimizations buy: token/cost, not
 wall-clock (which the in-app assistant's own latency dominates).
 
 Future work: more cards (and OEM-published cards); richer handoff semantics;
@@ -878,3 +980,12 @@ single irreversible payment tap.
 - [x] Verify §2 Related-Work cells against 2026-current product docs. → footnoted; A2A→Linux Foundation, AppFunctions=alpha, A3=benchmark not agent.
 - [x] Appendix B annotated card. → Amap `hail_ride`.
 - [x] Write Abstract.
+- [x] Add §8.9 Threats to Validity (baseline cost, eval scope, predictability provenance, safety, cross-round, a11y hit-rate).
+
+Threats-to-validity follow-ups (newly opened, §8.9):
+- [ ] **Manifest-isolation ablation** — 5th config `RELAY_NO_MANIFEST=1` (delegation, VLM-grounded prefix); expect general_e2e > no-manifest > RA. *(needs new adapter mode)*
+- [ ] **Frugal pure-VLM baseline** — re-run general_e2e with a11y-text / set-of-marks input (not 3-image history); report prompt/completion/image token split + rough $ to re-state Q2 as cost, not just tokens.
+- [ ] **Reproduce the failure modes** — instrumented runs that trigger premature-exit (seeded stale conversation) and runaway, to put §8.4's sharp variance on tracked data.
+- [ ] **Adversarial handoff tests** — assistant auto-submits in one turn / mis-annotated flag / CTA label ≠ `stop_before`; show the contract holds or where it leaks.
+- [ ] **Catalog-wide a11y hit-rate** — % taps resolved by uiautomator vs VLM-fallback across the 28 capabilities.
+- [ ] **Widen the cost pool** — add a few more tasks to the n=3 instrumented set so headline numbers rest on more than two tasks.
