@@ -601,7 +601,20 @@ plus a 3-frame history** — on the order of **~30 screenshots** over a 9-step r
 The headline 19× is therefore, concretely, **~1 image vs ~30**. Because
 prompt/image tokens are priced well below completion tokens and are cacheable, the
 **dollar** gap is smaller than this token gap; we report the token / call-count
-axis and flag a $-normalized restatement as future work (§8.9).
+axis and restate it in dollars next.
+
+**Dollar restatement.** Priced at OpenRouter's public rate for the served model
+`qwen3.5-27b` ($0.195/M input, $1.56/M output, accessed 2026-06-03), per-task cost
+is RA optimized **$0.00098** (~0.1¢), RA baseline $0.0021 (2.2×), general_e2e
+$0.0163 (16.6×), manual-UI $0.0158 (16.1×). The dollar multiplier (16.6×) is
+modestly *smaller* than the token multiplier (19.4×): at a 1:8 input:output price
+ratio, RA optimized's slightly higher completion fraction (3.8% vs general_e2e's
+1.2%) lifts its effective per-token price just enough to compress the gap ~14%.
+That compression is ratio-determined, so it is unaffected by the promotional
+discount baked into the listed price — only the absolute cents scale. Prompt
+caching, which the ~97–99% prompt-heavy high-volume configs are most amenable to,
+would widen the absolute gap further. Full method + a T2 cross-check (same
+pattern: $9.4× vs 11.0× token): `report/cost-dollar-analysis.md`.
 
 **What the 19× is — and isn't — attributable to.** The lever is *delegation*, not
 the manifest. The expensive, run-to-run-variable cognition — which stores exist,
@@ -812,12 +825,11 @@ them, so the claims above are read at their actual strength.
    tokens are priced well below completion tokens and are cacheable, the **dollar**
    gap is smaller than the token gap, and a more frugal pure-VLM baseline (a11y-text
    / set-of-marks input rather than raw screenshots) would narrow Q2. We therefore
-   frame Q2 as a *token / call-count* result, not a cost-in-dollars claim. Two
-   strengthenings remain future work: a $-normalized restatement using public
-   Qwen-VL input/output pricing, and a frugal-input rerun — the cheapest being
-   `HISTORY_N_IMAGES=1` (drop the 3-frame history, keep one screenshot/step), whose
-   prompt-token delta vs the 3-image runs directly measures the history tax without
-   a code change.
+   frame Q2 as a *token / call-count* result; a dollar restatement (§8.2,
+   `report/cost-dollar-analysis.md`) shows the gap is 16.6× in dollars vs 19.4× in
+   tokens — modestly compressed but the same order. The remaining check is a
+   frugal-input rerun (`HISTORY_N_IMAGES=1`, dropping the 3-frame history) to
+   measure the history tax directly without a code change.
 3. **Sample size and task breadth.** The instrumented cost/variance study is two
    tasks at n=3 (RA/general_e2e), manual-UI at n=1; the 28-capability table
    (§8.2.1) is n=1 author-run functional passes, not repeated success-rate
