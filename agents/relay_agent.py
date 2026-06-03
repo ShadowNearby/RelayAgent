@@ -70,6 +70,13 @@ _DISMISS_PERMS_ENV = "RELAY_DISMISS_PERMISSIONS"  # set to "0" to disable system
 # baseline vs optimized token/time can be measured — see CLAUDE.md §6/§8).
 _PRECHECK_ENV = "RELAY_PRECHECK"  # set to "0" to disable the wait_for_reply two-stage precheck (baseline = VLM-poll every tick)
 _SCRAPE_ENV = "RELAY_SCRAPE"  # set to "0" to disable uiautomator reply-text scrape (baseline = VLM-only extraction)
+# Manifest-isolation ablation (§8.9). When "1", the adapter loads NO card and
+# drives the same *delegation skeleton* — fresh conversation, type the whole
+# user request, wait, accept-defaults advance, hand off before the irreversible
+# CTA — but every affordance (input box, send, proceed buttons, the CTA stop)
+# is VLM-grounded at runtime instead of read from a card. Isolates the value of
+# *delegation* from the value of the authored manifest (see _build_no_manifest_plan).
+_NO_MANIFEST_ENV = "RELAY_NO_MANIFEST"
 
 # Inter-tick sleep on a wait_for_reply precheck skip. Keeps the poll loop from
 # busy-spinning while the reply streams, but stacks on top of MobileWorld's own
@@ -106,6 +113,29 @@ _REPLY_WATCH_SYSTEM = (
     '{"done": <true|false>, "text": "<the assistant\'s reply text verbatim, '
     'or null if you cannot read it>"} . '
     "Keep `text` short (<= 500 chars); summarize tail only if too long."
+)
+_NM_ADVANCE_SYSTEM = (
+    "You are driving a phone on behalf of a user whose task is being handled by "
+    "an in-app AI assistant. The assistant has replied and may show option cards "
+    "(store choices, item specs, quantities). Your job is NOT to make real "
+    "choices for the user — only to ACCEPT the assistant's recommended DEFAULTS "
+    "and advance the flow until the screen reaches the final human-confirmation "
+    "step, then STOP. Rules, in priority order:\n"
+    "1. If ANY visible button would perform an IRREVERSIBLE action — pay, place/"
+    "submit the order, confirm payment, confirm a ride or booking (labels like "
+    "立即支付, 支付宝付款, 微信支付, 提交订单, 确认支付, 立即下单, 去支付, 确认下单, "
+    "立即叫车, 确认叫车, Pay, Place order) — the task MUST stop here for the human. "
+    "Set cta_present=true and return NO advance point.\n"
+    "2. Otherwise, if a button simply PROCEEDS by accepting the assistant's "
+    "recommended/default option (labels like 选这个, 选好了, 确定, 确认, 下一步, "
+    "继续, 保存, Confirm, Next), return its center as `advance`.\n"
+    "3. Otherwise (the reply is just informational, nothing to advance, or you "
+    "are unsure), set done=true and return no advance.\n"
+    "When unsure whether a button is irreversible, treat it as irreversible "
+    "(prefer stopping over tapping). Reply with ONE ```json``` fenced object: "
+    '{"cta_present": <bool>, "cta_label": "<text or null>", '
+    '"advance": [<x 0-999>, <y 0-999>] or null, "advance_label": "<text or null>", '
+    '"done": <bool>}.'
 )
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _FENCE_ANY = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
@@ -806,7 +836,11 @@ class RelayAgent(_MCPAgentBase):
         self.dismiss_permissions: bool = os.getenv(_DISMISS_PERMS_ENV, "1") != "0"
         self.precheck_enabled: bool = os.getenv(_PRECHECK_ENV, "1") != "0"
         self.scrape_enabled: bool = os.getenv(_SCRAPE_ENV, "1") != "0"
+        self.no_manifest: bool = os.getenv(_NO_MANIFEST_ENV, "0") == "1"
         self._permission_dismissed_count: int = 0
+        # no-manifest ablation state (RELAY_NO_MANIFEST)
+        self._nm_advance_iters: int = 0
+        self._nm_ground_retries: dict[int, int] = {}
 
     def openai_chat_completions_create(  # type: ignore[override]
         self,
@@ -890,11 +924,20 @@ class RelayAgent(_MCPAgentBase):
                 f"{_TARGET_APP_ENV} must be set to the target app's package id "
                 "(e.g. com.aliyun.tongyi)."
             )
-        self.card = load_card_by_app_id(self.target_app, self.manifests_dir)
-        logger.info(
-            f"Loaded card {self.card['app_id']} v{self.card.get('card_version')} "
-            f"({self.card['app_name']})"
-        )
+        if self.no_manifest:
+            # Manifest-isolation ablation: load NO card at all. The relay drives
+            # the delegation skeleton with runtime VLM grounding only.
+            self.card = None
+            logger.info(
+                f"{_NO_MANIFEST_ENV}=1: manifest-free delegation relay for "
+                f"{self.target_app} (no card loaded)"
+            )
+        else:
+            self.card = load_card_by_app_id(self.target_app, self.manifests_dir)
+            logger.info(
+                f"Loaded card {self.card['app_id']} v{self.card.get('card_version')} "
+                f"({self.card['app_name']})"
+            )
         self.plan = []
         self.cursor = 0
         self._planned = False
@@ -921,20 +964,70 @@ class RelayAgent(_MCPAgentBase):
         self._capture_scrolls = 0
         self._capture_idle = 0
         self._permission_dismissed_count = 0
+        self._nm_advance_iters = 0
+        self._nm_ground_retries = {}
+
+    def _build_no_manifest_plan(self) -> list[Step]:
+        """Manifest-free delegation relay (§8.9 manifest-isolation ablation).
+
+        Same *delegation skeleton* as the card path — open a fresh conversation,
+        type the WHOLE user request as one turn, wait for the reply, accept the
+        assistant's defaults and advance, then hand off before any irreversible
+        CTA — but every affordance is VLM-grounded at runtime instead of read
+        from a card. The only app fact used is the package id (which the runner
+        already supplies via RELAY_TARGET_APP, exactly as general_e2e gets it).
+        Isolates the value of delegation from the value of the authored manifest.
+        """
+        plan: list[Step] = []
+        if not self.skip_open_app:
+            plan.append(Step("open_app", {"package": self.target_app}, note="cold-launch"))
+        if self.fresh_conversation:
+            plan.append(Step(
+                "nm_ground_tap",
+                {"desc": "the control that starts a NEW / blank conversation "
+                         "(a pencil or compose icon, a ＋, or a 新建对话 / 新对话 label)",
+                 "ui_candidates": ["新建对话", "新对话", "New chat", "新建"],
+                 "optional": True},
+                note="fresh conversation (VLM-grounded)",
+            ))
+        plan.append(Step(
+            "nm_ground_tap",
+            {"desc": "the chat message input text box where you type a message to "
+                     "the assistant (a wide field, usually along the bottom)",
+             "optional": False},
+            note="focus input (VLM-grounded)",
+        ))
+        plan.append(Step("input_text", {"text": self.instruction}, note="user query"))
+        plan.append(Step(
+            "nm_ground_tap",
+            {"desc": "the SEND button for the message just typed (an up-arrow or "
+                     "paper-plane icon, or a 发送 button, beside the input box)",
+             "ui_candidates": ["发送", "Send"],
+             "optional": False},
+            note="submit (VLM-grounded)",
+        ))
+        plan.append(Step("wait_for_reply", {"max_seconds": 60}, note="await assistant reply"))
+        plan.append(Step("nm_advance", {"max_iters": 6}, note="accept-defaults advance / CTA stop"))
+        plan.append(Step("handoff", {"reason": "manifest-free relay reached the pre-CTA screen"}))
+        return plan
 
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
         screenshot = observation["screenshot"]
         screen_w, screen_h = screenshot.size
 
         if not self._planned:
-            cap_id, invocation = route_capability(self, self.instruction, self.card)
-            self.plan = build_plan(
-                self.card,
-                cap_id,
-                invocation,
-                fresh_conversation=self.fresh_conversation,
-                skip_open_app=self.skip_open_app,
-            )
+            if self.no_manifest:
+                self.plan = self._build_no_manifest_plan()
+                cap_id = "(no-manifest)"
+            else:
+                cap_id, invocation = route_capability(self, self.instruction, self.card)
+                self.plan = build_plan(
+                    self.card,
+                    cap_id,
+                    invocation,
+                    fresh_conversation=self.fresh_conversation,
+                    skip_open_app=self.skip_open_app,
+                )
             self._planned = True
             logger.info(
                 f"Plan ({len(self.plan)} steps) for capability={cap_id!r}: "
@@ -1053,6 +1146,39 @@ class RelayAgent(_MCPAgentBase):
             # the message list (everything visually BELOW is the reply).
             self._last_input_text = p["text"]
             return JSONAction(action_type="input_text", text=p["text"], clear_text=True), True, ""
+
+        if kind == "nm_ground_tap":
+            # Manifest-free affordance: VLM-ground a semantic description (no
+            # card selector). Optional steps (e.g. fresh-conversation) skip on
+            # miss; required ones retry a couple ticks before giving up.
+            desc = p["desc"]
+            optional = bool(p.get("optional"))
+            # Manifest-free, but still app-agnostic: try generic affordance
+            # vocabulary via uiautomator (e.g. "发送"/"新建对话") before paying
+            # for a VLM grounding call. These are generic UI words, not a card
+            # selector. Falls through to the VLM on miss.
+            for cand in p.get("ui_candidates") or []:
+                hit = _ground_text_via_uiautomator(cand, screen_w, screen_h)
+                if hit is not None:
+                    return JSONAction(action_type="click", x=hit[0], y=hit[1]), True, (
+                        f"uiautomator {cand!r}"
+                    )
+            try:
+                x, y = self._ground_text(desc, screenshot, screen_w, screen_h)
+            except Exception as e:
+                budget = self._nm_ground_retries.get(self.cursor, 0)
+                if not optional and budget < 2:
+                    self._nm_ground_retries[self.cursor] = budget + 1
+                    logger.warning(
+                        f"nm_ground_tap {desc!r} grounding failed ({e}); "
+                        f"retry {budget + 1}/2"
+                    )
+                    return JSONAction(action_type="wait"), False, f"ground retry {budget + 1}/2"
+                logger.warning(
+                    f"nm_ground_tap {desc!r} skipped (optional={optional}): {e}"
+                )
+                return JSONAction(action_type="wait"), True, "grounding failed; skipped"
+            return JSONAction(action_type="click", x=x, y=y), True, "VLM-grounded"
 
         if kind == "wait_ms":
             return JSONAction(action_type="wait"), True, ""
@@ -1478,6 +1604,52 @@ class RelayAgent(_MCPAgentBase):
                 f"tap copy via {note}",
             )
 
+        if kind == "nm_advance":
+            # Manifest-free advance loop: VLM decides whether to (a) STOP at an
+            # irreversible CTA → hand off, (b) tap a proceed/accept-defaults
+            # button and re-enter, or (c) finish (informational reply / nothing
+            # actionable). Conservative: unsure → stop. Holds the cursor while
+            # advancing (like wait_for_reply).
+            max_iters = int(p.get("max_iters", 6))
+            # Refresh the scraped reply so the eventual handoff carries content.
+            if self.scrape_enabled:
+                try:
+                    scraped = _extract_reply_text_from_dump(self._last_input_text, screen_h)
+                    if scraped and (
+                        not self._last_agent_reply
+                        or len(scraped) > len(self._last_agent_reply)
+                    ):
+                        self._last_agent_reply = scraped
+                except Exception:
+                    pass
+            probe = self._nm_probe_advance(screenshot)
+            if probe.get("cta_present"):
+                logger.info(
+                    f"nm_advance: irreversible CTA {probe.get('cta_label')!r} "
+                    "detected; stopping for handoff"
+                )
+                return JSONAction(action_type="wait"), True, (
+                    f"CTA {probe.get('cta_label')!r} → handoff"
+                )
+            adv = probe.get("advance_xy")
+            if adv and self._nm_advance_iters < max_iters:
+                self._nm_advance_iters += 1
+                ax, ay = adv
+                logger.info(
+                    f"nm_advance iter {self._nm_advance_iters}/{max_iters}: "
+                    f"tap {probe.get('advance_label')!r} @ ({ax},{ay})"
+                )
+                return JSONAction(action_type="click", x=ax, y=ay), False, (
+                    f"advance {self._nm_advance_iters}/{max_iters} "
+                    f"{probe.get('advance_label')!r}"
+                )
+            reason = (
+                "iters exhausted" if self._nm_advance_iters >= max_iters
+                else "no further actionable step"
+            )
+            logger.info(f"nm_advance: {reason}; advancing to handoff")
+            return JSONAction(action_type="wait"), True, reason
+
         if kind == "handoff":
             self._maybe_persist_reply()
             reply_note = (
@@ -1634,3 +1806,61 @@ class RelayAgent(_MCPAgentBase):
         else:
             text = None
         return done, text
+
+    def _nm_probe_advance(self, screenshot) -> dict:
+        """VLM probe for the manifest-free advance loop. Returns
+        {cta_present, cta_label, advance_xy: [px,py]|None, advance_label, done}.
+        Conservative: any empty/unparseable response → cta_present=True (stop),
+        so we never blindly tap toward an irreversible action."""
+        out = {
+            "cta_present": False, "cta_label": None,
+            "advance_xy": None, "advance_label": None, "done": False,
+        }
+        b64 = pil_to_base64(screenshot)
+        messages = [
+            {"role": "system", "content": _NM_ADVANCE_SYSTEM},
+            {"role": "user", "content": [
+                {"type": "text", "text": "What is the next safe step? Follow the policy."},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            ]},
+        ]
+        raw = self.openai_chat_completions_create(
+            model=self.model_name, messages=messages, temperature=0.0, max_tokens=200,
+        )
+        if not raw:
+            logger.warning("nm_advance probe empty; stopping for safety")
+            out["cta_present"] = True
+            out["cta_label"] = "(probe empty → stop)"
+            return out
+        m = _JSON_FENCE.search(raw) or _FENCE_ANY.search(raw)
+        payload = m.group(1) if m else raw
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            import ast
+            try:
+                data = ast.literal_eval(payload)
+            except (ValueError, SyntaxError):
+                logger.warning(f"nm_advance probe unparseable: {raw!r}; stopping for safety")
+                out["cta_present"] = True
+                out["cta_label"] = "(unparseable → stop)"
+                return out
+        if not isinstance(data, dict):
+            out["cta_present"] = True
+            return out
+        out["cta_present"] = bool(data.get("cta_present"))
+        out["cta_label"] = data.get("cta_label")
+        out["done"] = bool(data.get("done"))
+        out["advance_label"] = data.get("advance_label")
+        adv = data.get("advance")
+        if isinstance(adv, list) and len(adv) == 2 and not out["cta_present"]:
+            try:
+                rx, ry = float(adv[0]), float(adv[1])
+                if rx > 999 or ry > 999:
+                    out["advance_xy"] = [int(rx), int(ry)]
+                else:
+                    w, h = screenshot.size
+                    out["advance_xy"] = [int(rx * w / 999), int(ry * h / 999)]
+            except (ValueError, TypeError):
+                out["advance_xy"] = None
+        return out
