@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import atexit
 import re
 import subprocess
 import sys
@@ -55,6 +56,8 @@ from mobile_world.agents.utils.helpers import pil_to_base64
 from mobile_world.runtime.utils.models import JSONAction
 
 from agents._adb import adb_base, force_stop, swipe_down
+from agents._adb import cold_launch as _cold_launch
+from agents._adb import screencap as _adb_screencap
 from agents.action_planner import Step, build_plan
 from agents.capability_router import route_capability
 from agents.card_loader import bounds_center, load_card_by_app_id
@@ -77,6 +80,42 @@ _SCRAPE_ENV = "RELAY_SCRAPE"  # set to "0" to disable uiautomator reply-text scr
 # is VLM-grounded at runtime instead of read from a card. Isolates the value of
 # *delegation* from the value of the authored manifest (see _build_no_manifest_plan).
 _NO_MANIFEST_ENV = "RELAY_NO_MANIFEST"
+
+# Defer the target-app cold-launch to the agent's FIRST predict instead of
+# pre-launching it before `mw test`. By then MobileWorld's framework cold-start
+# (Python import + uvicorn server boot + env validation + client connect, ~2.7s)
+# is already done — so it lands BEFORE the app launch, outside both the screen
+# recording and the task wall-clock. Set RELAY_AGENT_LAUNCH=1 (the scripts do).
+# Keep RELAY_SKIP_OPEN_APP=1 alongside it: the agent owns the launch, so the
+# planner must still skip its own open_app step. See CLAUDE.md §3.6.
+_AGENT_LAUNCH_ENV = "RELAY_AGENT_LAUNCH"
+# Directory for the screen recording. When set, the agent starts the recorder
+# at the same first-predict moment as the launch (so the framework boot is not
+# on tape) and stops/finalizes it at process exit via atexit.
+_RECORD_DIR_ENV = "RELAY_RECORD_DIR"
+# Where to write the framework-excluded task wall_clock.json. Defaults to the
+# live traj dir (traj_logs/user_task). Flow legs run with --log-file-root, so
+# their traj lives elsewhere; flow_runner sets this to that leg's user_task dir
+# so aggregate_metrics finds wall_clock.json next to the leg's traj.json.
+_WALL_OUT_ENV = "RELAY_WALL_OUT"
+
+# Skip MobileWorld's post-step screencap for deterministic steps. RelayAgent's
+# plan is deterministic and most steps never read the incoming screenshot; the
+# ~0.85s screencap + ~0.2s settle after such a step is dead time. When on, the
+# agent tags those actions with action_json["skip_screenshot"] so the (patched)
+# MW client reuses the last real frame instead of re-capturing. Auto-enabled by
+# `run_nl.py --record` (the screen video already covers the run). Default off.
+# See CLAUDE.md "录屏模式跳过每步截图".
+_SKIP_STEP_SCREENSHOT_ENV = "RELAY_SKIP_STEP_SCREENSHOT"
+# Small settle the agent sleeps inside predict after emitting a screencap-skipped
+# deterministic action, so a tap's short animation lands before the next action.
+_BLIND_STEP_SLEEP = float(os.getenv("RELAY_BLIND_STEP_SLEEP", "0.15"))
+# Step kinds whose materialization reads the incoming observation screenshot
+# (hash precheck + VLM poll). Their predecessor must NOT skip the screencap, and
+# the step itself must keep getting fresh frames. tap_text / nm_ground_tap try
+# uiautomator first and self-capture a fresh frame on VLM fallback (see
+# _materialize), so they are treated as deterministic for look-ahead purposes.
+_VISION_STEP_KINDS = frozenset({"wait_for_reply"})
 
 # Inter-tick sleep on a wait_for_reply precheck skip. Keeps the poll loop from
 # busy-spinning while the reply streams, but stacks on top of MobileWorld's own
@@ -837,7 +876,18 @@ class RelayAgent(_MCPAgentBase):
         self.precheck_enabled: bool = os.getenv(_PRECHECK_ENV, "1") != "0"
         self.scrape_enabled: bool = os.getenv(_SCRAPE_ENV, "1") != "0"
         self.no_manifest: bool = os.getenv(_NO_MANIFEST_ENV, "0") == "1"
+        self.skip_step_screenshot: bool = os.getenv(_SKIP_STEP_SCREENSHOT_ENV, "0") == "1"
         self._permission_dismissed_count: int = 0
+        # Deferred-launch / recording / task-clock state. The app cold-launch,
+        # the screen recorder, and the wall-clock anchor are all established on
+        # the FIRST predict (see _begin_task_once) so MobileWorld's framework
+        # cold-start lands before them and is excluded from both the recording
+        # and wall_clock.json. _begin_task_once runs at most once per task.
+        self.agent_launch: bool = os.getenv(_AGENT_LAUNCH_ENV, "0") == "1"
+        self.record_dir: str | None = os.getenv(_RECORD_DIR_ENV) or None
+        self._task_started: bool = False
+        self._task_t0: float | None = None
+        self._recorder: Any = None
         # no-manifest ablation state (RELAY_NO_MANIFEST)
         self._nm_advance_iters: int = 0
         self._nm_ground_retries: dict[int, int] = {}
@@ -1011,7 +1061,74 @@ class RelayAgent(_MCPAgentBase):
         plan.append(Step("handoff", {"reason": "manifest-free relay reached the pre-CTA screen"}))
         return plan
 
+    def _begin_task_once(self) -> None:
+        """First-predict hook: anchor the task wall-clock, optionally launch the
+        target app, and optionally start the screen recorder — in that order, so
+        everything after MobileWorld's framework cold-start (already done by the
+        time predict is first called) is excluded from both the recording and
+        wall_clock.json. Idempotent: the body runs once per task.
+
+        atexit (fires when the `mw test` subprocess exits — on finished, on EOF
+        after a handoff ask_user, or on error) finalizes the recording and
+        writes wall_clock.json (phase="task", framework-excluded). The scripts
+        no longer write wall_clock.json themselves; this is the source of truth.
+        """
+        if self._task_started:
+            return
+        self._task_started = True
+        self._task_t0 = time.monotonic()
+
+        if self.record_dir:
+            try:
+                from agents import _recorder
+                self._recorder = _recorder.start(Path(self.record_dir))
+                logger.info(f"screen recording (agent-owned) → {self.record_dir}")
+            except Exception as e:  # recording must never abort the task
+                logger.warning(f"recorder start failed: {e}")
+                self._recorder = None
+
+        if self.agent_launch and self.target_app:
+            logger.info(f"agent-owned cold-launch of {self.target_app} (post-framework)")
+            try:
+                _cold_launch(self.target_app)
+            except Exception as e:
+                logger.warning(f"agent cold-launch failed: {e}")
+
+        atexit.register(self._finalize_task)
+
+    def _finalize_task(self) -> None:
+        """Stop the recorder and write the framework-excluded task wall-clock.
+        Registered with atexit; tolerant of being called once at process exit."""
+        if self._recorder is not None:
+            try:
+                final = self._recorder.stop()
+                if final:
+                    logger.info(f"recording saved → {final}")
+            except Exception as e:
+                logger.warning(f"recorder stop failed: {e}")
+            self._recorder = None
+        if self._task_t0 is not None:
+            wall_s = round(time.monotonic() - self._task_t0, 1)
+            out = os.getenv(_WALL_OUT_ENV)
+            wall_path = (
+                Path(out) if out
+                else _REPO_ROOT / "traj_logs" / "user_task" / "wall_clock.json"
+            )
+            try:
+                if wall_path.parent.is_dir():
+                    wall_path.write_text(
+                        json.dumps({"wall_s": wall_s, "phase": "task"}),
+                        encoding="utf-8",
+                    )
+                    logger.info(f"task wall_s={wall_s} (framework-excluded) → {wall_path}")
+                else:
+                    logger.warning(f"wall_clock dir missing: {wall_path.parent}")
+            except OSError as e:
+                logger.warning(f"wall_clock write failed: {e}")
+            self._task_t0 = None
+
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
+        self._begin_task_once()
         screenshot = observation["screenshot"]
         screen_w, screen_h = screenshot.size
 
@@ -1033,6 +1150,12 @@ class RelayAgent(_MCPAgentBase):
                 f"Plan ({len(self.plan)} steps) for capability={cap_id!r}: "
                 + " → ".join(f"{s.kind}" for s in self.plan)
             )
+            if self.skip_step_screenshot:
+                logger.info(
+                    "skip-step-screenshot ON: deterministic steps reuse last "
+                    f"frame (settle={_BLIND_STEP_SLEEP}s); vision steps "
+                    f"{sorted(_VISION_STEP_KINDS)} keep fresh capture"
+                )
 
         # System permission popup hook — runs BEFORE the planned step. If a
         # known permission controller is foreground we tap the most-permissive
@@ -1062,6 +1185,19 @@ class RelayAgent(_MCPAgentBase):
         action, advance, extra_note = self._materialize(step, screenshot, screen_w, screen_h)
         if advance:
             self.cursor += 1
+
+        # Look-ahead screencap skip: if the NEXT step the runner will feed a
+        # screenshot to is vision-independent, tell the (patched) MW client to
+        # skip its post-step screencap and reuse the last real frame. The next
+        # step is plan[cursor] after advancing, or the same held step otherwise;
+        # a plan-exhausted next step (→ finished) needs no screenshot either.
+        if self.skip_step_screenshot:
+            nxt = self.plan[self.cursor] if self.cursor < len(self.plan) else None
+            if nxt is None or nxt.kind not in _VISION_STEP_KINDS:
+                action.action_json = {**(action.action_json or {}), "skip_screenshot": True}
+                if _BLIND_STEP_SLEEP > 0:
+                    time.sleep(_BLIND_STEP_SLEEP)
+
         note = step.note + (f"; {extra_note}" if extra_note else "")
         # Display 1-based index of the CURRENT step (the one we just emitted
         # an action for), not the next one. wait_for_reply re-enters the same
@@ -1072,6 +1208,19 @@ class RelayAgent(_MCPAgentBase):
         )
         logger.info(f"{thought} → {action.model_dump(exclude_none=True)}")
         return thought, action
+
+    def _fresh_vision_frame(self, screenshot):
+        """Return a frame safe for VLM grounding. In skip-step-screenshot mode
+        the incoming `screenshot` may be a reused stale frame, so capture the
+        current screen directly; fall back to the incoming one on capture
+        failure or when skipping is off."""
+        if not self.skip_step_screenshot:
+            return screenshot
+        fresh = _adb_screencap()
+        if fresh is None:
+            logger.warning("skip-mode VLM fallback: screencap failed; using stale frame")
+            return screenshot
+        return fresh
 
     def _materialize(
         self,
@@ -1136,7 +1285,8 @@ class RelayAgent(_MCPAgentBase):
                 x, y = xy
                 note = "uiautomator"
             else:
-                x, y = self._ground_text(p["text"], screenshot, screen_w, screen_h)
+                frame = self._fresh_vision_frame(screenshot)
+                x, y = self._ground_text(p["text"], frame, screen_w, screen_h)
                 note = "VLM"
             return JSONAction(action_type="click", x=x, y=y), True, note
 
@@ -1164,7 +1314,8 @@ class RelayAgent(_MCPAgentBase):
                         f"uiautomator {cand!r}"
                     )
             try:
-                x, y = self._ground_text(desc, screenshot, screen_w, screen_h)
+                frame = self._fresh_vision_frame(screenshot)
+                x, y = self._ground_text(desc, frame, screen_w, screen_h)
             except Exception as e:
                 budget = self._nm_ground_retries.get(self.cursor, 0)
                 if not optional and budget < 2:
