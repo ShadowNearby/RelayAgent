@@ -26,18 +26,29 @@ agents both struggle to *act inside* third-party super-apps: the vendor-API rout
 most super-apps never ship, while the pure-GUI route re-drives the entire
 interface — brittle, slow, and redundant with work the app could do itself. We
 observe that most super-apps **already embed their own logged-in AI agent** (Amap's
-assistant, Yuanbao in WeChat, Taobao/闪购's assistant, Xiaohongshu's 点点, WPS AI).
-The missing piece is therefore not a smarter automation model but a *discovery
-layer*: a machine-readable contract that tells an OS-level agent which apps embed
-an agent, where its input box is, what it can do, and — critically — when control
-must return to the user. We present **RelayAgent**: a per-app card specification, a
-GUI-mediated relay adapter that materializes a card into deterministic device
-actions, and a `handoff_to_user_required` contract that hands control back before
-any irreversible action (payment, ride confirmation, order submission). On a
-real-device benchmark over two representative tasks (a food order and a
-cross-app discover-then-ride flow), delegating through the in-app agent and
-applying two app-agnostic efficiency optimizations (a two-stage reply-completion
-precheck and an accessibility-scrape-first text path) reduces VLM token cost by
+assistant, Yuanbao in WeChat, Taobao/闪购's assistant, Xiaohongshu's 点点, WPS AI) —
+an agent that already holds the user's login, address, and payment context and
+already knows how to do the task. We argue for a **third path**: rather than
+re-implementing the task (pure GUI agents) or waiting for a vendor endpoint
+(A2A / App Intents), **delegate the user's intent to the app's own embedded agent**.
+Realizing this paradigm needs not a smarter automation model but a *contract* that
+makes delegation systematic and safe — a machine-readable, per-app **discovery
+layer** telling an OS-level agent which apps embed an agent, where its input box
+is, what it can do, and, critically, **when control must return to the user**. We
+present **RelayAgent**, which operationalizes delegation-to-in-app-AI with three
+pieces: a per-app card specification (*discovery*), a GUI-mediated relay adapter
+that materializes a card into deterministic device actions (*access*), and a
+`handoff_to_user_required` contract that returns control before any irreversible
+action — payment, ride confirmation, order submission (*safety*). On a real-device
+benchmark over two representative tasks (a food order and a cross-app
+discover-then-ride flow), the paradigm pays off in two stages. **First**, merely
+routing intent into the in-app agent (vs. hand-driving the native UI) is
+*necessary but not sufficient*: it cuts cost by **−68%** where the task spans a
+long cross-app navigation, yet yields essentially nothing (**+2.5%**, flat) on a
+single-app order still driven step-by-step from screenshots. **Second**, *structured
+delegation* (RelayAgent) plus two app-agnostic efficiency optimizations (a
+two-stage reply-completion precheck and an accessibility-scrape-first text path)
+reduces VLM token cost by
 **2.4–3.6× versus an un-optimized delegation baseline** and by **11–19× versus a
 pure step-by-step VLM agent driving the same in-app assistant** (and 19–34× versus
 a pure-VLM agent driving the native UI by hand), while producing **far more
@@ -95,29 +106,45 @@ order of magnitude and — equally important for a system — made the cost
 
 ### 1.1 Contributions
 
-1. **The card specification (SPEC v0.1)** — a machine-readable per-app contract:
-   launcher entry path, capability list, example prompts, latency hints, and the
+1. **The delegation paradigm** — route the user's intent into the app's *own
+   logged-in in-app agent*, occupying the gap between re-driving the full UI (pure
+   GUI agents) and waiting for a vendor endpoint (A2A / App Intents). To our
+   knowledge RelayAgent is the first to treat a *third-party* app's **own embedded**
+   assistant as a **GUI-mediated, endpoint-free delegation target** — distinct from
+   driving the UI oneself (automation camp), from vendor-published endpoints
+   (A2A / App Intents / AppFunctions), and from a vendor wiring its *own* assistant
+   to its *own*-ecosystem services (e.g. Alibaba's Qwen app; §2.5). The leverage is
+   the login / address / payment context the in-app agent already holds. (§1, §2)
+2. **The card specification (SPEC v0.1)** — the machine-readable per-app contract
+   that makes the paradigm *discoverable and reproducible*: launcher entry path,
+   capability list, example prompts, latency hints, and the
    `handoff_to_user_required` policy, with a JSON-Schema mirror as the normative
    validator. (§4)
-2. **A GUI-mediated relay adapter** — materializes a card into deterministic
-   device actions under MobileWorld, accessibility-tree-first and
-   provider-agnostic across VLMs. (§5)
-3. **Multi-app flows + NL routing** — chaining cards across apps with a thin
-   text-LLM relay between steps, and a router that picks a single capability or a
-   whole flow from natural language. (§6)
-4. **Two app-agnostic efficiency optimizations** — a two-stage (perceptual-hash +
-   a11y-text-hash) precheck for reply-completion detection, and an
-   a11y-scrape-first text-extraction path — with a measured A/B evaluation. (§7,§8)
-5. **A four-configuration efficiency study** on a real device, isolating the cost
-   of (a) using the in-app agent at all, (b) delegating vs. re-driving the UI, and
-   (c) the two optimizations — plus a *predictability* result. (§8)
+3. **The `handoff_to_user_required` contract** — confirm-before-irreversible-action
+   is becoming an industry consensus (Gemini alerts before purchases; recent
+   Agent-OS forecasts keep "the last step" with the user, inside a security
+   boundary — §2.2). Our contribution is therefore not the safeguard itself but its
+   *form*: encoding it **declaratively, per capability** in the card, so an OS agent
+   knows *before* acting which capabilities must return control to the user, and
+   where — the line between principled delegation and an unguarded chatbot call.
+   (§4.1)
+4. **A GUI-mediated relay adapter, with two app-agnostic efficiency optimizations**
+   — materializes a card into deterministic device actions (accessibility-tree-first,
+   provider-agnostic across VLMs), adds a two-stage (perceptual-hash + a11y-text-hash)
+   reply-completion precheck and an a11y-scrape-first text path (measured A/B), and
+   chains cards across apps via multi-app flows + NL routing. (§5–§7)
+5. **A four-configuration efficiency study** on a real device, isolating (a) the
+   paradigm's value (using the in-app agent at all), (b) structured delegation vs.
+   re-driving the UI, and (c) the two optimizations — plus a *predictability*
+   result. (§8)
 
 ---
 
 ## 2. Related Work
 
-We position RelayAgent as **delegation**, against two existing camps plus one
-naming clarification. The comparison table (§2.4) is the spine.
+We position RelayAgent as **delegation**, against two prior camps (§2.1–§2.2), one
+naming clarification (§2.3), and a fast-moving industry trend — first-party vendor
+integration (§2.5). The comparison table (§2.4) is the spine.
 
 > Product/version claims below were verified against vendor docs and primary
 > sources as of 2026-06 (see footnotes); the conceptual placement is stable.
@@ -171,8 +198,8 @@ arena — A3, the *Android Agent Arena*[^a3], is an evaluation platform for this
 class, not an agent itself.) RelayAgent reuses their transport techniques —
 accessibility-tree grounding, VLM fallback localization — but *not* their premise.
 Instead of re-performing the task, it **delegates** to the app's own logged-in
-agent and returns. The novelty is therefore the discovery layer plus the handoff
-contract, not the automation.
+agent and returns. The novelty is therefore the *delegation paradigm* — made
+discoverable by the card and safe by the handoff contract — not the automation.
 
 [^ma]: X-PLUG/MobileAgent; Mobile-Agent v1 (arXiv:2401.16158), v2
 (arXiv:2406.01014, NeurIPS 2024), v3 (arXiv:2508.15144).
@@ -193,6 +220,28 @@ in wall (46–379 s) across three runs, with larger swings (premature exit, runa
 looping) seen in earlier exploration, while RelayAgent reproduced its cost nearly
 identically (3987 / 3986 / 3950 tokens, VLM-calls fixed at 2).
 
+A recent long-form Agent-OS forecast[^agentos] corroborates both the camp taxonomy
+above and the gap we target. It enumerates the routes by which a phone's system
+agent is expected to reach app functionality — `AppFunctions` (local atomic
+capabilities), `MCP / private tool`, `GUI Agent` (long-tail-app compatibility), and
+`A2A` (cross-agent / cross-device) — i.e. exactly the API and automation camps plus
+agent-to-agent. Notably, **delegating to an app's *own* embedded assistant is not
+among them**: the path RelayAgent takes is absent even from a comprehensive 2026
+forecast (an omission, not an explicit rejection — but it marks the route as
+under-explored). The same forecast independently states the handoff principle we
+encode — "the Agent can prepare, compare, fill forms, and explain, but the last
+step must return control to the user," with "final signing and confirmation …
+inside a security boundary" — confirming that the safeguard is now consensus and
+that RelayAgent's contribution there is its *declarative, per-capability* encoding
+(§4.1), not the idea.
+
+[^agentos]: Gracker, 《万字长文推演：手机不再从 App 开始，Agent OS 如何接管任务入口》
+("Long-form Forecast: Phones May No Longer Start from Apps — How Agent OS Takes Over
+the Task Entry Point"), androidperformance.com, 2026-04-28. An industry forecast
+(not a peer-reviewed system); cited for its taxonomy of capability-routing paths and
+its statement of the handoff principle. Quotations are from the article's English
+edition / our translation of the Chinese original.
+
 ### 2.3 Naming clarification: "Agent Card" (A2A) vs. RelayAgent cards
 
 A2A's "Agent Card" is an HTTP-endpoint descriptor a vendor publishes for a
@@ -212,7 +261,39 @@ avoid colliding with the Tencent "AppAgent" line and Google's "Agent Card".)
 | Irreversible-action safety | API-level | Ad-hoc | **`handoff_to_user_required` contract** |
 | Brittleness surface | Low (typed) | High (whole UI) | Low (short entry path only) |
 | Cost predictability | High | **Low (high run-to-run variance, §8)** | **High (nearly identical, §8)** |
-| Novelty locus | — | Automation model | **Discovery layer + handoff contract** |
+| Novelty locus | — | Automation model | **Delegation-to-in-app-AI paradigm, made discoverable + safe** |
+
+### 2.5 First-party vendor integration (the emerging third neighbor)
+
+A third route is materializing fast in 2026, distinct from both camps above: a
+vendor wiring its *own* assistant directly into its *own*-ecosystem services, so
+the user transacts entirely inside one super-assistant. Alibaba's Qwen app is the
+clearest case — its Jan 2026 launch absorbed Taobao Instant Commerce (闪购) and
+Fliggy (飞猪; hotels, flights, and high-speed-train 高铁 tickets), a Feb 2026 upgrade
+added Damai (大麦) ticketing, and in Mar 2026 it folded Amap **ride-hailing into the
+assistant as a backend capability** — the Dec 2025 version still bounced the user out to the separate Amap
+app to finish booking, and the Mar version removed that cross-app jump.[^qwenint]
+This cuts both ways for us. It **validates the premise** — in-app assistants really
+do carry login / address / payment and complete real transactions — and it **bounds
+our niche**: such integration is *first-party and intra-ecosystem*. Qwen reaches
+Alibaba-affiliated services; it does **not** reach a competitor's app or the long
+tail — Meituan, WeChat / Yuanbao, Xiaohongshu's 点点, Ctrip, and WPS each keep their
+*own* embedded assistant that Qwen cannot call, with no third-party endpoint to
+call it through. RelayAgent targets exactly this **cross-vendor gap**: an OS-level
+agent reaching *any* app's embedded assistant by GUI, without that app — or its
+competitor — having wired or published anything. Where first-party integration
+*does* exist, RelayAgent defers to it, the same forward-compatible stance it takes
+toward published endpoints (§10).
+
+[^qwenint]: Alibaba Group, "Qwen App Advances Agentic AI Strategy by Turning Core
+Ecosystem Services into Executable AI Capabilities" (official, 2026-01-15);
+Bloomberg, "Alibaba Takes Major Step to Link Taobao Shopping to Main AI App"
+(2026-01-15); Caixin Global, "Alibaba's Qwen Launches AI Ride-Hailing Feature to
+Rival Didi" (2026-03-24). The Damai / Freshippo / Tmall-Supermarket additions are
+from Feb-2026 coverage (secondary). High-speed-train (高铁) ticketing via Fliggy is
+included per author hands-on verification; note the official Jan-2026 scope
+statement listed flights / hotels / attractions, so train ticketing is an
+author-verified addition beyond that statement.
 
 ---
 
@@ -273,10 +354,17 @@ A card is a per-app YAML manifest (`manifests/*.yaml`) with a JSON-Schema mirror
 
 The normative core of the spec is `handoff_to_user_required`. A capability marked
 true must, in the adapter, **emit an `ask_user` and return control before any
-irreversible call-to-action** — payment, ride confirmation, order submission. This
-is what makes RelayAgent *delegation* rather than *automation*: the in-app agent
-does the reversible preparation (assemble the cart, set the destination, draft the
-order), and the human authorizes the irreversible step. In the benchmark, every
+irreversible call-to-action** — payment, ride confirmation, order submission. The
+*principle* — let the agent prepare but keep the irreversible last step with the
+user — is now broadly shared (Gemini alerts before purchases; Agent-OS forecasts
+place "final signing and confirmation … inside a security boundary"; §2.2). What
+the spec adds is making it **declarative and discoverable**: the flag travels with
+each capability, so an OS agent can know *before* it acts which capabilities are
+irreversible and stop at the right screen — rather than relying on a model
+remembering, mid-task, not to tap "pay." This is what makes RelayAgent *delegation*
+rather than *automation*: the in-app agent does the reversible preparation
+(assemble the cart, set the destination, draft the order), and the human authorizes
+the irreversible step. In the benchmark, every
 handoff-required capability stopped at exactly the right screen — the food order at
 the payment page (`立即支付 ¥28.4`) and the ride at the `立即打车` button — without
 ever crossing it (§8, safety checks).
@@ -923,6 +1011,12 @@ this section covers the broader system-level limits.
   empty (WebView-rendered content); Qwen-VL's normalized-vs-pixel coordinate
   ambiguity is handled by a heuristic in `_ground_text`.
 - **Card maintenance.** Entry paths can drift as apps redesign their UI.
+- **First-party integration may obsolete single-ecosystem cases.** Vendors are
+  actively wiring their own assistants into their own services (Alibaba's Qwen;
+  §2.5), which removes the need for an external relay *within* that ecosystem.
+  RelayAgent's durable value is the **cross-vendor / long-tail** case — reaching
+  apps whose vendor has neither folded them into a super-assistant nor published an
+  endpoint; for already-integrated paths it defers to the first-party route.
 - **Scope.** GUI-mediated relay only — no endpoint, no data scraping beyond the
   on-screen reply.
 
