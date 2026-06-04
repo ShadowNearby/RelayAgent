@@ -43,8 +43,6 @@ import yaml
 from loguru import logger
 from openai import OpenAI
 
-from agents._adb import cold_launch as _cold_launch
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
 AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
@@ -236,8 +234,10 @@ class FlowRunner:
         capability = step["capability"]
         prompt = render(step["prompt"], self.bb)
 
-        _cold_launch(app)  # from agents._adb
-
+        # Cold-launch is deferred to the agent's first predict
+        # (RELAY_AGENT_LAUNCH below) so this leg's MobileWorld framework
+        # cold-start lands before the launch and is excluded from the leg's
+        # task wall-clock (which the agent writes to RELAY_WALL_OUT).
         self._step_idx += 1
         step_log_root = self.flow_traj_root / f"{self._step_idx:02d}_{step['id']}"
         step_log_root.mkdir(parents=True, exist_ok=True)
@@ -257,9 +257,13 @@ class FlowRunner:
                 **os.environ,
                 "RELAY_TARGET_APP": app,
                 "RELAY_SKIP_OPEN_APP": "1",
+                "RELAY_AGENT_LAUNCH": "1",
                 "RELAY_FORCE_CAPABILITY": capability,
                 "RELAY_INVOCATION_TEXT": prompt,
                 "RELAY_REPLY_OUT": str(reply_path),
+                # Agent writes the framework-excluded wall_clock.json next to
+                # this leg's traj (MW puts it under <log-file-root>/user_task).
+                "RELAY_WALL_OUT": str(step_log_root / "user_task" / "wall_clock.json"),
             }
             cmd = [
                 str(MW_BIN), "test", prompt,
@@ -275,24 +279,14 @@ class FlowRunner:
             )
             # Feed empty stdin so the final ask_user handoff (when present)
             # closes cleanly with EOF rather than blocking the flow.
-            # Optional per-leg wall-clock (RELAY_TIMING=1): time just this
-            # sub-run and drop wall_clock.json next to its traj so
-            # aggregate_metrics.py can read it.
+            # The framework-excluded per-leg wall_clock.json is written by the
+            # agent (RELAY_WALL_OUT) at subprocess exit; here we only print the
+            # gross leg time (incl. framework) for reference when RELAY_TIMING=1.
             timing = os.getenv("RELAY_TIMING", "0") == "1"
             t0 = time.monotonic()
             rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
             if timing:
-                wall_s = round(time.monotonic() - t0, 1)
-                traj_dir = step_log_root / "user_task"
-                try:
-                    if traj_dir.is_dir():
-                        (traj_dir / "wall_clock.json").write_text(
-                            json.dumps({"wall_s": wall_s, "phase": "mw_test"}),
-                            encoding="utf-8",
-                        )
-                except OSError as e:
-                    logger.warning(f"timing write failed: {e}")
-                logger.info(f"leg wall_s={wall_s}")
+                logger.info(f"leg gross wall_s={round(time.monotonic() - t0, 1)} (incl. framework)")
             if rc != 0:
                 logger.warning(f"mw test exited rc={rc}; continuing if reply was captured")
 
@@ -466,6 +460,17 @@ def main(argv: list[str] | None = None) -> int:
                    help="Natural-language request; LLM extracts flow inputs from it. "
                         "Explicit --input values still take precedence.")
     args, extra = p.parse_known_args(argv)
+
+    # Reuse one persistent server across all legs instead of letting each leg's
+    # `mw test` start (and tear down) its own. (This reuses the server, NOT the
+    # agent — see the design note above; agent state stays per-leg.)
+    if not any(a.startswith("--aw_host") or a.startswith("--aw-host") for a in extra):
+        import os
+        sys.path.insert(0, str(REPO_ROOT / "scripts"))
+        from _mw_server import ensure_server
+        aw_host = ensure_server(dict(os.environ))
+        if aw_host:
+            extra = ["--aw_host", aw_host, *extra]
 
     runner = FlowRunner(
         flow_path=Path(args.flow).resolve(),

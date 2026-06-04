@@ -36,6 +36,37 @@ def force_stop(package: str, *, timeout: float = 10.0) -> None:
         )
 
 
+def screencap(timeout: float = 5.0):
+    """Grab a fresh device screenshot as a PIL.Image (or None on failure).
+
+    Used when RELAY_SKIP_STEP_SCREENSHOT is on and a step needs vision after
+    all (tap_text / nm_ground_tap VLM fallback): the incoming MW observation
+    may be a reused stale frame, so we capture our own current frame here.
+    """
+    import io
+
+    from PIL import Image
+
+    try:
+        res = subprocess.run(
+            adb_base() + ["exec-out", "screencap", "-p"],
+            check=False, capture_output=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("screencap timed out")
+        return None
+    if res.returncode != 0 or not res.stdout:
+        logger.warning(
+            f"screencap rc={res.returncode}: {(res.stderr or b'').decode(errors='replace').strip()}"
+        )
+        return None
+    try:
+        return Image.open(io.BytesIO(res.stdout)).convert("RGB")
+    except Exception as e:  # pragma: no cover — decode guard
+        logger.warning(f"screencap decode failed: {e}")
+        return None
+
+
 _screen_size: tuple[int, int] | None = None
 
 
@@ -104,10 +135,18 @@ def swipe_down(
 def cold_launch(
     package: str,
     *,
-    settle_seconds: float = 2.5,
+    settle_seconds: float = 1.0,
     timeout: float = 10.0,
 ) -> None:
-    """Force-stop + monkey LAUNCHER + settle. Raises on launch failure."""
+    """Force-stop + monkey LAUNCHER + settle. Raises on launch failure.
+
+    `settle_seconds` defaults to 1.0. Our target apps have no splash *ad*, but
+    most still show a brief brand splash (logo page) for ~0.5-1.0s after
+    monkey LAUNCHER — measured on 千问: 0.5s catches the logo page, the chat
+    home is fully rendered by 1.0s. 1.0s clears the brand splash without the
+    wasted 2.5s. If an app you add DOES show a splash *ad* (skippable, longer),
+    bump settle_seconds for that call site rather than re-globalizing the wait.
+    """
     logger.info(f"cold-launching {package} (force-stop + monkey LAUNCHER) ...")
     force_stop(package, timeout=timeout)
     res = subprocess.run(

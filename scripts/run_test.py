@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
@@ -23,7 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agents._adb import cold_launch as _cold_launch  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _mw_server import ensure_server  # noqa: E402
 
 ENV_FILE = REPO_ROOT / ".env"
 # Default agent; override with RELAY_AGENT_FILE (e.g. the a11y-text baseline,
@@ -32,17 +32,6 @@ AGENT_FILE = Path(os.environ["RELAY_AGENT_FILE"]).resolve() if os.getenv(
     "RELAY_AGENT_FILE"
 ) else REPO_ROOT / "agents" / "relay_agent.py"
 MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
-
-
-def cold_launch(package: str, settle_seconds: float = 2.5) -> None:
-    """Cold-launch the target app via the shared helper. Mandatory before
-    any test run — see agents/_adb.py for the policy rationale."""
-    print(f"▶ cold-launching {package} (force-stop + monkey LAUNCHER) ...",
-          file=sys.stderr)
-    try:
-        _cold_launch(package, settle_seconds=settle_seconds)
-    except RuntimeError as e:
-        sys.exit(f"{e}\nCheck `adb devices` and the package id.")
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
@@ -89,9 +78,11 @@ def main() -> int:
     if missing:
         sys.exit(f"Missing required config: {', '.join(missing)}. Set in .env or pass via flags.")
 
-    # Pre-launch the app so MobileWorld's first observation is already the
-    # app's home screen. The planner then skips its own open_app step.
-    cold_launch(args.app)
+    # The app cold-launch is DEFERRED to the agent's first predict (set
+    # RELAY_AGENT_LAUNCH=1 below). By then MobileWorld's framework cold-start
+    # (~2.7s) is done, so it lands before the launch and is excluded from the
+    # task wall-clock the agent writes. The planner still skips its own open_app
+    # step (RELAY_SKIP_OPEN_APP=1) because the agent owns the launch.
 
     # The adapter reads RELAY_TARGET_APP at construction time.
     # Priority: explicit overrides (RELAY_*) > shell env > .env file.
@@ -102,13 +93,28 @@ def main() -> int:
         **os.environ,
         "RELAY_TARGET_APP": args.app,
         "RELAY_SKIP_OPEN_APP": "1",
+        # Agent owns the cold-launch (deferred to first predict, post-framework).
+        "RELAY_AGENT_LAUNCH": "1",
         # MobileWorld's server sleeps on every no-op WAIT action (default 1.0s).
         # Our wait_for_reply polls with WAIT and runs its own stability
         # detection, so the full second just inflates each poll tick. Trim it.
         # Honoured only by the patched MW fork (MW_WAIT_SECONDS); harmless on
         # upstream. Caller can override by exporting MW_WAIT_SECONDS.
+        # NB: this is a SERVER-side knob — it only takes effect for a server we
+        # start. ensure_server() bakes it into the persistent server at spawn;
+        # for a reused server it's a no-op (restart to rebake).
         "MW_WAIT_SECONDS": os.getenv("MW_WAIT_SECONDS", "0.2"),
     }
+
+    # Reuse a persistent server instead of letting `mw test` start (and tear
+    # down) a fresh one every run. ensure_server returns the --aw_host URL;
+    # None means "couldn't, let mw test self-start" (or opted out via
+    # RELAY_NO_PERSIST_SERVER=1). Skip if the caller already passed --aw_host.
+    if not any(a == "--aw_host" or a == "--aw-host" or a.startswith("--aw_host=")
+               or a.startswith("--aw-host=") for a in extra):
+        aw_host = ensure_server(child_env)
+        if aw_host:
+            extra = ["--aw_host", aw_host, *extra]
 
     cmd = [
         str(MW_BIN), "test", args.goal,
@@ -131,26 +137,18 @@ def main() -> int:
         f"model={model}  (base_url + key from .env / flags, key redacted)",
         file=sys.stderr,
     )
-    # Optional wall-clock timing. Gated by RELAY_TIMING=1 so normal runs pay
-    # nothing; when on, we time just the `mw test` call (not cold-launch, to
-    # match the manual-run measurements) and drop a wall_clock.json into the
-    # live traj dir so it travels with the traj when the caller mv's it.
-    # aggregate_metrics.py reads this file for the wall_s column.
+    # wall_clock.json (the framework-EXCLUDED task wall-clock that
+    # aggregate_metrics.py reads) is now written by the agent at process exit —
+    # it anchors at the agent's first predict, after MobileWorld's framework
+    # cold-start. Here we only print the GROSS subprocess time (incl. framework)
+    # to stderr for reference; we no longer write the file. Gated by RELAY_TIMING.
     timing = os.getenv("RELAY_TIMING", "0") == "1"
     t0 = time.monotonic()
     rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env)
     if timing:
-        wall_s = round(time.monotonic() - t0, 1)
-        traj_dir = REPO_ROOT / "traj_logs" / "user_task"
-        try:
-            if traj_dir.is_dir():
-                (traj_dir / "wall_clock.json").write_text(
-                    json.dumps({"wall_s": wall_s, "phase": "mw_test"}),
-                    encoding="utf-8",
-                )
-        except OSError as e:
-            print(f"▶ timing write failed: {e}", file=sys.stderr)
-        print(f"▶ wall_s={wall_s}", file=sys.stderr)
+        gross_s = round(time.monotonic() - t0, 1)
+        print(f"▶ gross wall_s={gross_s} (incl. framework; task wall_s in "
+              f"traj_logs/user_task/wall_clock.json excludes it)", file=sys.stderr)
     return rc
 
 
