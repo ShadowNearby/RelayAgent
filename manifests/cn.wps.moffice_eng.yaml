@@ -74,10 +74,10 @@ embedded_agent:
 
     - id: chat
       description: >
-        General Q&A and conversation. Pure LLM response, streamed into the
-        chat bubble. No partner apps, no side effects.
+        General Q&A and conversation. Pure LLM response, no partner-app
+        handoff, no side effects.
       example_prompts:
-        - "用一句话介绍 WPS AI 能做什么"
+        - "讲讲二战中的中途岛海战"
         - "帮我把这段话改得更书面一点：……"
       executable: false
       side_effects: []

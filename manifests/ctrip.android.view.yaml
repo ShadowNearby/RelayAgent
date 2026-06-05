@@ -61,12 +61,12 @@ embedded_agent:
       handoff_to_user_required: false
       typical_latency_seconds: 20
 
-    - id: search_flight
+    - id: book_flight
       description: >
-        Natural-language flight search. Returns flight cards (airline, times,
-        price, cabin) with "See more flights >" CTA into native booking flow
-        (CRN/React Native) for seat selection, passenger info, and Ctrip payment.
-        Auto-activates deep-think.
+        Search and book flights by natural language. Returns flight cards
+        (airline, times, price, cabin) with a "See more flights >" CTA into the
+        native booking flow (CRN/React Native) for seat selection, passenger
+        info, and Ctrip payment. Auto-activates deep-think.
       example_prompts:
         - "帮我找下周一上海到北京下午的机票"
         - "明天最便宜的虹桥飞成都的航班"
@@ -82,13 +82,14 @@ embedded_agent:
       failure_modes:
         - "City/time ambiguous → agent asks for clarification"
 
-    - id: search_hotel
+    - id: book_hotel
       description: >
-        Natural-language hotel search. Parses city, district, price range,
-        dates, guests. Confirms filters in chat, provides "Explore >" CTA
-        into native hotel search (CRN) for room selection, booking, payment.
+        Search and book hotels by natural language. Agent parses city, district,
+        price range, dates, and guests, confirms filters in chat, and provides an
+        "Explore >" CTA into the native hotel search (CRN) for room selection,
+        booking, and Ctrip payment. Auto-activates deep-think.
       example_prompts:
-        - "上海外滩附近800元以内的酒店明晚入住"
+        - "上海外滩附近 800 以内的酒店，明晚入住"
         - "周末北京三里屯有湾景的酒店"
       executable: true
       side_effects:
@@ -100,14 +101,14 @@ embedded_agent:
       x_capture_full_reply:
         max_scrolls: 6
 
-    - id: search_train
+    - id: book_train
       description: >
-        Natural-language train ticket search. Returns train cards (number,
-        duration, price, seat availability) with "See all >" CTA into native
-        booking flow. Auto-activates deep-think. 12306 ticketing handled by
-        Ctrip backend; OS router does not see 12306 auth.
+        Search and book train tickets by natural language. Returns train cards
+        (number, duration, price, seat availability) with a "See all >" CTA into
+        the native booking flow. Auto-activates deep-think. 12306 ticketing is
+        handled by the Ctrip backend, so the OS router never sees 12306 auth.
       example_prompts:
-        - "周五早上8点北京到天津的高铁"
+        - "周五早上 8 点北京到天津的高铁"
         - "明天去苏州最早的车次"
       executable: true
       side_effects:
@@ -121,11 +122,12 @@ embedded_agent:
 
     - id: plan_trip
       description: >
-        Multi-day trip planning. The agent's first reply is a short prompt
-        plus a "线路规划" card with a "获取专属行程" CTA — the actual itinerary
-        is generated only after that CTA is tapped, which opens a form for
-        dates/origin/party-size/preferences. User completes the form and the
-        agent returns a tailored itinerary (with packaged-tour SKUs alongside).
+        Generate a multi-day travel itinerary (attractions, dining, hotels).
+        The agent's first reply is a short prompt plus a "线路规划" card with a
+        "获取专属行程" CTA — the actual itinerary is generated only after that CTA
+        is tapped, which opens a form for dates/origin/party-size/preferences.
+        User completes the form and the agent returns a tailored itinerary with
+        packaged-tour SKUs alongside (bookable).
       example_prompts:
         - "我想十一去三亚玩四天怎么安排"
         - "暑假带孩子去云南怎么玩"
