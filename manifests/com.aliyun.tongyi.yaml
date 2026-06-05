@@ -56,10 +56,11 @@ embedded_agent:
 
     - id: chat
       description: >
-        General Q&A and conversation. Pure LLM response, no partner calls.
+        General Q&A and conversation. Pure LLM response, no partner-app
+        handoff, no side effects.
       example_prompts:
         - "讲讲二战中的中途岛海战"
-        - "用 Python 写一个二分查找"
+        - "帮我把这段话改得更书面一点：……"
       executable: false
       side_effects: []
       requires_login: false
@@ -69,10 +70,11 @@ embedded_agent:
 
     - id: book_train
       description: >
-        Search and book train tickets via Fliggy. Agent lists trains in cards;
-        user taps "Book" CTA → 12306 login in embedded WebView.
-        Fliggy OAuth is pre-authorized at app level, but 12306 requires
-        manual password entry each session (service_credential tier). See OQ-12.
+        Search and book train tickets by natural language. Agent lists trains
+        in cards (number, time, price, seat availability); user taps the booking
+        CTA → ticketing flow → payment. Booked via Fliggy: Fliggy OAuth is
+        pre-authorized at app level, but 12306 requires manual password entry
+        each session (service_credential tier). See OQ-12.
       example_prompts:
         - "帮我买明天下午两点左右去南京的高铁"
         - "周五早上 8 点上海到杭州的二等座票"
@@ -94,13 +96,14 @@ embedded_agent:
 
     - id: order_food
       description: >
-        Order food delivery via Taobao Flash. First use triggers OAuth bind
-        modal; once authorized, agent recommends items and triggers checkout
-        with stored preferences and address.
+        Order food / local delivery via Taobao Flash (淘宝闪购). Agent searches
+        nearby stores for drinks, meals, or daily items by location, recommends
+        items, and triggers checkout with stored address and preferences.
+        Order, address, and payment are irreversible; must hand off.
       example_prompts:
-        - "我想点份附近的外卖"
-        - "晚上点份麻辣烫, 30 块以内"
         - "帮我点三杯蜜雪冰城蜜桃四季春"
+        - "晚上点份麻辣烫，30 块以内"
+        - "我想点份附近的外卖"
       executable: true
       side_effects:
         - payment
@@ -220,13 +223,14 @@ embedded_agent:
 
     - id: hail_ride
       description: >
-        Hail a ride via Amap. Amap OAuth pre-authorized by default.
-        Agent asks for origin/destination if missing, then car type →
-        estimate → payment via Alipay. Same underlying service as
-        com.autonavi.minimap manifest; OS router should route based on context.
+        Hail a ride via Amap's aggregator. Multi-step: confirm origin/destination →
+        choose car type → confirm estimate → pay (Alipay), each step user-operated
+        within the agent's response card. Amap OAuth is pre-authorized by default.
+        Same underlying service as the com.autonavi.minimap manifest; OS router
+        should route by context.
       example_prompts:
-        - "帮我叫个车回家"
         - "叫一辆经济型车去虹桥机场"
+        - "帮我叫个车回家"
       executable: true
       side_effects:
         - payment
@@ -242,12 +246,14 @@ embedded_agent:
 
     - id: book_hotel
       description: >
-        Search and book hotels via Fliggy. OAuth pre-authorized, no login
-        friction. Agent recommends options with address/rating/price in cards;
-        user taps CTA → Fliggy booking flow → Alipay payment.
+        Search and book hotels by natural language. Agent parses city, district,
+        price range, dates, and guests, recommends options with address/rating/
+        price in cards; user taps the booking CTA → room selection → payment.
+        Booked via Fliggy: OAuth pre-authorized, no login friction; CTA →
+        Fliggy booking flow → Alipay payment.
       example_prompts:
-        - "帮我在上海订一晚酒店明天入住"
-        - "明晚北京三里屯附近 500 以内的酒店"
+        - "帮我在上海订一晚酒店，明天入住"
+        - "北京三里屯附近 500 以内的酒店，明晚入住"
       executable: true
       side_effects:
         - payment
@@ -264,8 +270,8 @@ embedded_agent:
 
     - id: book_movie
       description: >
-        Buy movie tickets via Damai. First use triggers OAuth bind modal
-        (phone number selection); once authorized, agent searches showtimes,
+        Search and book movie tickets via Damai. First use triggers OAuth bind
+        modal (phone number selection); once authorized, agent searches showtimes,
         selects seats, and purchases.
       example_prompts:
         - "帮我买今晚上海的电影票"

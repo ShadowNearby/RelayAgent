@@ -98,12 +98,12 @@ embedded_agent:
 
     - id: hail_ride
       description: >
-        Order a ride via Amap's aggregator. Multi-step: disambiguate drop-off →
-        choose car type → confirm estimate → pay. Each step user-operated
+        Hail a ride via Amap's aggregator. Multi-step: confirm origin/destination →
+        choose car type → confirm estimate → pay, each step user-operated
         within the agent's response card.
       example_prompts:
         - "叫一辆经济型车去虹桥机场"
-        - "打个车回家"
+        - "帮我叫个车回家"
       executable: true
       side_effects:
         - payment
@@ -123,11 +123,11 @@ embedded_agent:
 
     - id: plan_trip
       description: >
-        Generate multi-day travel itineraries with attraction/dining/hotel
-        suggestions and map previews. Informational only; does not book anything.
+        Generate a multi-day travel itinerary (attractions, dining, hotels)
+        with map previews. Informational only; does not book anything.
         Uses deep-search mode; expect 30–60s latency.
       example_prompts:
-        - "帮我规划三亚3日游"
+        - "帮我规划三亚 3 日游"
         - "周末上海周边亲子游怎么安排"
       executable: false
       side_effects: []

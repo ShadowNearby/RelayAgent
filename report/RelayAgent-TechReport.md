@@ -587,9 +587,9 @@ cleanly.
 | 通义千问 | buy_product | ✓ | ✓ † |
 | 通义千问 | track_order | — | ✓ |
 | 携程旅行 | chat_travel_qa | — | ✓ |
-| 携程旅行 | search_flight | ✓ | ✓ |
-| 携程旅行 | search_hotel | ✓ | ✓ |
-| 携程旅行 | search_train | ✓ | ✓ |
+| 携程旅行 | book_flight | ✓ | ✓ |
+| 携程旅行 | book_hotel | ✓ | ✓ |
+| 携程旅行 | book_train | ✓ | ✓ |
 | 携程旅行 | plan_trip | ✓ | ✓ |
 | 携程旅行 | search_attraction_info | — | ✓ |
 | 小红书 | qa_community_knowledge | — | ✓ |
