@@ -10,8 +10,9 @@ embedded_agent:
   type: native_in_app_agent
   description: >
     Alibaba's Tongyi Qianwen App — the entire app is an AI agent surface.
-    Built-in orchestration layer routes intents (train/food/ride/hotel/movie)
-    to Alibaba partner apps (Fliggy, Taobao Flash, Amap, Damai) via OAuth.
+    Built-in orchestration layer routes intents (train/food/ride/hotel/movie/
+    shopping) to Alibaba partner apps (Fliggy, Taobao Flash, Taobao, Amap,
+    Damai) via OAuth.
     Three auth tiers affect completion semantics; see OQ-12.
 
   entry:
@@ -132,6 +133,90 @@ embedded_agent:
               ms: 3000
         stop_before:
           - "支付宝付款"
+
+    - id: search_product
+      description: >
+        Search and recommend products by natural language via Taobao. Parses
+        budget, brand, specs, use case, delivery constraints. Returns product
+        cards or search results. Agent does not auto-order; user selects
+        manually. Same shopping backend as the Taobao in-app assistant (whose
+        chat surface is itself 千问); routed here through Taobao.
+      example_prompts:
+        - "帮我找一台适合学生的平板电脑，预算2000以内"
+        - "推荐几款夏天通勤穿的男士防晒衣"
+      executable: true
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 12
+      x_capture_full_reply:
+        max_scrolls: 6
+      failure_modes:
+        - "Too few constraints → follow-up questions (budget, size, brand, use case)"
+        - "Clicking product cards may leave agent chat for product detail page"
+      x_partner_app: "com.taobao.taobao"
+      x_partner_auth: "oauth_bind_required"
+
+    - id: compare_products
+      description: >
+        Compare products by price, specs, reviews, and promotions via Taobao.
+        Informational output only; does not purchase.
+      example_prompts:
+        - "iPhone 17 和上一代买哪个更划算"
+        - "帮我比较这几款扫地机器人适合养宠家庭吗"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 15
+      x_capture_full_reply:
+        max_scrolls: 6
+      x_partner_app: "com.taobao.taobao"
+      x_partner_auth: "oauth_bind_required"
+
+    - id: buy_product
+      description: >
+        Guide purchase flow for a specific product via Taobao: find listing,
+        confirm specs, apply coupons, add to cart, jump to checkout. Final order
+        confirmation and payment must be manual; OS router must not auto-submit.
+      example_prompts:
+        - "帮我买一包猫砂，膨润土的，10公斤左右"
+        - "把这款黑色 256G 手机加入购物车"
+      executable: true
+      side_effects:
+        - payment
+      requires_login: true
+      reversible: false
+      handoff_to_user_required: true
+      typical_latency_seconds: 15
+      failure_modes:
+        - "Specs, quantity, address, or coupon ambiguous → user must manually select"
+        - "Checkout/payment pages require manual confirmation; scripts must not tap"
+      x_partner_app: "com.taobao.taobao"
+      x_partner_auth: "oauth_bind_required"
+
+    - id: track_order
+      description: >
+        Query order status, logistics, after-sale progress, or refund status
+        via Taobao. Read-only; does not modify orders. If user initiates
+        return/refund, switch to handoff flow.
+      example_prompts:
+        - "我最近买的键盘到哪了"
+        - "查一下刚才那单有没有发货"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 10
+      x_capture_full_reply:
+        max_scrolls: 4
+      failure_modes:
+        - "Multiple matching orders → user must pick the specific one"
+      x_partner_app: "com.taobao.taobao"
+      x_partner_auth: "oauth_bind_required"
 
     - id: hail_ride
       description: >

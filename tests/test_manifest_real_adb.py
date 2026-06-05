@@ -942,11 +942,33 @@ class ManifestRealAdbTests(unittest.TestCase):
             "三亚十一期间天气和穿衣建议",
         )
 
-    def test_com_taobao_taobao_manifest_on_device(self) -> None:
+    # 购物能力已并入千问（原淘宝「AI购物助手」即千问，同一后端经 Taobao 路由）。
+    def test_com_aliyun_tongyi_search_product_on_device(self) -> None:
         self.run_real_manifest_flow(
-            "com.taobao.taobao",
+            "com.aliyun.tongyi",
             "帮我找一台适合学生的平板电脑，预算2000以内",
             expected_capability="search_product",
+        )
+
+    def test_com_aliyun_tongyi_compare_products_on_device(self) -> None:
+        self.run_real_manifest_flow(
+            "com.aliyun.tongyi",
+            "iPhone 17 和上一代买哪个更划算，帮我对比一下",
+            expected_capability="compare_products",
+        )
+
+    def test_com_aliyun_tongyi_buy_product_on_device(self) -> None:
+        self.run_real_manifest_flow(
+            "com.aliyun.tongyi",
+            "帮我买一包膨润土猫砂，10公斤左右",
+            expected_capability="buy_product",
+        )
+
+    def test_com_aliyun_tongyi_track_order_on_device(self) -> None:
+        self.run_real_manifest_flow(
+            "com.aliyun.tongyi",
+            "我最近买的东西到哪了，帮我查下物流",
+            expected_capability="track_order",
         )
 
 
