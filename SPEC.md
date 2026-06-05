@@ -1,4 +1,4 @@
-# AppAgentCards Specification
+# RelayAgent Specification
 
 **Version:** 0.1 (draft)
 **Status:** Working draft — breaking changes expected before 1.0
@@ -316,7 +316,7 @@ A **conforming router** MUST:
 
 SPEC §1 (Conformance) reserves the `x_` prefix for vendor/implementation
 extensions that conforming SDKs MAY ignore. The reference adapter
-(`agents/appcards_agent.py`) + planner (`agents/action_planner.py`) consume
+(`agents/relay_agent.py`) + planner (`agents/action_planner.py`) consume
 the following extensions in the seven shipped reference cards. They are
 **not normative** — a v0.1-conforming router is free to ignore any of them
 — but card authors targeting our adapter rely on them. Promotion to first-
@@ -354,7 +354,7 @@ class fields is tracked in `SPEC-OPEN-QUESTIONS.md`.
 - **`entry.x_prepare_fresh_conversation: { description?, steps: [<step>, ...] }`** —
   steps run at the very start of each task (after `open_app`) to clear
   prior conversation context. Can be disabled per-run via the
-  `APPCARDS_FRESH_CONV=0` env var.
+  `RELAY_FRESH_CONV=0` env var.
 - **`output.method: copy_button`** (extends §7.2 enum) +
   **`output.x_copy_button: { text?, x_bounds?, valid_x?, valid_y? }`** —
   after the reply lands, tap the in-app 复制 button so the answer ends up
@@ -373,8 +373,8 @@ This spec deliberately reuses concepts from Google's **A2A AgentCard** (`name`, 
 
 Differences are deliberate:
 
-- AppAgentCards is **GUI-mediated by default**, not RPC-mediated. The `entry` and `invocation` blocks have no A2A analogue and are this spec's primary contribution.
-- AppAgentCards forces explicit `executable` and `handoff_to_user_required` flags because most in-app agents today are partially capable, and routing mistakes have user-visible cost.
+- RelayAgent is **GUI-mediated by default**, not RPC-mediated. The `entry` and `invocation` blocks have no A2A analogue and are this spec's primary contribution.
+- RelayAgent forces explicit `executable` and `handoff_to_user_required` flags because most in-app agents today are partially capable, and routing mistakes have user-visible cost.
 
 ## 15. Open questions
 
