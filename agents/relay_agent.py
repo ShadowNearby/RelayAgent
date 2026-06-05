@@ -1803,6 +1803,12 @@ class RelayAgent(_MCPAgentBase):
 
         if kind == "handoff":
             self._maybe_persist_reply()
+            # TODO(phase-B): same-session handoff round-trip. Today this emits
+            # a terminal ask_user; under a flow leg, stdin=EOF ends the
+            # subprocess and control returns to the flow (phase A). For phase B
+            # (resume the SAME conversation after the user answers), block here
+            # reading the answer the flow pipes back (see the matching
+            # flow_runner.py TODO) and continue predict() instead of ending.
             reply_note = (
                 f"\n\nAgent reply captured:\n{self._last_agent_reply}"
                 if self._last_agent_reply

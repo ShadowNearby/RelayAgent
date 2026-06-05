@@ -128,8 +128,14 @@ class FlowRunner:
         # overwriting `traj_logs/user_task/`. MW's TrajLogger always writes
         # to `<log_file_root>/user_task/`, so we give each step its own
         # `log_file_root` and group them under one flow-scoped parent.
+        #
+        # Hand-written flows have a meaningful file stem (e.g.
+        # `xhs_to_amap_place`), so we keep it. Auto-synthesized cross-app
+        # plans (run_plan) instead carry a verbose NL-slug+hash filename,
+        # which makes for an ugly dir; for those we name the root after the
+        # apps they touch: `plan_<app1>_<app2>...`.
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.flow_traj_root = REPO_ROOT / "traj_logs" / f"{flow_path.stem}_{ts}"
+        self.flow_traj_root = REPO_ROOT / "traj_logs" / f"{self._traj_stem()}_{ts}"
         self._step_idx = 0
         logger.info(f"flow traj root: {self.flow_traj_root}")
 
@@ -158,6 +164,28 @@ class FlowRunner:
             else:
                 raise ValueError(f"Flow input {name!r} has no default and was not supplied")
         logger.info(f"resolved inputs: {_redact(self.bb)}")
+
+    # ------------------------------------------------------------- traj naming
+
+    def _traj_stem(self) -> str:
+        """Name for the flow-scoped traj dir.
+
+        Hand-written flows keep their file stem. Auto-synthesized cross-app
+        plans (marked by `source_request`, no `inputs`) get named after the
+        apps they touch — `plan_<app1>_<app2>...` — using the last segment
+        of each leg's package id, deduped in step order.
+        """
+        if not self.flow.get("source_request"):
+            return self.flow_path.stem
+        apps: list[str] = []
+        for step in self.flow.get("steps", []):
+            pkg = step.get("app")
+            if not pkg:
+                continue
+            short = str(pkg).rsplit(".", 1)[-1]
+            if short and short not in apps:
+                apps.append(short)
+        return "plan_" + "_".join(apps) if apps else "plan"
 
     # ------------------------------------------------------------- NL inputs
 
@@ -282,6 +310,16 @@ class FlowRunner:
             # The framework-excluded per-leg wall_clock.json is written by the
             # agent (RELAY_WALL_OUT) at subprocess exit; here we only print the
             # gross leg time (incl. framework) for reference when RELAY_TIMING=1.
+            #
+            # TODO(phase-B): same-session handoff round-trip. When this leg
+            # carries a `resume: true` marker, DON'T close stdin with EOF —
+            # keep the subprocess alive and wire a flow⇄agent channel (a fifo
+            # or file the flow writes the user's answer into) so the in-app
+            # agent's handoff ask_user (see relay_agent.py) blocks on that
+            # answer and resumes predict() in the SAME conversation instead of
+            # terminating. Phase A handles handoff at flow granularity (a fresh
+            # `mw test` leg after a flow-level ask_user), which loses in-app
+            # state; phase B preserves it.
             timing = os.getenv("RELAY_TIMING", "0") == "1"
             t0 = time.monotonic()
             rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
