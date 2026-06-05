@@ -1,10 +1,10 @@
-"""MobileWorld adapter for AppAgentCards.
+"""MobileWorld adapter for RelayAgent.
 
 Run with:
 
-    APPCARDS_TARGET_APP=com.aliyun.tongyi \\
+    RELAY_TARGET_APP=com.aliyun.tongyi \\
     mw test "在通义里点一杯蜜雪冰城" \\
-        --agent-type /abs/path/AppAgentCards/agents/appcards_agent.py \\
+        --agent-type /abs/path/RelayAgent/agents/relay_agent.py \\
         --model_name anthropic/claude-sonnet-4-5
 
 Design:
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import atexit
 import re
 import subprocess
 import sys
@@ -43,22 +44,85 @@ if str(_REPO_ROOT) not in sys.path:
 
 from loguru import logger
 
-from mobile_world.agents.base import MCPAgent
+# Aliased to a leading-underscore name on purpose: MobileWorld's agent
+# registry (mobile_world/agents/registry.py) collects every BaseAgent subclass
+# in this module via inspect.getmembers (alphabetically sorted) and instantiates
+# agent_classes[0]. If the base is exposed as "MCPAgent" it sorts before
+# "RelayAgent" and the registry tries to instantiate the abstract base → "Can't
+# instantiate abstract class MCPAgent". "_MCPAgentBase" sorts AFTER "RelayAgent"
+# (ASCII '_' > 'R'), so RelayAgent is picked.
+from mobile_world.agents.base import MCPAgent as _MCPAgentBase
 from mobile_world.agents.utils.helpers import pil_to_base64
 from mobile_world.runtime.utils.models import JSONAction
 
 from agents._adb import adb_base, force_stop, swipe_down
+from agents._adb import cold_launch as _cold_launch
+from agents._adb import screencap as _adb_screencap
 from agents.action_planner import Step, build_plan
 from agents.capability_router import route_capability
 from agents.card_loader import bounds_center, load_card_by_app_id
 
-_TARGET_APP_ENV = "APPCARDS_TARGET_APP"
-_MANIFESTS_ENV = "APPCARDS_MANIFESTS"
-_DENSITY_ENV = "APPCARDS_TARGET_DENSITY"
-_FRESH_CONV_ENV = "APPCARDS_FRESH_CONV"  # set to "0" to disable
-_SKIP_OPEN_APP_ENV = "APPCARDS_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
-_REPLY_OUT_ENV = "APPCARDS_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
-_DISMISS_PERMS_ENV = "APPCARDS_DISMISS_PERMISSIONS"  # set to "0" to disable system permission popup auto-dismiss
+_TARGET_APP_ENV = "RELAY_TARGET_APP"
+_MANIFESTS_ENV = "RELAY_MANIFESTS"
+_DENSITY_ENV = "RELAY_TARGET_DENSITY"
+_FRESH_CONV_ENV = "RELAY_FRESH_CONV"  # set to "0" to disable
+_SKIP_OPEN_APP_ENV = "RELAY_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
+_REPLY_OUT_ENV = "RELAY_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
+_DISMISS_PERMS_ENV = "RELAY_DISMISS_PERMISSIONS"  # set to "0" to disable system permission popup auto-dismiss
+# A/B benchmark gates (default on; "0" reverts to the pre-optimization path so
+# baseline vs optimized token/time can be measured — see CLAUDE.md §6/§8).
+_PRECHECK_ENV = "RELAY_PRECHECK"  # set to "0" to disable the wait_for_reply two-stage precheck (baseline = VLM-poll every tick)
+_SCRAPE_ENV = "RELAY_SCRAPE"  # set to "0" to disable uiautomator reply-text scrape (baseline = VLM-only extraction)
+# Manifest-isolation ablation (§8.9). When "1", the adapter loads NO card and
+# drives the same *delegation skeleton* — fresh conversation, type the whole
+# user request, wait, accept-defaults advance, hand off before the irreversible
+# CTA — but every affordance (input box, send, proceed buttons, the CTA stop)
+# is VLM-grounded at runtime instead of read from a card. Isolates the value of
+# *delegation* from the value of the authored manifest (see _build_no_manifest_plan).
+_NO_MANIFEST_ENV = "RELAY_NO_MANIFEST"
+
+# Defer the target-app cold-launch to the agent's FIRST predict instead of
+# pre-launching it before `mw test`. By then MobileWorld's framework cold-start
+# (Python import + uvicorn server boot + env validation + client connect, ~2.7s)
+# is already done — so it lands BEFORE the app launch, outside both the screen
+# recording and the task wall-clock. Set RELAY_AGENT_LAUNCH=1 (the scripts do).
+# Keep RELAY_SKIP_OPEN_APP=1 alongside it: the agent owns the launch, so the
+# planner must still skip its own open_app step. See CLAUDE.md §3.6.
+_AGENT_LAUNCH_ENV = "RELAY_AGENT_LAUNCH"
+# Directory for the screen recording. When set, the agent starts the recorder
+# at the same first-predict moment as the launch (so the framework boot is not
+# on tape) and stops/finalizes it at process exit via atexit.
+_RECORD_DIR_ENV = "RELAY_RECORD_DIR"
+# Where to write the framework-excluded task wall_clock.json. Defaults to the
+# live traj dir (traj_logs/user_task). Flow legs run with --log-file-root, so
+# their traj lives elsewhere; flow_runner sets this to that leg's user_task dir
+# so aggregate_metrics finds wall_clock.json next to the leg's traj.json.
+_WALL_OUT_ENV = "RELAY_WALL_OUT"
+
+# Skip MobileWorld's post-step screencap for deterministic steps. RelayAgent's
+# plan is deterministic and most steps never read the incoming screenshot; the
+# ~0.85s screencap + ~0.2s settle after such a step is dead time. When on, the
+# agent tags those actions with action_json["skip_screenshot"] so the (patched)
+# MW client reuses the last real frame instead of re-capturing. Auto-enabled by
+# `run_nl.py --record` (the screen video already covers the run). Default off.
+# See CLAUDE.md "录屏模式跳过每步截图".
+_SKIP_STEP_SCREENSHOT_ENV = "RELAY_SKIP_STEP_SCREENSHOT"
+# Small settle the agent sleeps inside predict after emitting a screencap-skipped
+# deterministic action, so a tap's short animation lands before the next action.
+_BLIND_STEP_SLEEP = float(os.getenv("RELAY_BLIND_STEP_SLEEP", "0.15"))
+# Step kinds whose materialization reads the incoming observation screenshot
+# (hash precheck + VLM poll). Their predecessor must NOT skip the screencap, and
+# the step itself must keep getting fresh frames. tap_text / nm_ground_tap try
+# uiautomator first and self-capture a fresh frame on VLM fallback (see
+# _materialize), so they are treated as deterministic for look-ahead purposes.
+_VISION_STEP_KINDS = frozenset({"wait_for_reply"})
+
+# Inter-tick sleep on a wait_for_reply precheck skip. Keeps the poll loop from
+# busy-spinning while the reply streams, but stacks on top of MobileWorld's own
+# per-step settle (client step_wait_time + server WAIT sleep), so a large value
+# just inflates every poll tick. 0.3s is enough to avoid a tight spin while
+# letting the next observe happen promptly. Tunable via RELAY_POLL_SKIP_SLEEP.
+_POLL_SKIP_SLEEP = float(os.getenv("RELAY_POLL_SKIP_SLEEP", "0.3"))
 
 # MobileWorld writes the active run under traj_logs/user_task/ (see CLAUDE.md).
 # We append every LLM call into traj.json at top-level under "0".llm_calls so
@@ -89,6 +153,29 @@ _REPLY_WATCH_SYSTEM = (
     'or null if you cannot read it>"} . '
     "Keep `text` short (<= 500 chars); summarize tail only if too long."
 )
+_NM_ADVANCE_SYSTEM = (
+    "You are driving a phone on behalf of a user whose task is being handled by "
+    "an in-app AI assistant. The assistant has replied and may show option cards "
+    "(store choices, item specs, quantities). Your job is NOT to make real "
+    "choices for the user — only to ACCEPT the assistant's recommended DEFAULTS "
+    "and advance the flow until the screen reaches the final human-confirmation "
+    "step, then STOP. Rules, in priority order:\n"
+    "1. If ANY visible button would perform an IRREVERSIBLE action — pay, place/"
+    "submit the order, confirm payment, confirm a ride or booking (labels like "
+    "立即支付, 支付宝付款, 微信支付, 提交订单, 确认支付, 立即下单, 去支付, 确认下单, "
+    "立即叫车, 确认叫车, Pay, Place order) — the task MUST stop here for the human. "
+    "Set cta_present=true and return NO advance point.\n"
+    "2. Otherwise, if a button simply PROCEEDS by accepting the assistant's "
+    "recommended/default option (labels like 选这个, 选好了, 确定, 确认, 下一步, "
+    "继续, 保存, Confirm, Next), return its center as `advance`.\n"
+    "3. Otherwise (the reply is just informational, nothing to advance, or you "
+    "are unsure), set done=true and return no advance.\n"
+    "When unsure whether a button is irreversible, treat it as irreversible "
+    "(prefer stopping over tapping). Reply with ONE ```json``` fenced object: "
+    '{"cta_present": <bool>, "cta_label": "<text or null>", '
+    '"advance": [<x 0-999>, <y 0-999>] or null, "advance_label": "<text or null>", '
+    '"done": <bool>}.'
+)
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _FENCE_ANY = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
 
@@ -118,7 +205,7 @@ def _dump_window_xml_root(
     base = adb_base()
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
         local_xml = fh.name
-    remote_xml = "/sdcard/appcards_window_dump.xml"
+    remote_xml = "/sdcard/relay_window_dump.xml"
     try:
         dump = subprocess.run(
             base + ["shell", "uiautomator", "dump", remote_xml],
@@ -299,7 +386,7 @@ def _hash_screenshot_region(image) -> str:
 #   * uses a cheap `dumpsys window` probe first (~200ms); only pays the full
 #     uiautomator dump (~2.5s) when the probe says a permission UI is up.
 #   * capped to MAX_DISMISSALS per task; a stuck dialog won't infinite-loop.
-#   * env opt-out via APPCARDS_DISMISS_PERMISSIONS=0.
+#   * env opt-out via RELAY_DISMISS_PERMISSIONS=0.
 _PERMISSION_PACKAGES = (
     "com.android.permissioncontroller",
     "com.google.android.permissioncontroller",
@@ -506,7 +593,7 @@ def _ground_text_via_uiautomator(
 
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
         local_xml = fh.name
-    remote_xml = "/sdcard/appcards_window_dump.xml"
+    remote_xml = "/sdcard/relay_window_dump.xml"
     try:
         dump = subprocess.run(
             base + ["shell", "uiautomator", "dump", remote_xml],
@@ -732,7 +819,7 @@ def _llm_purpose_from_messages(messages: list[dict]) -> str:
     return "other"
 
 
-class AppCardsAgent(MCPAgent):
+class RelayAgent(_MCPAgentBase):
     """Card-driven agent. The model only picks capabilities and grounds text
     selectors; tap coordinates come from the card's `x_bounds`."""
 
@@ -786,7 +873,24 @@ class AppCardsAgent(MCPAgent):
         self.fresh_conversation: bool = os.getenv(_FRESH_CONV_ENV, "1") != "0"
         self.skip_open_app: bool = os.getenv(_SKIP_OPEN_APP_ENV, "0") == "1"
         self.dismiss_permissions: bool = os.getenv(_DISMISS_PERMS_ENV, "1") != "0"
+        self.precheck_enabled: bool = os.getenv(_PRECHECK_ENV, "1") != "0"
+        self.scrape_enabled: bool = os.getenv(_SCRAPE_ENV, "1") != "0"
+        self.no_manifest: bool = os.getenv(_NO_MANIFEST_ENV, "0") == "1"
+        self.skip_step_screenshot: bool = os.getenv(_SKIP_STEP_SCREENSHOT_ENV, "0") == "1"
         self._permission_dismissed_count: int = 0
+        # Deferred-launch / recording / task-clock state. The app cold-launch,
+        # the screen recorder, and the wall-clock anchor are all established on
+        # the FIRST predict (see _begin_task_once) so MobileWorld's framework
+        # cold-start lands before them and is excluded from both the recording
+        # and wall_clock.json. _begin_task_once runs at most once per task.
+        self.agent_launch: bool = os.getenv(_AGENT_LAUNCH_ENV, "0") == "1"
+        self.record_dir: str | None = os.getenv(_RECORD_DIR_ENV) or None
+        self._task_started: bool = False
+        self._task_t0: float | None = None
+        self._recorder: Any = None
+        # no-manifest ablation state (RELAY_NO_MANIFEST)
+        self._nm_advance_iters: int = 0
+        self._nm_ground_retries: dict[int, int] = {}
 
     def openai_chat_completions_create(  # type: ignore[override]
         self,
@@ -864,17 +968,26 @@ class AppCardsAgent(MCPAgent):
             logger.warning(f"Failed to append LLM call to traj.json: {e}")
 
     def initialize_hook(self, instruction: str) -> None:
-        logger.info(f"AppCardsAgent init: instruction={instruction!r}")
+        logger.info(f"RelayAgent init: instruction={instruction!r}")
         if not self.target_app:
             raise RuntimeError(
                 f"{_TARGET_APP_ENV} must be set to the target app's package id "
                 "(e.g. com.aliyun.tongyi)."
             )
-        self.card = load_card_by_app_id(self.target_app, self.manifests_dir)
-        logger.info(
-            f"Loaded card {self.card['app_id']} v{self.card.get('card_version')} "
-            f"({self.card['app_name']})"
-        )
+        if self.no_manifest:
+            # Manifest-isolation ablation: load NO card at all. The relay drives
+            # the delegation skeleton with runtime VLM grounding only.
+            self.card = None
+            logger.info(
+                f"{_NO_MANIFEST_ENV}=1: manifest-free delegation relay for "
+                f"{self.target_app} (no card loaded)"
+            )
+        else:
+            self.card = load_card_by_app_id(self.target_app, self.manifests_dir)
+            logger.info(
+                f"Loaded card {self.card['app_id']} v{self.card.get('card_version')} "
+                f"({self.card['app_name']})"
+            )
         self.plan = []
         self.cursor = 0
         self._planned = False
@@ -901,25 +1014,148 @@ class AppCardsAgent(MCPAgent):
         self._capture_scrolls = 0
         self._capture_idle = 0
         self._permission_dismissed_count = 0
+        self._nm_advance_iters = 0
+        self._nm_ground_retries = {}
+
+    def _build_no_manifest_plan(self) -> list[Step]:
+        """Manifest-free delegation relay (§8.9 manifest-isolation ablation).
+
+        Same *delegation skeleton* as the card path — open a fresh conversation,
+        type the WHOLE user request as one turn, wait for the reply, accept the
+        assistant's defaults and advance, then hand off before any irreversible
+        CTA — but every affordance is VLM-grounded at runtime instead of read
+        from a card. The only app fact used is the package id (which the runner
+        already supplies via RELAY_TARGET_APP, exactly as general_e2e gets it).
+        Isolates the value of delegation from the value of the authored manifest.
+        """
+        plan: list[Step] = []
+        if not self.skip_open_app:
+            plan.append(Step("open_app", {"package": self.target_app}, note="cold-launch"))
+        if self.fresh_conversation:
+            plan.append(Step(
+                "nm_ground_tap",
+                {"desc": "the control that starts a NEW / blank conversation "
+                         "(a pencil or compose icon, a ＋, or a 新建对话 / 新对话 label)",
+                 "ui_candidates": ["新建对话", "新对话", "New chat", "新建"],
+                 "optional": True},
+                note="fresh conversation (VLM-grounded)",
+            ))
+        plan.append(Step(
+            "nm_ground_tap",
+            {"desc": "the chat message input text box where you type a message to "
+                     "the assistant (a wide field, usually along the bottom)",
+             "optional": False},
+            note="focus input (VLM-grounded)",
+        ))
+        plan.append(Step("input_text", {"text": self.instruction}, note="user query"))
+        plan.append(Step(
+            "nm_ground_tap",
+            {"desc": "the SEND button for the message just typed (an up-arrow or "
+                     "paper-plane icon, or a 发送 button, beside the input box)",
+             "ui_candidates": ["发送", "Send"],
+             "optional": False},
+            note="submit (VLM-grounded)",
+        ))
+        plan.append(Step("wait_for_reply", {"max_seconds": 60}, note="await assistant reply"))
+        plan.append(Step("nm_advance", {"max_iters": 6}, note="accept-defaults advance / CTA stop"))
+        plan.append(Step("handoff", {"reason": "manifest-free relay reached the pre-CTA screen"}))
+        return plan
+
+    def _begin_task_once(self) -> None:
+        """First-predict hook: anchor the task wall-clock, optionally launch the
+        target app, and optionally start the screen recorder — in that order, so
+        everything after MobileWorld's framework cold-start (already done by the
+        time predict is first called) is excluded from both the recording and
+        wall_clock.json. Idempotent: the body runs once per task.
+
+        atexit (fires when the `mw test` subprocess exits — on finished, on EOF
+        after a handoff ask_user, or on error) finalizes the recording and
+        writes wall_clock.json (phase="task", framework-excluded). The scripts
+        no longer write wall_clock.json themselves; this is the source of truth.
+        """
+        if self._task_started:
+            return
+        self._task_started = True
+        self._task_t0 = time.monotonic()
+
+        if self.record_dir:
+            try:
+                from agents import _recorder
+                self._recorder = _recorder.start(Path(self.record_dir))
+                logger.info(f"screen recording (agent-owned) → {self.record_dir}")
+            except Exception as e:  # recording must never abort the task
+                logger.warning(f"recorder start failed: {e}")
+                self._recorder = None
+
+        if self.agent_launch and self.target_app:
+            logger.info(f"agent-owned cold-launch of {self.target_app} (post-framework)")
+            try:
+                _cold_launch(self.target_app)
+            except Exception as e:
+                logger.warning(f"agent cold-launch failed: {e}")
+
+        atexit.register(self._finalize_task)
+
+    def _finalize_task(self) -> None:
+        """Stop the recorder and write the framework-excluded task wall-clock.
+        Registered with atexit; tolerant of being called once at process exit."""
+        if self._recorder is not None:
+            try:
+                final = self._recorder.stop()
+                if final:
+                    logger.info(f"recording saved → {final}")
+            except Exception as e:
+                logger.warning(f"recorder stop failed: {e}")
+            self._recorder = None
+        if self._task_t0 is not None:
+            wall_s = round(time.monotonic() - self._task_t0, 1)
+            out = os.getenv(_WALL_OUT_ENV)
+            wall_path = (
+                Path(out) if out
+                else _REPO_ROOT / "traj_logs" / "user_task" / "wall_clock.json"
+            )
+            try:
+                if wall_path.parent.is_dir():
+                    wall_path.write_text(
+                        json.dumps({"wall_s": wall_s, "phase": "task"}),
+                        encoding="utf-8",
+                    )
+                    logger.info(f"task wall_s={wall_s} (framework-excluded) → {wall_path}")
+                else:
+                    logger.warning(f"wall_clock dir missing: {wall_path.parent}")
+            except OSError as e:
+                logger.warning(f"wall_clock write failed: {e}")
+            self._task_t0 = None
 
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
+        self._begin_task_once()
         screenshot = observation["screenshot"]
         screen_w, screen_h = screenshot.size
 
         if not self._planned:
-            cap_id, invocation = route_capability(self, self.instruction, self.card)
-            self.plan = build_plan(
-                self.card,
-                cap_id,
-                invocation,
-                fresh_conversation=self.fresh_conversation,
-                skip_open_app=self.skip_open_app,
-            )
+            if self.no_manifest:
+                self.plan = self._build_no_manifest_plan()
+                cap_id = "(no-manifest)"
+            else:
+                cap_id, invocation = route_capability(self, self.instruction, self.card)
+                self.plan = build_plan(
+                    self.card,
+                    cap_id,
+                    invocation,
+                    fresh_conversation=self.fresh_conversation,
+                    skip_open_app=self.skip_open_app,
+                )
             self._planned = True
             logger.info(
                 f"Plan ({len(self.plan)} steps) for capability={cap_id!r}: "
                 + " → ".join(f"{s.kind}" for s in self.plan)
             )
+            if self.skip_step_screenshot:
+                logger.info(
+                    "skip-step-screenshot ON: deterministic steps reuse last "
+                    f"frame (settle={_BLIND_STEP_SLEEP}s); vision steps "
+                    f"{sorted(_VISION_STEP_KINDS)} keep fresh capture"
+                )
 
         # System permission popup hook — runs BEFORE the planned step. If a
         # known permission controller is foreground we tap the most-permissive
@@ -949,6 +1185,19 @@ class AppCardsAgent(MCPAgent):
         action, advance, extra_note = self._materialize(step, screenshot, screen_w, screen_h)
         if advance:
             self.cursor += 1
+
+        # Look-ahead screencap skip: if the NEXT step the runner will feed a
+        # screenshot to is vision-independent, tell the (patched) MW client to
+        # skip its post-step screencap and reuse the last real frame. The next
+        # step is plan[cursor] after advancing, or the same held step otherwise;
+        # a plan-exhausted next step (→ finished) needs no screenshot either.
+        if self.skip_step_screenshot:
+            nxt = self.plan[self.cursor] if self.cursor < len(self.plan) else None
+            if nxt is None or nxt.kind not in _VISION_STEP_KINDS:
+                action.action_json = {**(action.action_json or {}), "skip_screenshot": True}
+                if _BLIND_STEP_SLEEP > 0:
+                    time.sleep(_BLIND_STEP_SLEEP)
+
         note = step.note + (f"; {extra_note}" if extra_note else "")
         # Display 1-based index of the CURRENT step (the one we just emitted
         # an action for), not the next one. wait_for_reply re-enters the same
@@ -959,6 +1208,19 @@ class AppCardsAgent(MCPAgent):
         )
         logger.info(f"{thought} → {action.model_dump(exclude_none=True)}")
         return thought, action
+
+    def _fresh_vision_frame(self, screenshot):
+        """Return a frame safe for VLM grounding. In skip-step-screenshot mode
+        the incoming `screenshot` may be a reused stale frame, so capture the
+        current screen directly; fall back to the incoming one on capture
+        failure or when skipping is off."""
+        if not self.skip_step_screenshot:
+            return screenshot
+        fresh = _adb_screencap()
+        if fresh is None:
+            logger.warning("skip-mode VLM fallback: screencap failed; using stale frame")
+            return screenshot
+        return fresh
 
     def _materialize(
         self,
@@ -1023,7 +1285,8 @@ class AppCardsAgent(MCPAgent):
                 x, y = xy
                 note = "uiautomator"
             else:
-                x, y = self._ground_text(p["text"], screenshot, screen_w, screen_h)
+                frame = self._fresh_vision_frame(screenshot)
+                x, y = self._ground_text(p["text"], frame, screen_w, screen_h)
                 note = "VLM"
             return JSONAction(action_type="click", x=x, y=y), True, note
 
@@ -1033,6 +1296,40 @@ class AppCardsAgent(MCPAgent):
             # the message list (everything visually BELOW is the reply).
             self._last_input_text = p["text"]
             return JSONAction(action_type="input_text", text=p["text"], clear_text=True), True, ""
+
+        if kind == "nm_ground_tap":
+            # Manifest-free affordance: VLM-ground a semantic description (no
+            # card selector). Optional steps (e.g. fresh-conversation) skip on
+            # miss; required ones retry a couple ticks before giving up.
+            desc = p["desc"]
+            optional = bool(p.get("optional"))
+            # Manifest-free, but still app-agnostic: try generic affordance
+            # vocabulary via uiautomator (e.g. "发送"/"新建对话") before paying
+            # for a VLM grounding call. These are generic UI words, not a card
+            # selector. Falls through to the VLM on miss.
+            for cand in p.get("ui_candidates") or []:
+                hit = _ground_text_via_uiautomator(cand, screen_w, screen_h)
+                if hit is not None:
+                    return JSONAction(action_type="click", x=hit[0], y=hit[1]), True, (
+                        f"uiautomator {cand!r}"
+                    )
+            try:
+                frame = self._fresh_vision_frame(screenshot)
+                x, y = self._ground_text(desc, frame, screen_w, screen_h)
+            except Exception as e:
+                budget = self._nm_ground_retries.get(self.cursor, 0)
+                if not optional and budget < 2:
+                    self._nm_ground_retries[self.cursor] = budget + 1
+                    logger.warning(
+                        f"nm_ground_tap {desc!r} grounding failed ({e}); "
+                        f"retry {budget + 1}/2"
+                    )
+                    return JSONAction(action_type="wait"), False, f"ground retry {budget + 1}/2"
+                logger.warning(
+                    f"nm_ground_tap {desc!r} skipped (optional={optional}): {e}"
+                )
+                return JSONAction(action_type="wait"), True, "grounding failed; skipped"
+            return JSONAction(action_type="click", x=x, y=y), True, "VLM-grounded"
 
         if kind == "wait_ms":
             return JSONAction(action_type="wait"), True, ""
@@ -1086,13 +1383,16 @@ class AppCardsAgent(MCPAgent):
             # finds nothing (e.g. WebView-rendered replies whose text isn't
             # in the a11y tree).
             if self._capture_phase == "scrolling":
-                text = _extract_reply_text_from_dump(
-                    self._last_input_text, screen_h
-                )
-                source = "scrape"
+                text = ""
+                source = "vlm"
+                if self.scrape_enabled:
+                    text = _extract_reply_text_from_dump(
+                        self._last_input_text, screen_h
+                    )
+                    source = "scrape"
                 if not text:
                     _, text = self._poll_agent_reply(screenshot)
-                    source = "vlm_fallback"
+                    source = "vlm_fallback" if self.scrape_enabled else "vlm"
                 # Substring dedup with normalization: a new VLM-extracted
                 # frame often repeats text from a previous frame but with
                 # tiny formatting drift (whitespace, punctuation, markdown
@@ -1199,7 +1499,7 @@ class AppCardsAgent(MCPAgent):
             force_vlm = (
                 self._reply_precheck_skips_since_vlm >= MAX_SKIPS_BEFORE_FORCE
             )
-            if not force_vlm and elapsed < max_seconds:
+            if self.precheck_enabled and not force_vlm and elapsed < max_seconds:
                 # Stage 1: free screenshot hash.
                 shot_hash = _hash_screenshot_region(screenshot)
                 shot_changed = shot_hash != self._reply_last_shot_hash
@@ -1209,7 +1509,7 @@ class AppCardsAgent(MCPAgent):
                     self._reply_stable_streak = 0
                     self._reply_precheck_skips += 1
                     self._reply_precheck_skips_since_vlm += 1
-                    time.sleep(0.8)
+                    time.sleep(_POLL_SKIP_SLEEP)
                     return (
                         JSONAction(action_type="wait"),
                         False,
@@ -1249,7 +1549,7 @@ class AppCardsAgent(MCPAgent):
                         if prev is not None and text_hash != prev:
                             self._reply_precheck_skips += 1
                             self._reply_precheck_skips_since_vlm += 1
-                            time.sleep(0.8)
+                            time.sleep(_POLL_SKIP_SLEEP)
                             return (
                                 JSONAction(action_type="wait"),
                                 False,
@@ -1279,15 +1579,16 @@ class AppCardsAgent(MCPAgent):
                 # text via direct uiautomator scrape — the VLM is asked to cap
                 # at 500 chars, and on long replies it summarizes the tail. The
                 # scrape returns the full visible text verbatim, no token cost.
-                scraped = _extract_reply_text_from_dump(
-                    self._last_input_text, screen_h
-                )
-                if scraped and len(scraped) > len(text):
-                    logger.info(
-                        f"reply text upgrade: VLM={len(text)} chars → "
-                        f"uiautomator scrape={len(scraped)} chars"
+                if self.scrape_enabled:
+                    scraped = _extract_reply_text_from_dump(
+                        self._last_input_text, screen_h
                     )
-                    text = scraped
+                    if scraped and len(scraped) > len(text):
+                        logger.info(
+                            f"reply text upgrade: VLM={len(text)} chars → "
+                            f"uiautomator scrape={len(scraped)} chars"
+                        )
+                        text = scraped
                 self._last_agent_reply = text
                 logger.info(
                     f"In-app agent reply DONE after {self._reply_polls} poll(s) "
@@ -1325,16 +1626,17 @@ class AppCardsAgent(MCPAgent):
                 # Same upgrade as the happy path — VLM truncates at ~500 chars
                 # and on long-running replies that hit the timeout the scrape
                 # almost always has more (and verbatim) content.
-                scraped = _extract_reply_text_from_dump(
-                    self._last_input_text, screen_h
-                )
-                if scraped and (not text or len(scraped) > len(text)):
-                    logger.info(
-                        f"reply text upgrade on timeout: "
-                        f"VLM={len(text) if text else 0} chars → "
-                        f"uiautomator scrape={len(scraped)} chars"
+                if self.scrape_enabled:
+                    scraped = _extract_reply_text_from_dump(
+                        self._last_input_text, screen_h
                     )
-                    text = scraped
+                    if scraped and (not text or len(scraped) > len(text)):
+                        logger.info(
+                            f"reply text upgrade on timeout: "
+                            f"VLM={len(text) if text else 0} chars → "
+                            f"uiautomator scrape={len(scraped)} chars"
+                        )
+                        text = scraped
                 logger.warning(
                     f"In-app agent reply did not finish within {max_seconds}s "
                     f"({self._reply_polls} poll(s)); advancing anyway "
@@ -1453,6 +1755,52 @@ class AppCardsAgent(MCPAgent):
                 f"tap copy via {note}",
             )
 
+        if kind == "nm_advance":
+            # Manifest-free advance loop: VLM decides whether to (a) STOP at an
+            # irreversible CTA → hand off, (b) tap a proceed/accept-defaults
+            # button and re-enter, or (c) finish (informational reply / nothing
+            # actionable). Conservative: unsure → stop. Holds the cursor while
+            # advancing (like wait_for_reply).
+            max_iters = int(p.get("max_iters", 6))
+            # Refresh the scraped reply so the eventual handoff carries content.
+            if self.scrape_enabled:
+                try:
+                    scraped = _extract_reply_text_from_dump(self._last_input_text, screen_h)
+                    if scraped and (
+                        not self._last_agent_reply
+                        or len(scraped) > len(self._last_agent_reply)
+                    ):
+                        self._last_agent_reply = scraped
+                except Exception:
+                    pass
+            probe = self._nm_probe_advance(screenshot)
+            if probe.get("cta_present"):
+                logger.info(
+                    f"nm_advance: irreversible CTA {probe.get('cta_label')!r} "
+                    "detected; stopping for handoff"
+                )
+                return JSONAction(action_type="wait"), True, (
+                    f"CTA {probe.get('cta_label')!r} → handoff"
+                )
+            adv = probe.get("advance_xy")
+            if adv and self._nm_advance_iters < max_iters:
+                self._nm_advance_iters += 1
+                ax, ay = adv
+                logger.info(
+                    f"nm_advance iter {self._nm_advance_iters}/{max_iters}: "
+                    f"tap {probe.get('advance_label')!r} @ ({ax},{ay})"
+                )
+                return JSONAction(action_type="click", x=ax, y=ay), False, (
+                    f"advance {self._nm_advance_iters}/{max_iters} "
+                    f"{probe.get('advance_label')!r}"
+                )
+            reason = (
+                "iters exhausted" if self._nm_advance_iters >= max_iters
+                else "no further actionable step"
+            )
+            logger.info(f"nm_advance: {reason}; advancing to handoff")
+            return JSONAction(action_type="wait"), True, reason
+
         if kind == "handoff":
             self._maybe_persist_reply()
             reply_note = (
@@ -1531,7 +1879,7 @@ class AppCardsAgent(MCPAgent):
 
     def _maybe_persist_reply(self) -> None:
         """Dump the captured in-app agent reply as JSON to:
-          1. APPCARDS_REPLY_OUT (if set) — for parent processes like FlowRunner;
+          1. RELAY_REPLY_OUT (if set) — for parent processes like FlowRunner;
           2. <MW traj dir>/agent_reply.json — always, so the reply lives next
              to traj.json / screenshots and survives MW's per-run backup of
              traj_logs/user_task/. Best-effort; never raises."""
@@ -1609,3 +1957,61 @@ class AppCardsAgent(MCPAgent):
         else:
             text = None
         return done, text
+
+    def _nm_probe_advance(self, screenshot) -> dict:
+        """VLM probe for the manifest-free advance loop. Returns
+        {cta_present, cta_label, advance_xy: [px,py]|None, advance_label, done}.
+        Conservative: any empty/unparseable response → cta_present=True (stop),
+        so we never blindly tap toward an irreversible action."""
+        out = {
+            "cta_present": False, "cta_label": None,
+            "advance_xy": None, "advance_label": None, "done": False,
+        }
+        b64 = pil_to_base64(screenshot)
+        messages = [
+            {"role": "system", "content": _NM_ADVANCE_SYSTEM},
+            {"role": "user", "content": [
+                {"type": "text", "text": "What is the next safe step? Follow the policy."},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            ]},
+        ]
+        raw = self.openai_chat_completions_create(
+            model=self.model_name, messages=messages, temperature=0.0, max_tokens=200,
+        )
+        if not raw:
+            logger.warning("nm_advance probe empty; stopping for safety")
+            out["cta_present"] = True
+            out["cta_label"] = "(probe empty → stop)"
+            return out
+        m = _JSON_FENCE.search(raw) or _FENCE_ANY.search(raw)
+        payload = m.group(1) if m else raw
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            import ast
+            try:
+                data = ast.literal_eval(payload)
+            except (ValueError, SyntaxError):
+                logger.warning(f"nm_advance probe unparseable: {raw!r}; stopping for safety")
+                out["cta_present"] = True
+                out["cta_label"] = "(unparseable → stop)"
+                return out
+        if not isinstance(data, dict):
+            out["cta_present"] = True
+            return out
+        out["cta_present"] = bool(data.get("cta_present"))
+        out["cta_label"] = data.get("cta_label")
+        out["done"] = bool(data.get("done"))
+        out["advance_label"] = data.get("advance_label")
+        adv = data.get("advance")
+        if isinstance(adv, list) and len(adv) == 2 and not out["cta_present"]:
+            try:
+                rx, ry = float(adv[0]), float(adv[1])
+                if rx > 999 or ry > 999:
+                    out["advance_xy"] = [int(rx), int(ry)]
+                else:
+                    w, h = screenshot.size
+                    out["advance_xy"] = [int(rx * w / 999), int(ry * h / 999)]
+            except (ValueError, TypeError):
+                out["advance_xy"] = None
+        return out

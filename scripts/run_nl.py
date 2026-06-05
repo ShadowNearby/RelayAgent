@@ -7,7 +7,7 @@ text LLM to pick the best match for the user's sentence:
 
   - a flow (multi-app cowork) — dispatched via FlowRunner with --nl, OR
   - a single app + capability — dispatched via `mw test` with the
-    capability pinned through APPCARDS_FORCE_CAPABILITY.
+    capability pinned through RELAY_FORCE_CAPABILITY.
 
 Usage:
     scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
@@ -36,7 +36,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from agents import _recorder  # noqa: E402
-from agents._adb import cold_launch as _cold_launch  # noqa: E402
 from agents.flow_runner import (  # noqa: E402
     FlowRunner,
     _load_dotenv,
@@ -46,7 +45,7 @@ from agents.flow_runner import (  # noqa: E402
 MANIFEST_DIR = REPO_ROOT / "manifests"
 FLOW_DIR = MANIFEST_DIR / "_flows"
 ENV_FILE = REPO_ROOT / ".env"
-AGENT_FILE = REPO_ROOT / "agents" / "appcards_agent.py"
+AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
 MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
@@ -201,16 +200,20 @@ def dispatch_app(
         f"goal={goal!r}  (reason: {decision.get('reason')})"
     )
 
-    _cold_launch(app_id)
+    # Cold-launch is deferred to the agent's first predict (RELAY_AGENT_LAUNCH)
+    # so MobileWorld's framework cold-start lands before the launch — outside
+    # both the screen recording and the task wall-clock. RELAY_RECORD_DIR (if
+    # set by main for --record) is inherited via os.environ.
     child_env = {
         **env,
         **os.environ,
-        "APPCARDS_TARGET_APP": app_id,
-        "APPCARDS_SKIP_OPEN_APP": "1",
+        "RELAY_TARGET_APP": app_id,
+        "RELAY_SKIP_OPEN_APP": "1",
+        "RELAY_AGENT_LAUNCH": "1",
     }
     if capability:
-        child_env["APPCARDS_FORCE_CAPABILITY"] = capability
-        child_env["APPCARDS_INVOCATION_TEXT"] = goal
+        child_env["RELAY_FORCE_CAPABILITY"] = capability
+        child_env["RELAY_INVOCATION_TEXT"] = goal
 
     cmd = [
         str(MW_BIN), "test", goal,
@@ -256,6 +259,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
+    # Reuse a persistent server across every `mw test` this run spawns (a flow
+    # spawns one per leg). Inject --aw_host into the forwarded args unless the
+    # caller passed their own. See scripts/_mw_server.py.
+    if not any(a.startswith("--aw_host") or a.startswith("--aw-host") for a in extra):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from _mw_server import ensure_server
+        aw_host = ensure_server({**env, **os.environ})
+        if aw_host:
+            extra = ["--aw_host", aw_host, *extra]
+
+    kind = decision.get("kind")
     rec = None
     if args.record is not None:
         from datetime import datetime
@@ -264,11 +278,24 @@ def main(argv: list[str] | None = None) -> int:
             if args.record
             else REPO_ROOT / "traj_logs" / "recordings" / datetime.now().strftime("%Y%m%d_%H%M%S")
         )
-        rec = _recorder.start(out_dir)
-        logger.info(f"screen recording → {out_dir}")
+        # The video already covers the run, so per-step screenshots are
+        # redundant; auto-enable the deterministic-step screencap skip (child
+        # subprocesses inherit it via os.environ). Honor an explicit override.
+        os.environ.setdefault("RELAY_SKIP_STEP_SCREENSHOT", "1")
+        logger.info("recording mode → RELAY_SKIP_STEP_SCREENSHOT=1")
+        if kind == "app":
+            # Single-app run: the agent owns the recorder so it starts at the
+            # deferred app-launch (first predict), AFTER MobileWorld's framework
+            # cold-start — keeping that ~2.7s off the tape. Passed via env.
+            os.environ["RELAY_RECORD_DIR"] = str(out_dir)
+            logger.info(f"screen recording (agent-owned, framework-excluded) → {out_dir}")
+        else:
+            # A flow spans multiple `mw test` subprocesses (one per leg); keep a
+            # single continuous parent-owned recording across all legs.
+            rec = _recorder.start(out_dir)
+            logger.info(f"screen recording (flow, parent-owned) → {out_dir}")
 
     try:
-        kind = decision.get("kind")
         if kind == "flow":
             return dispatch_flow(decision, args.nl, catalog, extra)
         if kind == "app":

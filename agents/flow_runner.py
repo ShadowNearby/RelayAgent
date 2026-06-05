@@ -8,13 +8,13 @@ last sub-run's captured reply into structured data.
 Design notes (see CLAUDE.md for project context):
 
 - Each app step is a fresh `mw test` subprocess. We DON'T reuse one long-
-  lived AppCardsAgent across apps because plan cursor / chat history are
+  lived RelayAgent across apps because plan cursor / chat history are
   scoped to a single card.
-- The capability router is bypassed via APPCARDS_FORCE_CAPABILITY +
-  APPCARDS_INVOCATION_TEXT, so each sub-run skips the routing LLM call
+- The capability router is bypassed via RELAY_FORCE_CAPABILITY +
+  RELAY_INVOCATION_TEXT, so each sub-run skips the routing LLM call
   and goes straight into plan building.
 - The captured in-app reply is shipped from the sub-process to the parent
-  via APPCARDS_REPLY_OUT (a JSON file written at handoff/done).
+  via RELAY_REPLY_OUT (a JSON file written at handoff/done).
 - Extract steps run a small text-only chat completion against the same
   LLM endpoint configured in `.env` (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL).
 - Templating: `{var}` and `{var.field}` substitution against a flat
@@ -34,6 +34,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,11 +43,9 @@ import yaml
 from loguru import logger
 from openai import OpenAI
 
-from agents._adb import cold_launch as _cold_launch
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
-AGENT_FILE = REPO_ROOT / "agents" / "appcards_agent.py"
+AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
 MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
 
 
@@ -71,7 +70,7 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 
 
 # cold-launch delegates to agents._adb so all three call sites (run_test.py,
-# flow_runner, appcards_agent open_app) share one implementation.
+# flow_runner, relay_agent open_app) share one implementation.
 
 
 # --------------------------------------------------------------------------- #
@@ -235,30 +234,36 @@ class FlowRunner:
         capability = step["capability"]
         prompt = render(step["prompt"], self.bb)
 
-        _cold_launch(app)  # from agents._adb
-
+        # Cold-launch is deferred to the agent's first predict
+        # (RELAY_AGENT_LAUNCH below) so this leg's MobileWorld framework
+        # cold-start lands before the launch and is excluded from the leg's
+        # task wall-clock (which the agent writes to RELAY_WALL_OUT).
         self._step_idx += 1
         step_log_root = self.flow_traj_root / f"{self._step_idx:02d}_{step['id']}"
         step_log_root.mkdir(parents=True, exist_ok=True)
 
         with tempfile.NamedTemporaryFile(
-            mode="w+", suffix=".json", prefix="appcards_reply_", delete=False
+            mode="w+", suffix=".json", prefix="relay_reply_", delete=False
         ) as fh:
             reply_path = Path(fh.name)
         try:
-            # Priority: explicit overrides (the per-step APPCARDS_* keys
+            # Priority: explicit overrides (the per-step RELAY_* keys
             # below) > shell env > .env file. Putting `self.env` (sourced
             # from .env) underneath `os.environ` lets a user override any
-            # LLM_* / APPCARDS_* setting from their shell without editing
+            # LLM_* / RELAY_* setting from their shell without editing
             # .env. The per-step keys at the end always win.
             child_env = {
                 **self.env,
                 **os.environ,
-                "APPCARDS_TARGET_APP": app,
-                "APPCARDS_SKIP_OPEN_APP": "1",
-                "APPCARDS_FORCE_CAPABILITY": capability,
-                "APPCARDS_INVOCATION_TEXT": prompt,
-                "APPCARDS_REPLY_OUT": str(reply_path),
+                "RELAY_TARGET_APP": app,
+                "RELAY_SKIP_OPEN_APP": "1",
+                "RELAY_AGENT_LAUNCH": "1",
+                "RELAY_FORCE_CAPABILITY": capability,
+                "RELAY_INVOCATION_TEXT": prompt,
+                "RELAY_REPLY_OUT": str(reply_path),
+                # Agent writes the framework-excluded wall_clock.json next to
+                # this leg's traj (MW puts it under <log-file-root>/user_task).
+                "RELAY_WALL_OUT": str(step_log_root / "user_task" / "wall_clock.json"),
             }
             cmd = [
                 str(MW_BIN), "test", prompt,
@@ -274,7 +279,14 @@ class FlowRunner:
             )
             # Feed empty stdin so the final ask_user handoff (when present)
             # closes cleanly with EOF rather than blocking the flow.
+            # The framework-excluded per-leg wall_clock.json is written by the
+            # agent (RELAY_WALL_OUT) at subprocess exit; here we only print the
+            # gross leg time (incl. framework) for reference when RELAY_TIMING=1.
+            timing = os.getenv("RELAY_TIMING", "0") == "1"
+            t0 = time.monotonic()
             rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
+            if timing:
+                logger.info(f"leg gross wall_s={round(time.monotonic() - t0, 1)} (incl. framework)")
             if rc != 0:
                 logger.warning(f"mw test exited rc={rc}; continuing if reply was captured")
 
@@ -448,6 +460,17 @@ def main(argv: list[str] | None = None) -> int:
                    help="Natural-language request; LLM extracts flow inputs from it. "
                         "Explicit --input values still take precedence.")
     args, extra = p.parse_known_args(argv)
+
+    # Reuse one persistent server across all legs instead of letting each leg's
+    # `mw test` start (and tear down) its own. (This reuses the server, NOT the
+    # agent — see the design note above; agent state stays per-leg.)
+    if not any(a.startswith("--aw_host") or a.startswith("--aw-host") for a in extra):
+        import os
+        sys.path.insert(0, str(REPO_ROOT / "scripts"))
+        from _mw_server import ensure_server
+        aw_host = ensure_server(dict(os.environ))
+        if aw_host:
+            extra = ["--aw_host", aw_host, *extra]
 
     runner = FlowRunner(
         flow_path=Path(args.flow).resolve(),

@@ -169,8 +169,8 @@ class ManifestRealAdbTests(unittest.TestCase):
         prefix = f"{self.traj_index:03d}_{safe}"
         xml_path = self.traj_dir / f"{prefix}.xml"
         png_path = self.traj_dir / f"{prefix}.png"
-        remote_xml = "/sdcard/appagentcards-traj.xml"
-        remote_png = "/sdcard/appagentcards-traj.png"
+        remote_xml = "/sdcard/relayagent-traj.xml"
+        remote_png = "/sdcard/relayagent-traj.png"
 
         xml_ok = False
         png_ok = False
@@ -212,7 +212,7 @@ class ManifestRealAdbTests(unittest.TestCase):
             )
             return
 
-        self._screenrecord_remote = "/sdcard/appagentcards-record.mp4"
+        self._screenrecord_remote = "/sdcard/relayagent-record.mp4"
         self.adb("shell", "rm", "-f", self._screenrecord_remote, check=False)
         self._screenrecord_proc = subprocess.Popen(
             [
@@ -377,7 +377,7 @@ class ManifestRealAdbTests(unittest.TestCase):
         time.sleep(LAUNCH_SETTLE_SECONDS)
 
     def dump_tree(self) -> ET.Element:
-        remote = "/sdcard/appagentcards-window.xml"
+        remote = "/sdcard/relayagent-window.xml"
         self.adb("shell", "uiautomator", "dump", remote, timeout=20)
         xml = self.adb("exec-out", "cat", remote, timeout=20).stdout
         try:

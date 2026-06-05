@@ -2,7 +2,7 @@
 
 Steps are deliberately semantic, not raw JSONActions, because text-based
 selectors need runtime visual grounding from the current screenshot. The
-adapter (`appcards_agent.py`) walks this list and turns each step into a
+adapter (`relay_agent.py`) walks this list and turns each step into a
 MobileWorld JSONAction at predict() time.
 """
 
@@ -116,7 +116,7 @@ def build_plan(
     # redundant open_app + settle wait at the top of the plan.
     if not skip_open_app:
         plan.append(Step("open_app", {"package": card["app_id"]}, note="cold-launch"))
-        plan.append(Step("wait_ms", {"ms": 2500}, note="cold-launch settle"))
+        plan.append(Step("wait_ms", {"ms": 1000}, note="cold-launch settle"))
 
     # Optional: start a fresh conversation so prior context does not bleed in.
     # Cards may declare the prep flow under embedded_agent.entry.x_prepare_fresh_conversation.

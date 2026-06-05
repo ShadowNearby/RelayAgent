@@ -5,7 +5,7 @@ thread, writing chunks to the device and pulling each one as it finishes.
 On `.stop()` we wait for the in-flight chunk to flush, pull it, and
 optionally concat all chunks with ffmpeg into a single mp4.
 
-Honors `APPCARDS_ANDROID_SERIAL` via `agents._adb.adb_base()`.
+Honors `RELAY_ANDROID_SERIAL` via `agents._adb.adb_base()`.
 """
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def start(out_dir: Path, *, basename: str = "recording") -> Recording:
         idx = 0
         while not rec._stop_evt.is_set():
             idx += 1
-            device_path = f"{_DEVICE_DIR}/appcards_rec_{idx:03d}.mp4"
+            device_path = f"{_DEVICE_DIR}/relay_rec_{idx:03d}.mp4"
             local_path = out_dir / f"chunk_{idx:03d}.mp4"
             logger.info(f"recorder: chunk {idx} → {device_path}")
             rec._proc = subprocess.Popen(
@@ -126,6 +126,6 @@ def start(out_dir: Path, *, basename: str = "recording") -> Recording:
             if elapsed < _CHUNK_SECONDS - 5 and rec._stop_evt.is_set():
                 break
 
-    rec._thread = threading.Thread(target=_loop, name="appcards-recorder", daemon=True)
+    rec._thread = threading.Thread(target=_loop, name="relay-recorder", daemon=True)
     rec._thread.start()
     return rec
