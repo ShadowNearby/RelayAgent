@@ -105,7 +105,7 @@ embedded_agent:
 
 provenance:
   last_verified: "2026-05-25"
-  verified_app_version: "unknown"
+  verified_app_version: "8.0.71"
   verified_os: "android-16"
   verified_device: "Pixel 9"
   verification_method: scripted
