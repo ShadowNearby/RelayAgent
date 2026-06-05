@@ -20,6 +20,12 @@
 
 > **状态：** 早期，但已有实测。SPEC v0.1、7 张已验证的安卓参考卡片（28 个能力）、一个 MobileWorld 接入适配器、跨 App flow 运行器，以及一组真机 A/B 基准测试。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
 
+<p align="center">
+  <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare.gif" alt="同一任务——在小红书搜附近餐厅、选一家打车前往——左为 RelayAgent，右为纯 VLM 智能体" width="100%">
+  <br>
+  <em>同一任务——<em>在小红书上搜索附近餐厅，选择一家打车前往</em>。<strong>左：RelayAgent</strong> 委派给 App 内置助手；<strong>右：纯 VLM 智能体</strong> 手动驱动原生 UI。视频 4 倍速播放；完成墙钟：<strong>RelayAgent 86s vs 纯 VLM 131s</strong>。token 数据见 §结果。</em>
+</p>
+
 ---
 
 ## 第三条路
