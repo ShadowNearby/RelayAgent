@@ -12,8 +12,7 @@
 #   借鉴点：① instruction 参数化（不同城市/物品/日期/预算，防记忆、逼真 grounding）；
 #           ② 每条任务带显式 success 判据；③ 标注 difficulty / category。
 #
-# 任务来源：本仓 manifests/*.yaml 中各 App 内置 Agent 声明的 capability（**以 manifest 为准**；
-#   注意 scripts/run_all_caps.sh 里 order_local_delivery / search_flight 等是旧 id，已不用）。
+# 任务来源：本仓 manifests/*.yaml 中各 App 内置 Agent 声明的 capability（**以 manifest 为准**）。
 #
 # 怎么跑：
 #   单条     uv run python scripts/run_test.py <app> "<instruction>"
@@ -373,7 +372,7 @@ tasks:
     difficulty: medium
     side_effects: []
     handoff_required: false
-    instruction: "帮我总结这个网页：https://zh.wikipedia.org/wiki/光合作用"
+    instruction: "帮我总结这个网页：https://api-docs.deepseek.com/zh-cn/"
     success: "网页摘要返回该页面的要点总结"
 
   # ── 携程旅行 ctrip.android.view （底部「问AI或按住说话」→「携程问道」，强制登录） ──
