@@ -45,6 +45,5 @@ uv run python scripts/run_test.py com.aliyun.tongyi "帮我找一台适合学生
 uv run python scripts/run_plan.py "帮我找一台适合学生用的平板电脑，预算2000以内" --dry-run
 ```
 
-> 注：`scripts/run_all_caps.sh` 里仍残留旧的 `com.taobao.taobao` 用例和旧 capability id
-> （`order_local_delivery`、`search_flight/hotel/train`），已与现 manifest 不符；本任务集一律用
-> **manifest-canonical** id，购物能力归到 `com.aliyun.tongyi`，携程用 `book_flight/book_hotel/book_train`。
+> 注：本任务集一律使用 **manifest-canonical** id；购物能力归到 `com.aliyun.tongyi`，
+> 携程使用 `book_flight/book_hotel/book_train`。
