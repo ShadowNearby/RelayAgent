@@ -555,14 +555,13 @@ not the instrumented n=3 cost runs.
 | App | Package | Capabilities | Card class |
 | --- | --- | --- | --- |
 | Amap | com.autonavi.minimap | POI search, navigation, ride hailing, trip planning | mixed |
-| Tongyi Qwen | com.aliyun.tongyi | chat, train/ride/food/hotel/movie booking | mixed |
+| Tongyi Qwen | com.aliyun.tongyi | chat, train/ride/food/hotel/movie booking, product search/compare/purchase/order tracking | mixed |
 | Ctrip | ctrip.android.view | flights, hotels, trains, attractions, packages | mixed |
 | Xiaohongshu | com.xingin.xhs | community Q&A via AI search | multi-node |
-| Taobao | com.taobao.taobao | product search, compare, purchase, order tracking | multi-node |
 | WeChat | com.tencent.mm | Yuanbao chat, AI search | mixed |
 | WPS Office | cn.wps.moffice_eng | AI doc/PPT/writing | single-bubble |
 
-#### 8.2.1 Capability coverage (28 capabilities across 7 cards)
+#### 8.2.1 Capability coverage (27 capabilities across 6 cards)
 
 Every capability in the catalog was exercised end-to-end and reached its
 expected terminal state. "Handoff" marks capabilities with
@@ -579,10 +578,14 @@ cleanly.
 | 高德地图 | plan_trip | — | ✓ |
 | 通义千问 | chat | — | ✓ |
 | 通义千问 | book_train | ✓ | ✓ |
-| 通义千问 | order_food | ✓ | ✓ |
+| 通义千问 | order_food | ✓ | ✓ † |
 | 通义千问 | hail_ride | ✓ | ✓ |
 | 通义千问 | book_hotel | ✓ | ✓ |
 | 通义千问 | book_movie | ✓ | ✓ |
+| 通义千问 | search_product | — | ✓ |
+| 通义千问 | compare_products | — | ✓ |
+| 通义千问 | buy_product | ✓ | ✓ † |
+| 通义千问 | track_order | — | ✓ |
 | 携程旅行 | chat_travel_qa | — | ✓ |
 | 携程旅行 | search_flight | ✓ | ✓ |
 | 携程旅行 | search_hotel | ✓ | ✓ |
@@ -590,11 +593,6 @@ cleanly.
 | 携程旅行 | plan_trip | ✓ | ✓ |
 | 携程旅行 | search_attraction_info | — | ✓ |
 | 小红书 | qa_community_knowledge | — | ✓ |
-| 淘宝 | search_product | — | ✓ |
-| 淘宝 | compare_products | — | ✓ |
-| 淘宝 | buy_product | ✓ | ✓ † |
-| 淘宝 | order_local_delivery | ✓ | ✓ † |
-| 淘宝 | track_order | — | ✓ |
 | 微信 | ai_search | — | ✓ |
 | WPS Office | chat | — | ✓ |
 | WPS Office | ai_ppt | ✓ | ✓ |
@@ -602,19 +600,20 @@ cleanly.
 | WPS Office | doc_reading | ✓ | ✓ |
 | WPS Office | web_summary | — | ✓ |
 
-**Coverage: 28/28 capabilities reached their expected terminal state.** 16 of
-the 28 are `handoff_to_user_required` and every one stopped at the correct
+**Coverage: 27/27 capabilities reached their expected terminal state.** 15 of
+the 27 are `handoff_to_user_required` and every one stopped at the correct
 pre-CTA screen (cf. §8.6).
 
-> † **Taobao risk-control caveat.** Taobao enforces strict server-side
-> risk-control: scripted GUI interaction on `buy_product` /
-> `order_local_delivery` can trip an account/device-level "访问被拒绝" wall or a
-> one-time identity-verification gate, **and repeated automated operation risks
-> the account being flagged or banned**. The entry path and handoff behavior are
-> sound (both reached the pre-CTA screen on a clean account), but this is the one
-> card where GUI-mediated relay carries a standing account-safety risk that a
-> vendor-API path (§2.1) would avoid. We mark these ✓ for functional coverage
-> while flagging the operational hazard; see §9.
+> † **Taobao risk-control caveat.** The Taobao shopping capabilities are now
+> hosted in the 千问 (Qwen) card and routed through the Taobao backend — the
+> standalone Taobao card was retired because Taobao's in-app assistant *is* 千问,
+> and the Qwen-hosted path reaches the same fulfillment backend without driving
+> the Taobao app's GUI directly (the safer route). The Taobao backend still
+> enforces strict server-side risk-control: the deep-link targets of `buy_product`
+> / `order_food` can trip an account/device-level "访问被拒绝" wall or a
+> one-time identity-verification gate. The entry path and handoff behavior are
+> sound (both reached the pre-CTA screen on a clean account); we mark these ✓ for
+> functional coverage while flagging the operational hazard; see §9.
 
 ### 8.2 Token cost (the headline result)
 
@@ -994,19 +993,18 @@ provenance, handoff safety, manifest-isolation ablation) are itemized in §8.9;
 this section covers the broader system-level limits.
 
 - **Sample size & scope.** The benchmark covers two tasks at n=3 (RA /
-  general_e2e); MW manual-UI is n=1. Full 7-card / per-capability success rates
+  general_e2e); MW manual-UI is n=1. Full 6-card / per-capability success rates
   (§8.2) are not yet measured. T1's manual leg uses a different host app (Taobao)
   than the assistant legs (Qwen), though the fulfillment backend is shared. (See
   §8.9 for the planned experiments that close these.)
-- **Taobao server-side risk-control wall.** `buy_product` /
-  `order_local_delivery` can hit an account/device-level "访问被拒绝" wall (and a
-  one-time identity-verification gate we hit mid-benchmark); this is not an adapter
-  bug — the entry path is sound. More seriously, **scripted GUI interaction on
-  Taobao risks the account being flagged or banned** by its anti-automation
-  risk-control. This is the one card where the GUI-mediated path carries a standing
-  account-safety hazard that a vendor-API route (§2.1) would sidestep; the
-  Qwen-hosted `order_food` path (§8.1) goes through the same fulfillment backend
-  without driving the Taobao app directly, and is the safer way to exercise it.
+- **Taobao server-side risk-control wall.** The Taobao shopping capabilities are
+  now hosted in the Qwen card and routed through the Taobao backend (the standalone
+  Taobao card was retired, since Taobao's in-app assistant *is* 千问 and the
+  Qwen-hosted path reaches the same fulfillment backend without driving the Taobao
+  app's GUI directly — the safer route). The Taobao backend's `buy_product` /
+  `order_food` deep-link targets can still hit an account/device-level "访问被拒绝"
+  wall (and a one-time identity-verification gate we hit mid-benchmark); this is not
+  an adapter bug — the entry path is sound.
 - **VLM grounding fallback** accuracy degrades on CN UIs when the a11y tree is
   empty (WebView-rendered content); Qwen-VL's normalized-vs-pixel coordinate
   ambiguity is handled by a heuristic in `_ground_text`.

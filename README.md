@@ -242,10 +242,9 @@ Seven verified reference cards, **28 capabilities** total, each exercised end-to
 | App | Package | Capabilities | Card class |
 | --- | --- | --- | --- |
 | Amap (高德地图) | com.autonavi.minimap | POI search, navigation, ride hailing, trip planning | mixed |
-| Tongyi Qwen (通义千问) | com.aliyun.tongyi | chat, train/ride/food/hotel/movie booking | mixed |
+| Tongyi Qwen (通义千问) | com.aliyun.tongyi | chat, train/ride/food/hotel/movie booking, product search/comparison/purchase/order tracking | mixed |
 | Ctrip (携程旅行) | ctrip.android.view | flights, hotels, trains, attractions, package tours | mixed |
 | Xiaohongshu (小红书) | com.xingin.xhs | community UGC Q&A via AI search | multi-node |
-| Taobao (淘宝) | com.taobao.taobao | product search, comparison, purchasing, order tracking | multi-node |
 | WeChat (微信) | com.tencent.mm | Yuanbao chat surface, AI search | mixed |
 | WPS Office | cn.wps.moffice_eng | AI doc / PPT / writing assist | single-bubble |
 
@@ -255,7 +254,7 @@ Quality bar per card: all required SPEC fields populated, ≥2 real example prom
 
 ## Known blockers
 
-- **Taobao server-side risk control ("访问被拒绝").** Some Taobao capabilities — observed on `buy_product` and `order_local_delivery` — land on a server-rendered "亲，访问被拒绝" wall (or a one-time identity gate) instead of the product / local-delivery flow. This is account- and device-level 风控, **not** an adapter or manifest bug: the entry path executes correctly and the failure happens on the deep-link target page *after* the in-app agent fires. **More seriously, scripted GUI interaction on Taobao risks the account being flagged or banned.** This is the one card where the GUI-mediated path carries a standing account-safety hazard a vendor-API route would avoid; the Qwen-hosted `order_food` path goes through the same fulfillment backend without driving the Taobao app directly and is the safer way to exercise it. Mitigations: sign the device into an account with normal purchase history, clear pending real-name / device-trust checks in 我的淘宝 → 设置 → 账号与安全, and avoid running the same risk-controlled capability back-to-back on a freshly-imaged device.
+- **Taobao server-side risk control ("访问被拒绝").** The Taobao shopping capabilities are now hosted in the 千问 (Qwen) card and routed through the Taobao backend — the standalone `com.taobao.taobao` card has been retired, since Taobao's in-app assistant *is* 千问 and the Qwen-hosted path goes through the same fulfillment backend without driving the Taobao app's GUI directly (the safer route). The risk-control wall may still surface on the deep-link target pages of `buy_product` / `order_food` (the 淘宝闪购 local-delivery card): a server-rendered "亲，访问被拒绝" wall (or a one-time identity gate) instead of the product / local-delivery flow. This is account- and device-level 风控, **not** an adapter or manifest bug: the entry path executes correctly and the failure happens on the deep-link target page *after* the in-app agent fires. Mitigations: sign the device into an account with normal purchase history, clear pending real-name / device-trust checks in 我的淘宝 → 设置 → 账号与安全, and avoid running the same risk-controlled capability back-to-back on a freshly-imaged device.
 
 ## What this project is *not*
 
