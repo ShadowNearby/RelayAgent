@@ -133,7 +133,7 @@ RelayAgent/
 ├── spec/schema.json           # SPEC 的 JSON Schema 镜像（规范性校验器）
 ├── manifests/                 # 每个 App 一张 YAML 卡片；7 张安卓卡片 + _flows/ 存放跨 App 的 YAML
 ├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、flow 运行器、adb 辅助
-├── scripts/                   # run_test.py（单 App）、run_flow.py（跨 App）、run_nl.py（NL 路由）
+├── scripts/                   # run_test.py（单 App）、run_flow.py（手写跨 App flow）、run_nl.py（NL 路由）、run_plan.py（自动合成跨 App plan）
 ├── report/                    # 技术报告 + 冻结的基准数据
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
@@ -216,6 +216,20 @@ uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打�
 uv run python scripts/run_nl.py --dry-run "把和老王的聊天总结成一份周报 docx"
 ```
 
+### 自动合成跨 App plan
+
+`run_nl.py` 只能在**已有**的手写 flow 里挑；当没有对应 flow 时，`scripts/run_plan.py` 让 LLM 基于全量 app/capability 目录**现场合成**一条跨 App plan（steps + leg 间 `bind`），本地校验后落盘到 `manifests/_generated/`，预览 + 确认，再交给同一个 `FlowRunner` 执行。生成的 plan 与手写 flow 同 schema。
+
+```bash
+# 合成 → 预览 → 询问 y/N → 执行
+uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去"
+
+# 只规划 + 预览，不执行（不碰设备）
+uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去" --dry-run
+```
+
+完整设计与用法见 [`docs/cross_app_planner.md`](docs/cross_app_planner.md)。
+
 ## 运行测试
 
 ```bash
@@ -242,10 +256,9 @@ python -m unittest tests.test_manifest_real_adb -v
 | App | 包名 | 能力 | 卡片类型 |
 | --- | --- | --- | --- |
 | 高德地图 (Amap) | com.autonavi.minimap | POI 搜索、导航、打车、行程规划 | mixed |
-| 通义千问 (Tongyi Qwen) | com.aliyun.tongyi | 聊天、火车/打车/外卖/酒店/电影预订 | mixed |
+| 通义千问 (Tongyi Qwen) | com.aliyun.tongyi | 聊天、火车/打车/外卖/酒店/电影预订、商品搜索/比价/购买/订单追踪 | mixed |
 | 携程旅行 (Ctrip) | ctrip.android.view | 机票、酒店、火车、景点、跟团游 | mixed |
 | 小红书 (Xiaohongshu) | com.xingin.xhs | 通过 AI 搜索做社区 UGC 问答 | multi-node |
-| 淘宝 (Taobao) | com.taobao.taobao | 商品搜索、比价、购买、订单追踪 | multi-node |
 | 微信 (WeChat) | com.tencent.mm | 元宝聊天界面、AI 搜索 | mixed |
 | WPS Office | cn.wps.moffice_eng | AI 文档 / PPT / 写作辅助 | single-bubble |
 
@@ -255,7 +268,7 @@ python -m unittest tests.test_manifest_real_adb -v
 
 ## 已知阻塞点
 
-- **淘宝服务端风控（「访问被拒绝」）。** 部分淘宝能力——已观察到的是 `buy_product` 和 `order_local_delivery`——会落到一个服务端渲染的「亲，访问被拒绝」墙（或一次性的实名/身份验证关卡），而不是商品 / 本地配送流程。这是账号级、设备级的风控，**不是**适配器或 manifest 的 bug：入口路径执行正确，失败发生在内置助手触发*之后*的 deep-link 目标页。**更严重的是，对淘宝做脚本化 GUI 操作有账号被标记或封禁的风险。** 这是唯一一张 GUI 中介路径会带来长期账号安全隐患的卡片——而厂商 API 路径可以规避；走千问承载的 `order_food` 路径会经过同一个履约后端，但不直接驱动淘宝 App，是更安全的验证方式。缓解办法：用有正常购买记录的账号登录设备、在 我的淘宝 → 设置 → 账号与安全 里清掉待办的实名/设备信任校验、不要在刚刷机的设备上连续背靠背地跑同一个被风控的能力。
+- **淘宝服务端风控（「访问被拒绝」）。** 淘宝购物能力现已并入 千问 (Qwen) 卡片、经 Taobao 后端路由——独立的 `com.taobao.taobao` 卡片已下线，因为淘宝内置助手本身*就是*千问，而走千问承载的路径会经过同一个履约后端、但不直接驱动淘宝 App 的 GUI（更安全的路径）。风控墙仍可能出现在 `buy_product` / `order_food`（即淘宝闪购的本地配送卡片）的 deep-link 目标页：一个服务端渲染的「亲，访问被拒绝」墙（或一次性的实名/身份验证关卡），而不是商品 / 本地配送流程。这是账号级、设备级的风控，**不是**适配器或 manifest 的 bug：入口路径执行正确，失败发生在内置助手触发*之后*的 deep-link 目标页。缓解办法：用有正常购买记录的账号登录设备、在 我的淘宝 → 设置 → 账号与安全 里清掉待办的实名/设备信任校验、不要在刚刷机的设备上连续背靠背地跑同一个被风控的能力。
 
 ## 这个项目*不是*什么
 

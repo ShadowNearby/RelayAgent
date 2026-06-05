@@ -17,13 +17,26 @@
 
 ```bash
 uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
-uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"   # 多 app NL 路由
-uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml --nl "..."  # 多 app flow
+uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"   # 多 app NL 路由（选既有 flow / 单 app）
+uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml --nl "..."  # 跑手写 flow
+uv run python scripts/run_plan.py "在上海找三家小众书店，挑一家打车过去" --dry-run  # 自动合成跨 app plan
 ```
 
 直接 `mw test`（仅调试）：参数名须匹配 `RelayAgent.__init__`：`--model_name` / `--llm_base_url` / `--api_key`（**不是** `--base_url`），并 `export RELAY_TARGET_APP=<pkg>`。绕过脚本时 planner 会自己发 `open_app` 步。
 
 需要 adb + 真机 USB 调试 + `com.android.adbkeyboard/.AdbIME`。`RELAY_ANDROID_SERIAL` 选设备。
+
+## 自动跨 App 规划（`run_plan.py` / `FlowPlanner`）
+
+**详细设计 + 用法见 [`docs/cross_app_planner.md`](docs/cross_app_planner.md)。** 速览：
+
+- 定位：`run_nl` 是在**手写** flow / 单 app 里**选**；`run_flow` 跑**手写** flow；**`run_plan` 在没有对应手写 flow 时让 LLM 现场合成**一条跨 app plan。三者共用 `FlowRunner` 与 flow schema。
+- 链路（`scripts/run_plan.py` + `agents/flow_planner.py`）：`build_catalog`（复用 run_nl）→ 缓存查找 → `FlowPlanner.plan`（LLM→fenced JSON→本地校验）→ 落盘 `manifests/_generated/`（gitignore）→ 预览 + 确认（默认 N，非交互 EOF=不执行）→ `FlowRunner.run()`。
+- 生成的 plan **复用 flow YAML 形状但无 `inputs` 块**（值直接烤进 prompt）；leg 间数据流仍 `extract`/`bind`/`{var}`。
+- 校验挡：未知 app/capability id、悬空 `{var}`、`bind`/`id` 重复、**`handoff_to_user_required` 非末尾必须紧跟 `ask_user`（末尾可作终点）**。
+- **handoff 往返 = 先 A 后 B**：A（已落地）handoff leg → 流程 `ask_user` → 全新 `mw test` leg 消费回答；B（仅留缝，`# TODO(phase-B):`）同会话原地续跑。
+- 故意留的 TODO：**repair 重修循环**（校验失败硬报错代替，`_repair` 空壳）、**语义缓存复用**（仅精确串匹配）。
+- 旋钮：`--dry-run`（只规划+预览）/ `--yes`（跳确认）/ `--no-cache`（强制重生成）/ `--record` / `-- <透传 mw test>`。批跑时 stdin `</dev/null` → 中途选单步自动取第一候选。
 
 ## MobileWorld fork
 
@@ -38,7 +51,7 @@ uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml --nl "
 
 ### 持久化 server（默认复用）
 
-三个入口脚本 spawn `mw test` 前经 `scripts/_mw_server.py:ensure_server()` 探测 6800：健在就注入 `--aw_host http://localhost:6800` 复用；没有就脱离会话起一个常驻的（outlive 本次 run，pid 写 `$TMPDIR/mw_server_6800.pid`）。省掉每 run 自起/销毁开销。
+四个入口脚本 spawn `mw test` 前经 `scripts/_mw_server.py:ensure_server()` 探测 6800：健在就注入 `--aw_host http://localhost:6800` 复用；没有就脱离会话起一个常驻的（outlive 本次 run，pid 写 `$TMPDIR/mw_server_6800.pid`）。省掉每 run 自起/销毁开销。
 
 - **server 端 env 只在启动那刻烤入**（`MW_WAIT_SECONDS` / `MW_ADB_TIMEOUT`）→ 复用现有 server 时 per-run 改 `MW_*` **不生效**。
 - 改了 server 端代码 / fork patch / 想重烤 `MW_*` → `RELAY_MW_SERVER_RESTART=1` 或 `kill -9 $(cat $TMPDIR/mw_server_6800.pid)`。
