@@ -133,7 +133,7 @@ RelayAgent/
 ├── spec/schema.json           # JSON Schema mirror of SPEC (normative validator)
 ├── manifests/                 # one YAML card per app; 7 Android cards + _flows/ for multi-app YAMLs
 ├── agents/                    # relay adapter, planner, capability router, card loader, flow runner, adb helper
-├── scripts/                   # run_test.py (single app), run_flow.py (multi-app), run_nl.py (NL routing)
+├── scripts/                   # run_test.py (single app), run_flow.py (hand-written multi-app flow), run_nl.py (NL routing), run_plan.py (auto-synthesized cross-app plan)
 ├── report/                    # tech report + frozen benchmark data
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
@@ -215,6 +215,20 @@ uv run python scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
 uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"
 uv run python scripts/run_nl.py --dry-run "把和老王的聊天总结成一份周报 docx"
 ```
+
+### Auto-synthesize a cross-app plan
+
+`run_nl.py` can only *pick* among the flows that already exist. When no flow matches, `scripts/run_plan.py` asks the LLM to **synthesize** a fresh cross-app plan (steps + cross-leg `bind`s) from the full app/capability catalog, validates it locally, persists it to `manifests/_generated/`, previews + confirms, then runs it through the same `FlowRunner`. The generated plan uses the same schema as the hand-written flows.
+
+```bash
+# synthesize → preview → ask y/N → execute
+uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去"
+
+# plan + preview only, don't execute (no device involved)
+uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去" --dry-run
+```
+
+Full design and usage: [`docs/cross_app_planner_en.md`](docs/cross_app_planner_en.md).
 
 ## Run tests
 

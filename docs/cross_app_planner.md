@@ -1,5 +1,7 @@
 # 自动跨 App 规划器（`run_plan.py` / `FlowPlanner`）
 
+> English: [`cross_app_planner_en.md`](cross_app_planner_en.md)
+
 > 一句自然语言 → LLM **自动合成**一条跨 App 的 plan → 校验 → 落盘 → 预览确认 → 真机执行。
 >
 > 与已有入口的关系：`run_nl.py` 是在**手写好的** flow / 单 app 能力里**选**一个；`run_flow.py` 直接跑一个**手写**的 flow YAML；`run_plan.py` 则是当**没有**对应手写 flow 时，让模型**现场生成**一条多 app plan。三者共用同一套 `FlowRunner` 执行器与 flow schema。
