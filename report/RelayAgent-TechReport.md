@@ -209,7 +209,7 @@ discoverable by the card and safe by the handoff contract — not the automation
 [^autoglm]: AutoGLM, arXiv:2411.00820 (Zhipu); Open-AutoGLM open-sourced 2025-12.
 [^mobileuse]: MobileUse, arXiv:2507.16853 (MadeAgents/mobile-use), NeurIPS 2025.
 [^a3]: A3: Android Agent Arena, arXiv:2501.01149 — a dynamic evaluation platform
-(100 tasks over 20 live apps), used here as a benchmark, not a baseline agent.
+(201 tasks over 20 live apps), used here as a benchmark, not a baseline agent.
 
 Our evaluation makes the contrast concrete and quantitative: we run a pure
 step-by-step VLM agent (MobileWorld's `general_e2e`) on the *same* tasks, both
