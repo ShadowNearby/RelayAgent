@@ -20,6 +20,12 @@ One machine-readable **card** per app. GUI-mediated by default. Vendor-cooperati
 
 > **Status:** early but measured. SPEC v0.1, seven verified Android reference cards (28 capabilities), a MobileWorld relay adapter, multi-app flow runner, and a real-device A/B benchmark. Full method and numbers: [**Tech Report**](report/RelayAgent-TechReport.md). Contributors welcome.
 
+<p align="center">
+  <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare.gif" alt="Same task — search nearby restaurants on Xiaohongshu, pick one and hail a ride — RelayAgent on the left vs a pure-VLM agent on the right" width="100%">
+  <br>
+  <em>Same task — <em>search nearby restaurants on Xiaohongshu, pick one and hail a ride there</em>. <strong>Left: RelayAgent</strong> delegating to the in-app assistant. <strong>Right: a pure-VLM agent</strong> hand-driving the native UI. Playback is 4× speed; wall-clock to completion: <strong>RelayAgent 86 s vs pure-VLM 131 s</strong>. See §Results for the token numbers.</em>
+</p>
+
 ---
 
 ## The third path
