@@ -740,8 +740,8 @@ make.
 
 | Config | T1 wall_s (median) | T2 wall_s (median) |
 | --- | ---: | ---: |
-| MW manual-UI (no assistant) | 193 (n=1) | 717 (n=1) |
-| MW general_e2e (uses assistant) | 111 (46 / 111 / 379) | 166 |
+| MW manual-UI (no assistant) | 193 | 717 |
+| MW general_e2e (uses assistant) | 111| 166 |
 | RA (RelayAgent) | 47.6 | 115.8 |
 
 Here the savings are **real and large**, because each step *does less work*:
