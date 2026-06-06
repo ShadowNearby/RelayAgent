@@ -99,9 +99,17 @@ def main() -> int:
     p.add_argument("--base-url", help="Override LLM_BASE_URL from .env")
     p.add_argument("--api-key", help="Override LLM_API_KEY from .env")
     p.add_argument("--max-step", type=int, default=-1, help="Max steps (-1 = unlimited)")
+    p.add_argument("--step_wait_time", type=float, default=None,
+                   help="Per-step settle before screenshot (s); else RELAY_STEP_WAIT/0.2")
     p.add_argument("--keep-ime", action="store_true",
                    help="Do not restore the device IME at exit (leave AdbKeyboard active)")
-    args = p.parse_args()
+    # Accepted-and-ignored for drop-in compatibility with callers that used to
+    # forward mw-test flags (the native path has no server and a fixed traj dir).
+    p.add_argument("--aw_host", "--aw-host", dest="aw_host", help=argparse.SUPPRESS)
+    p.add_argument("--log-file-root", dest="log_file_root", help=argparse.SUPPRESS)
+    args, unknown = p.parse_known_args()
+    if unknown:
+        print(f"▶ [native] ignoring unrecognized args: {unknown}", file=sys.stderr)
 
     if not AGENT_FILE.exists():
         sys.exit(f"agent file missing: {AGENT_FILE}")
@@ -130,7 +138,11 @@ def main() -> int:
     # Import the native substrate AFTER sys.path/env are set.
     from agents.native_runtime import NativeEnv, activate_adb_keyboard, reset_ime, run_task
 
-    step_wait = float(os.getenv("RELAY_STEP_WAIT", "0.2"))
+    step_wait = (
+        args.step_wait_time
+        if args.step_wait_time is not None
+        else float(os.getenv("RELAY_STEP_WAIT", "0.2"))
+    )
     env = NativeEnv(step_wait_time=step_wait)
 
     agent_cls = _load_agent_class(AGENT_FILE)

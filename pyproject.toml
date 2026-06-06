@@ -7,29 +7,23 @@ license = { text = "Apache-2.0" }
 authors = [
     { name = "Jingsheng Yan", email = "yan.jingsheng@outlook.com" },
 ]
-# 3.12 is required because the MobileWorld runtime that drives
-# agents/relay_agent.py pins ">=3.12,<3.13". The bare card loader
-# (manifests + agents/card_loader.py) would work on older Pythons, but the
-# real-device runner won't, so we keep one floor.
+# 3.12 floor kept for the runtime (matches the resolved lock / .venv). The
+# real-device runner is now pure-Python over adb (agents/native_runtime.py), so
+# there is no longer an external runtime forcing the version.
 requires-python = ">=3.12,<3.13"
 dependencies = [
     # Card loader + manifest parsing.
     "pyyaml>=6.0",
     # Used across agents/ for structured logging.
     "loguru>=0.7",
-    # FlowRunner's extract step talks to an OpenAI-compatible LLM endpoint.
+    # The LLM client (capability router, grounding, reply-watch, flow extract).
     "openai>=1.0",
-    # Screenshot encoding for the VLM grounding / reply-watch calls.
+    # Screenshot decode/encode for VLM grounding / reply-watch + native capture.
     "pillow>=10.0",
-    # MobileWorld pulls in fastmcp 2.9.2, which is incompatible with
-    # pydantic >=2.11 (Settings model declares both `default` and
-    # `default_factory` on the same field → TypeError at import time).
-    # Pin the last compatible release. See CLAUDE.md for context.
+    # agents/action_model.py's JSONAction is a pydantic model. The <2.11 pin is
+    # historical (it was forced by fastmcp via MobileWorld, both now removed);
+    # kept conservative so validator behaviour matches the resolved lock.
     "pydantic<2.11",
-    # Real-device runner. Sourced from a local checkout via [tool.uv.sources]
-    # below — there is no PyPI release yet. Override the path with the
-    # MOBILEWORLD_PATH env var or by editing the source entry.
-    "mobile-world",
     "socksio>=1.0.0",
 ]
 
@@ -73,12 +67,3 @@ include = [
     "LICENSE",
     ".env.example",
 ]
-
-[tool.uv.sources]
-# MobileWorld is not on PyPI; uv clones it directly. Bump `rev` to upgrade.
-# Pinned to the ShadowNearby fork: it is upstream 9baaa2b + four patches
-# (MW_WAIT_SECONDS, MW_ADB_TIMEOUT, server-log-to-file, and skip-post-step
-# screencap via action_json.skip_screenshot). SSH URL so uv clones with the
-# local key. To track upstream again, point back at Tongyi-MAI/MobileWorld and
-# rebase the patches. See CLAUDE.md "MobileWorld 依赖" for the patch list.
-mobile-world = { git = "ssh://git@github.com/ShadowNearby/MobileWorld.git", rev = "73c8c1b" }
