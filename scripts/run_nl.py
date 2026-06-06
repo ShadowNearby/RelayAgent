@@ -45,8 +45,8 @@ from agents.flow_runner import (  # noqa: E402
 MANIFEST_DIR = REPO_ROOT / "manifests"
 FLOW_DIR = MANIFEST_DIR / "_flows"
 ENV_FILE = REPO_ROOT / ".env"
-AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
-MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
+# Single-app dispatch goes through the direct-adb native runner (no mw server).
+RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
 
 
 # --------------------------------------------------------------------------- #
@@ -215,12 +215,9 @@ def dispatch_app(
         child_env["RELAY_FORCE_CAPABILITY"] = capability
         child_env["RELAY_INVOCATION_TEXT"] = goal
 
+    # run_native reads LLM_* + RELAY_* from the child env; app is positional.
     cmd = [
-        str(MW_BIN), "test", goal,
-        "--agent-type", str(AGENT_FILE),
-        "--model_name", env["LLM_MODEL"],
-        "--llm_base_url", env["LLM_BASE_URL"],
-        "--api_key", env["LLM_API_KEY"],
+        sys.executable, str(RUN_NATIVE), app_id, goal,
         *extra_mw_args,
     ]
     return subprocess.call(cmd, cwd=REPO_ROOT, env=child_env)
@@ -259,16 +256,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    # Reuse a persistent server across every `mw test` this run spawns (a flow
-    # spawns one per leg). Inject --aw_host into the forwarded args unless the
-    # caller passed their own. See scripts/_mw_server.py.
-    if not any(a.startswith("--aw_host") or a.startswith("--aw-host") for a in extra):
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from _mw_server import ensure_server
-        aw_host = ensure_server({**env, **os.environ})
-        if aw_host:
-            extra = ["--aw_host", aw_host, *extra]
-
+    # No server: single-app and each flow leg run as direct-adb run_native
+    # subprocesses. Extra args are forwarded to run_native verbatim.
     kind = decision.get("kind")
     rec = None
     if args.record is not None:

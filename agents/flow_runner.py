@@ -45,8 +45,8 @@ from openai import OpenAI
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
-AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
-MW_BIN = REPO_ROOT / ".venv" / "bin" / "mw"
+# Each app leg is a fresh `run_native.py` subprocess (direct adb; no mw server).
+RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
 
 
 # --------------------------------------------------------------------------- #
@@ -289,27 +289,24 @@ class FlowRunner:
                 "RELAY_FORCE_CAPABILITY": capability,
                 "RELAY_INVOCATION_TEXT": prompt,
                 "RELAY_REPLY_OUT": str(reply_path),
-                # Agent writes the framework-excluded wall_clock.json next to
-                # this leg's traj (MW puts it under <log-file-root>/user_task).
+                # Agent writes the framework-excluded wall_clock.json into this
+                # leg's dir; create it first (run_native has no --log-file-root).
                 "RELAY_WALL_OUT": str(step_log_root / "user_task" / "wall_clock.json"),
             }
+            (step_log_root / "user_task").mkdir(parents=True, exist_ok=True)
+            # run_native reads LLM_* + RELAY_* from the child env (no flags).
             cmd = [
-                str(MW_BIN), "test", prompt,
-                "--agent-type", str(AGENT_FILE),
-                "--model_name", self.env["LLM_MODEL"],
-                "--llm_base_url", self.env["LLM_BASE_URL"],
-                "--api_key", self.env["LLM_API_KEY"],
-                "--log-file-root", str(step_log_root),
+                sys.executable, str(RUN_NATIVE), app, prompt,
                 *self.extra_mw_args,
             ]
             logger.info(
-                f"→ mw test for app={app} capability={capability!r} prompt={prompt!r}"
+                f"→ run_native for app={app} capability={capability!r} prompt={prompt!r}"
             )
             # Feed empty stdin so the final ask_user handoff (when present)
             # closes cleanly with EOF rather than blocking the flow.
             # The framework-excluded per-leg wall_clock.json is written by the
             # agent (RELAY_WALL_OUT) at subprocess exit; here we only print the
-            # gross leg time (incl. framework) for reference when RELAY_TIMING=1.
+            # gross leg time for reference when RELAY_TIMING=1.
             #
             # TODO(phase-B): same-session handoff round-trip. When this leg
             # carries a `resume: true` marker, DON'T close stdin with EOF —
@@ -318,15 +315,15 @@ class FlowRunner:
             # agent's handoff ask_user (see relay_agent.py) blocks on that
             # answer and resumes predict() in the SAME conversation instead of
             # terminating. Phase A handles handoff at flow granularity (a fresh
-            # `mw test` leg after a flow-level ask_user), which loses in-app
-            # state; phase B preserves it.
+            # leg after a flow-level ask_user), which loses in-app state; phase B
+            # preserves it.
             timing = os.getenv("RELAY_TIMING", "0") == "1"
             t0 = time.monotonic()
             rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
             if timing:
-                logger.info(f"leg gross wall_s={round(time.monotonic() - t0, 1)} (incl. framework)")
+                logger.info(f"leg gross wall_s={round(time.monotonic() - t0, 1)}")
             if rc != 0:
-                logger.warning(f"mw test exited rc={rc}; continuing if reply was captured")
+                logger.warning(f"run_native exited rc={rc}; continuing if reply was captured")
 
             reply = ""
             if reply_path.exists() and reply_path.stat().st_size > 0:
@@ -499,17 +496,8 @@ def main(argv: list[str] | None = None) -> int:
                         "Explicit --input values still take precedence.")
     args, extra = p.parse_known_args(argv)
 
-    # Reuse one persistent server across all legs instead of letting each leg's
-    # `mw test` start (and tear down) its own. (This reuses the server, NOT the
-    # agent — see the design note above; agent state stays per-leg.)
-    if not any(a.startswith("--aw_host") or a.startswith("--aw-host") for a in extra):
-        import os
-        sys.path.insert(0, str(REPO_ROOT / "scripts"))
-        from _mw_server import ensure_server
-        aw_host = ensure_server(dict(os.environ))
-        if aw_host:
-            extra = ["--aw_host", aw_host, *extra]
-
+    # No persistent server anymore: each leg is a direct-adb run_native
+    # subprocess. Any extra args are forwarded to run_native verbatim.
     runner = FlowRunner(
         flow_path=Path(args.flow).resolve(),
         input_overrides=_parse_kv(args.input),

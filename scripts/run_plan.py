@@ -239,15 +239,10 @@ def main(argv: list[str] | None = None) -> int:
         print("已取消。")
         return 0
 
-    # Reuse one persistent MW server across every leg's `mw test` (inject
-    # --aw_host unless the caller passed their own). See scripts/_mw_server.py.
-    if not any(a.startswith("--aw_host") or a.startswith("--aw-host") for a in extra):
-        from _mw_server import ensure_server
-        aw_host = ensure_server({**env, **os.environ})
-        if aw_host:
-            extra = ["--aw_host", aw_host, *extra]
+    # No server: each leg is a direct-adb run_native subprocess (FlowRunner
+    # forwards `extra` to run_native verbatim).
 
-    # Recording spans multiple `mw test` subprocesses (one per leg); keep a
+    # Recording spans multiple leg subprocesses (one per leg); keep a
     # single continuous parent-owned recording (mirrors run_nl's flow branch).
     rec = None
     if args.record is not None:
