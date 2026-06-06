@@ -34,7 +34,7 @@ from typing import Any
 
 from loguru import logger
 
-from mobile_world.runtime.utils.models import JSONAction
+from agents.action_model import JSONAction
 
 from agents._adb import _get_screen_size
 from agents.relay_agent import RelayAgent, _BOUNDS_RE, _dump_window_xml_root
