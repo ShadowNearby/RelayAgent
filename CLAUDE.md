@@ -2,10 +2,10 @@
 
 ## Python 环境
 
-- venv 在 `.venv/`，**Python 3.12**（MobileWorld 要求 `>=3.12,<3.13`）。
+- venv 在 `.venv/`，**Python 3.12**（`pyproject.toml` 锁 `>=3.12,<3.13`，匹配现有 lock）。
 - 装依赖（不装本项目，靠 `uv run` 跑源码）：`uv venv --python 3.12 && uv sync --no-install-project`。
-- MobileWorld 经 `pyproject.toml` 的 git 依赖 + `[tool.uv.sources]` 自动 clone，`mw` / `mobile-world` 可用。
-- pydantic 锁 `<2.11`（fastmcp 2.9.2 不兼容 `>=2.11`），写在 `pyproject.toml`，别动。
+- **已摘掉 MobileWorld**（见下「Native 运行时」）。运行时是纯 Python over adb，无外部 runner、无 server、无 `mw` 二进制。
+- pydantic 锁 `<2.11` 是**历史遗留**（原为 fastmcp via mw，现都已删）；保守保留以对齐已解析的 lock，`action_model.py` 的 `JSONAction` 用它。
 
 ## LLM 端点
 
@@ -13,18 +13,19 @@
 
 ## 跑测试
 
-**首选入口** `scripts/run_test.py`（自己 load `.env`、设 deferred-launch env、转发 flag 给 `mw test`）：
+**首选入口** `scripts/run_native.py <pkg> "<goal>"`（自己 load `.env`、设 deferred-launch env、激活 AdbKeyboard、进程内跑 `obs→predict→execute` 循环，直 adb）：
 
 ```bash
-uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"   # 多 app NL 路由（选既有 flow / 单 app）
 uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml --nl "..."  # 跑手写 flow
 uv run python scripts/run_plan.py "在上海找三家小众书店，挑一家打车过去" --dry-run  # 自动合成跨 app plan
 ```
 
-直接 `mw test`（仅调试）：参数名须匹配 `RelayAgent.__init__`：`--model_name` / `--llm_base_url` / `--api_key`（**不是** `--base_url`），并 `export RELAY_TARGET_APP=<pkg>`。绕过脚本时 planner 会自己发 `open_app` 步。
+- `scripts/run_test.py` 现在是**指向 `run_native.py` 的弃用 shim**（保留旧调用习惯），新代码直接用 `run_native.py`。
+- 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.2）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
 
-需要 adb + 真机 USB 调试 + `com.android.adbkeyboard/.AdbIME`。`RELAY_ANDROID_SERIAL` 选设备。
+需要 adb + 真机 USB 调试。**`run_native` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）——这步原来是 mw 的 prerequisite 替你做的。`RELAY_ANDROID_SERIAL` 选设备。
 
 ## 自动跨 App 规划（`run_plan.py` / `FlowPlanner`）
 
@@ -34,48 +35,42 @@ uv run python scripts/run_plan.py "在上海找三家小众书店，挑一家打
 - 链路（`scripts/run_plan.py` + `agents/flow_planner.py`）：`build_catalog`（复用 run_nl）→ 缓存查找 → `FlowPlanner.plan`（LLM→fenced JSON→本地校验）→ 落盘 `manifests/_generated/`（gitignore）→ 预览 + 确认（默认 N，非交互 EOF=不执行）→ `FlowRunner.run()`。
 - 生成的 plan **复用 flow YAML 形状但无 `inputs` 块**（值直接烤进 prompt）；leg 间数据流仍 `extract`/`bind`/`{var}`。
 - 校验挡：未知 app/capability id、悬空 `{var}`、`bind`/`id` 重复、**`handoff_to_user_required` 非末尾必须紧跟 `ask_user`（末尾可作终点）**。
-- **handoff 往返 = 先 A 后 B**：A（已落地）handoff leg → 流程 `ask_user` → 全新 `mw test` leg 消费回答；B（仅留缝，`# TODO(phase-B):`）同会话原地续跑。
+- **handoff 往返 = 先 A 后 B**：A（已落地）handoff leg → 流程 `ask_user` → 全新 `run_native` leg 消费回答；B（仅留缝，`# TODO(phase-B):`）同会话原地续跑。
 - 故意留的 TODO：**repair 重修循环**（校验失败硬报错代替，`_repair` 空壳）、**语义缓存复用**（仅精确串匹配）。
-- 旋钮：`--dry-run`（只规划+预览）/ `--yes`（跳确认）/ `--no-cache`（强制重生成）/ `--record` / `-- <透传 mw test>`。批跑时 stdin `</dev/null` → 中途选单步自动取第一候选。
+- 旋钮：`--dry-run`（只规划+预览）/ `--yes`（跳确认）/ `--no-cache`（强制重生成）/ `--record` / `-- <透传 run_native>`。批跑时 stdin `</dev/null` → 中途选单步自动取第一候选。
 
-## MobileWorld fork
+## Native 运行时（替代 MobileWorld）
 
-当前 pin `ShadowNearby/MobileWorld@73c8c1b`（`relay-patch`）= 上游 + 四个 patch（默认对上游无影响）：
+**已彻底摘掉 MobileWorld**（commit `refactor: drop ... phase 1/2`）。从前依赖 mw 的三样东西被本地化，server + runner 被直 adb 替换：
 
-1. server `WAIT` 硬编码 sleep 改读 `MW_WAIT_SECONDS`。
-2. `execute_adb` 加 `MW_ADB_TIMEOUT`（默认 30s），防 adb 卡死永久阻塞。
-3. **（关键）** 自起 server 的 stdout/stderr 重定向到 `$TMPDIR/mw_server_<port>.log`，原 PIPE 不排空会卡死 server。
-4. `execute_action` 读 `action.action_json["skip_screenshot"]`：为真则复用上一帧，不重拍。
+- `agents/action_model.py` — `JSONAction` + action-type 常量（从 mw `runtime/utils/models` 逐字移植，validator/`__eq__`/`model_dump` 行为不变）。
+- `agents/agent_base.py` — `BaseAgent` + `MCPAgent`（OpenAI client、token 计数、`openai_chat_completions_create` 含 claude/gpt/o1/kimi 分支）。`relay_agent` 仍 `from agents.agent_base import MCPAgent as _MCPAgentBase`（别名排序见文件头注释，让 loader 选 RelayAgent）。
+- `agents/_img.py` — `pil_to_base64`。
+- `agents/native_runtime.py` — **`NativeEnv`**（`JSONAction`→直 adb，镜像旧 server `/step` + controller：swipe 几何、scroll 方向反转、`ADB_INPUT_B64` 键盘广播、`skip_screenshot` 复用上一帧）+ 进程内 `obs→predict→execute` 循环（替 mw runner）+ **AdbKeyboard IME 激活**（替 mw prerequisite）。
+- `scripts/run_native.py` — 单 app 入口；`agents/flow_runner.py` / `run_nl` / `run_plan` / `run_single_app_benchmark` 每 leg/task spawn 一个 `run_native` 子进程（无 server、无 `--aw_host`）。agent 仍经 `RELAY_WALL_OUT`/`RELAY_REPLY_OUT` 落 `wall_clock.json`/`reply.json`，这正是这些消费方读的。
 
-回上游：`mobile-world` 指回 `Tongyi-MAI/MobileWorld` 并 rebase 四 patch。升级：改 `pyproject.toml` 的 `rev` 后 `uv sync`。
-
-### 持久化 server（默认复用）
-
-四个入口脚本 spawn `mw test` 前经 `scripts/_mw_server.py:ensure_server()` 探测 6800：健在就注入 `--aw_host http://localhost:6800` 复用；没有就脱离会话起一个常驻的（outlive 本次 run，pid 写 `$TMPDIR/mw_server_6800.pid`）。省掉每 run 自起/销毁开销。
-
-- **server 端 env 只在启动那刻烤入**（`MW_WAIT_SECONDS` / `MW_ADB_TIMEOUT`）→ 复用现有 server 时 per-run 改 `MW_*` **不生效**。
-- 改了 server 端代码 / fork patch / 想重烤 `MW_*` → `RELAY_MW_SERVER_RESTART=1` 或 `kill -9 $(cat $TMPDIR/mw_server_6800.pid)`。
-- 旋钮：`RELAY_AW_HOST=<url>` 直接指定；`RELAY_NO_PERSIST_SERVER=1` 退回每 run 自起；调用方自传 `--aw_host` 时不干预。
-- 注意：agent/adapter 是 client 侧不受旧 server 影响，只有 fork 四 patch 在 server 侧。排查 `ss -ltnp | grep 6800`。
+**没有 server / 没有框架冷启动**：旧的 ensure_server(6800)、`_mw_server.py`、`MW_ADB_TIMEOUT`、4 个 fork patch 全删。
 
 ## 性能旋钮
 
-每步墙钟 ≈ 三个 sleep + 一次 ~0.85s 截图：
+每步墙钟 ≈ 几个 sleep + 一次 ~1.5s 截图（**实测：截图是设备/adb 绑定的最大单步成本，直 adb 与旧 server 持平**）。
 
-| 旋钮 | 默认（MW 原值） | 作用范围 |
+| 旋钮 | 默认 | 作用范围 |
 | --- | --- | --- |
-| `--step_wait_time` | 0.2（1.0） | 每步 observe 前 |
-| `MW_WAIT_SECONDS` | 0.2（1.0） | 只 wait/poll 拍 |
+| `--step_wait_time` / `RELAY_STEP_WAIT` | 0.2 | 每步 observe 前 settle |
+| `MW_WAIT_SECONDS` | 0.2 | `wait` action 的 sleep（now native `NativeEnv` 本地读，非 server 端）|
 | `RELAY_POLL_SKIP_SLEEP` | 0.3 | wait_for_reply skip 拍 |
 
-**录屏跳每步截图（`RELAY_SKIP_STEP_SCREENSHOT`，`run_nl.py --record` 自动开）**：确定性 step 不读 incoming 截图。agent 在 `predict` look-ahead，下一步不在 `_VISION_STEP_KINDS`(=`{wait_for_reply}`) 就打 `skip_screenshot` 标 → fork patch #4 复用上一帧；打标后睡 `RELAY_BLIND_STEP_SLEEP`（0.15s）吃动画。`tap_text`/`nm_ground_tap` 走 VLM 前自调 `_fresh_vision_frame()` 抓新帧。
+**录屏跳每步截图（`RELAY_SKIP_STEP_SCREENSHOT`，`run_nl.py --record` 自动开）**：确定性 step 不读 incoming 截图。agent 在 `predict` look-ahead，下一步不在 `_VISION_STEP_KINDS`(=`{wait_for_reply}`) 就打 `skip_screenshot` 标 → `NativeEnv.execute_action` 复用上一帧；打标后睡 `RELAY_BLIND_STEP_SLEEP`（0.15s）吃动画。`tap_text`/`nm_ground_tap` 走 VLM 前自调 `_fresh_vision_frame()` 抓新帧。
+
+> **提速真瓶颈**（非框架）：~1.5s `adb exec-out screencap` 是单步最大成本，直 adb 换不动它；要砍得换流式抓帧后端（minicap/scrcpy，~30-50ms/帧）。这是独立优化，native 里换 `_adb.screencap()` 一个函数即可。
 
 ## Adapter 设计要点（`agents/relay_agent.py` + `agents/action_planner.py`）
 
 1. **`open_app` 要 launcher label 不是包名**（千问=`千问`）：`card.embedded_agent.name` → `card.app_name` → 包名。
 2. **`tap_text` 优先 uiautomator XML，VLM 兜底。** `_ground_text_via_uiautomator` 按 text/content-desc/resource-id 匹配 bounds 中心。3 次重试 + 0.8s 间隔吃动画。失败路径一律 info/warning 别 debug。
 3. **Grounding 输出形态宽**：`_extract_xy()` 容忍 `{x,y}`/`{point:[x,y]}`/`[{x:[x,y]}]`/`{bbox:...}`/纯数字。坐标 `>999` 当像素，否则归一乘 `screen/999`。
-4. **冷启动 / deferred-launch**：脚本设 `RELAY_SKIP_OPEN_APP=1` + `RELAY_AGENT_LAUNCH=1`。agent 第一帧 `predict` 调 `_begin_task_once()`：记 `t0` → 起录屏（若 `RELAY_RECORD_DIR`）→ `cold_launch()`（`agents/_adb.py`：force-stop + monkey LAUNCHER + settle 1.0s）。框架 ~2.7s 冷启动排除在 wall_s 外。atexit 写 `wall_clock.json`（`{wall_s, phase:"task"}`）到 `RELAY_WALL_OUT` 或 `traj_logs/user_task/`。**agent 是 wall_s 唯一写者。** settle 1.0s 清品牌 splash。
+4. **冷启动 / deferred-launch**：脚本设 `RELAY_SKIP_OPEN_APP=1` + `RELAY_AGENT_LAUNCH=1`。agent 第一帧 `predict` 调 `_begin_task_once()`：记 `t0` → 起录屏（若 `RELAY_RECORD_DIR`）→ `cold_launch()`（`agents/_adb.py`：force-stop + monkey LAUNCHER + settle 1.0s）。deferred-launch 把启动放到 agent 首帧（native 无框架冷启动，但 IME 激活 / 子进程启动等仍在 t0 前），落在 wall_s 外。atexit 写 `wall_clock.json`（`{wall_s, phase:"task"}`）到 `RELAY_WALL_OUT` 或 `traj_logs/user_task/`。**agent 是 wall_s 唯一写者。** settle 1.0s 清品牌 splash。
 5. **fresh conversation**：`build_plan(fresh_conversation=True)` 在 open_app 后插清历史步。`RELAY_FRESH_CONV=0` 关。
 6. **`wait_for_reply` VLM 轮询**：系统 prompt `_REPLY_WATCH_SYSTEM`，VLM 回 `{done, text}`。`done=True && text==None` 视为不可信继续 poll。超时按墙钟 `max_seconds = x_max_wait_seconds or max(5×typical_latency, 60)`。text 注入 handoff 的 `ask_user`。
 7. **两段式 precheck 省 VLM**：Stage 1(~25ms) 截图区域 hash（裁顶 8% 状态栏、底 18% 输入区），变了=streaming 跳过。Stage 2(~2.5s，仅屏稳定才跑) uiautomator 文本 hash，连续两拍相等才调 VLM 判 done。熔断：连续 ≥2 次 dump 失败关本次 dump。看门狗：连续 ≥5 次 skip 强跑一次 VLM。
@@ -98,7 +93,7 @@ uv run python scripts/run_plan.py "在上海找三家小众书店，挑一家打
 
 ## Trajectory 日志目录
 
-每次 `mw test` 启动把上次 `traj_logs/user_task/` 搬到 `traj_logs/user_task_backup_<ts>/`（ts = 新跑启动时刻）。**本次输出永远在 `traj_logs/user_task/`**；`ls -td ...backup_* | head -1` 是**上一次**的内容。
+每次 `run_native` 启动（`_rotate_traj_dir`）把上次 `traj_logs/user_task/` 搬到 `traj_logs/user_task_backup_<ts>/`（ts = 新跑启动时刻），再 mkdir + seed 空 `traj.json`（供 agent `_append_llm_call`）。**本次输出永远在 `traj_logs/user_task/`**；`ls -td ...backup_* | head -1` 是**上一次**的内容。
 
 ## Handoff
 
