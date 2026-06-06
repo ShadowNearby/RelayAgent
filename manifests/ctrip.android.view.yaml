@@ -1,5 +1,5 @@
 spec_version: "0.1"
-card_version: "0.1.1"
+card_version: "0.2.0"
 app_id: "ctrip.android.view"
 app_name: "携程旅行"
 platforms: ["android"]
@@ -46,11 +46,13 @@ embedded_agent:
 
   capabilities:
 
-    - id: chat_travel_qa
+    - id: foundation_llm
       description: >
-        Travel Q&A: destination tips, local info (weather, visa, transport),
-        attraction details, travel tips. No purchase intent; text/table output
-        only. Complex queries auto-activate deep-think + RAG.
+        Foundation LLM travel assistant for Ctrip: destination Q&A, local
+        information, visa/transport tips, weather-style travel advice, and
+        text/table summaries. No booking or payment is performed through this
+        capability; purchase intents should route to the specific ticketing,
+        hotel, attraction, or itinerary capabilities below.
       example_prompts:
         - "上海迪士尼明天的门票多少钱"
         - "三亚十一期间天气和穿衣建议"
@@ -63,10 +65,10 @@ embedded_agent:
 
     - id: book_flight
       description: >
-        Search and book flights by natural language. Returns flight cards
-        (airline, times, price, cabin) with a "See more flights >" CTA into the
-        native booking flow (CRN/React Native) for seat selection, passenger
-        info, and Ctrip payment. Auto-activates deep-think.
+        Flight search and booking through Ctrip. The assistant parses route,
+        date/time, cabin, and price constraints, returns flight cards, and
+        exposes a CTA into the native booking flow for seat/passenger/payment
+        steps. User handoff is required before purchase.
       example_prompts:
         - "帮我找下周一上海到北京下午的机票"
         - "明天最便宜的虹桥飞成都的航班"
@@ -84,10 +86,10 @@ embedded_agent:
 
     - id: book_hotel
       description: >
-        Search and book hotels by natural language. Agent parses city, district,
-        price range, dates, and guests, confirms filters in chat, and provides an
-        "Explore >" CTA into the native hotel search (CRN) for room selection,
-        booking, and Ctrip payment. Auto-activates deep-think.
+        Hotel search and booking through Ctrip. The assistant parses city,
+        district, price range, dates, and guests, then provides hotel cards or
+        an Explore CTA into the native room-selection and payment flow. User
+        handoff is required before booking.
       example_prompts:
         - "上海外滩附近 800 以内的酒店，明晚入住"
         - "周末北京三里屯有湾景的酒店"
@@ -103,10 +105,10 @@ embedded_agent:
 
     - id: book_train
       description: >
-        Search and book train tickets by natural language. Returns train cards
-        (number, duration, price, seat availability) with a "See all >" CTA into
-        the native booking flow. Auto-activates deep-think. 12306 ticketing is
-        handled by the Ctrip backend, so the OS router never sees 12306 auth.
+        Train-ticket search and booking through Ctrip. The assistant returns
+        train cards with number, duration, price, and seat availability, then
+        links into the native ticketing flow. User handoff is required before
+        passenger details, 12306-backed ticketing, and payment.
       example_prompts:
         - "周五早上 8 点北京到天津的高铁"
         - "明天去苏州最早的车次"
@@ -122,12 +124,10 @@ embedded_agent:
 
     - id: plan_trip
       description: >
-        Generate a multi-day travel itinerary (attractions, dining, hotels).
-        The agent's first reply is a short prompt plus a "线路规划" card with a
-        "获取专属行程" CTA — the actual itinerary is generated only after that CTA
-        is tapped, which opens a form for dates/origin/party-size/preferences.
-        User completes the form and the agent returns a tailored itinerary with
-        packaged-tour SKUs alongside (bookable).
+        Travel itinerary planning in Ctrip, combining attractions, dining,
+        hotels, routes, and packaged-tour SKUs. The first response exposes a
+        route-planning card; the dedicated itinerary form and any bookable
+        products require user handoff.
       example_prompts:
         - "我想十一去三亚玩四天怎么安排"
         - "暑假带孩子去云南怎么玩"
@@ -139,31 +139,13 @@ embedded_agent:
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_post_result_flow:
-        # First reply only surfaces the "线路规划" entry card; tap "获取专属行程"
-        # to advance into the itinerary form. The form itself requires user
-        # input, so we hand off immediately after the tap.
         steps:
           - tap: { text: "获取专属行程" }
-          - wait: { ms: 2000 }            # let the AI行程助手 page settle
-          - wait_for_reply: { max_seconds: 90 }  # actual itinerary generation
+          - wait: { ms: 2000 }
+          - wait_for_reply: { max_seconds: 90 }
       failure_modes:
         - "Destination/duration ambiguous → agent asks for clarification"
         - "Same intent across multiple turns may return different SKUs due to follow-up suggestions"
-
-    - id: search_attraction_info
-      description: >
-        Attraction info: ticket prices, hours, visitor policies, nearby tips.
-        Returns text and tables via deep-think + RAG. Does not sell tickets
-        directly; agent may follow up with "Buy tickets now?" as second step.
-      example_prompts:
-        - "上海迪士尼乐园的开放时间和票价"
-        - "故宫淡季票价是多少"
-      executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
-      handoff_to_user_required: false
-      typical_latency_seconds: 25
 
 provenance:
   last_verified: "2026-05-19"

@@ -1,0 +1,514 @@
+spec_version: "0.1"
+card_version: "0.2.0"
+app_id: "com.google.android.apps.bard"
+app_name: "Gemini"
+platforms: ["android"]
+locale: ["zh-CN"]
+
+embedded_agent:
+  name: "Gemini"
+  type: native_in_app_agent
+  description: >
+    Google's Gemini Android app. Launcher package is
+    `com.google.android.apps.bard`, while the visible chat UI is hosted by the
+    Google app / GSA package (`com.google.android.googlequicksearchbox`) under
+    assistant_robin_* views. The main surface is a multimodal chat agent with
+    text input, attachment picker, camera/photo upload, file/Drive upload,
+    Gemini Live, and tool modes such as image generation, music generation,
+    Canvas, Deep Research, and learning help. It is strongest at information
+    tasks, writing, summarization, public web/search retrieval, Google-service
+    tasks when authorized, and reasoning over user-provided files/images. It
+    generally cannot operate non-Google third-party accounts such as Taobao,
+    Slack, X/Twitter, ride-hailing, hotel/flight/train booking, or food delivery.
+
+  entry:
+    primary:
+      method: tap_sequence
+      steps: []
+    fallback: []
+    x_prepare_fresh_conversation:
+      description: >
+        Start a fresh Gemini chat from the header so stale context does not
+        affect scripted app tests. The button is a Compose node whose
+        content-desc/text is stable in zh-CN.
+      steps:
+        - tap_label:
+            text_or_desc: "发起新对话"
+            timeout_seconds: 1
+            scroll_attempts: 0
+        - wait:
+            ms: 700
+
+  invocation:
+    input:
+      # Native EditText exposed by GSA:
+      # resource-id `assistant_robin_input_collapsed_text_half_sheet`,
+      # hint/text "问问 Gemini". Bounds below are Pixel 9 1080x2424 collapsed
+      # half-sheet bounds before keyboard focus.
+      field:
+        resource_id: "com.google.android.googlequicksearchbox:id/assistant_robin_input_collapsed_text_half_sheet"
+        text: "问问 Gemini"
+        x_bounds:
+          box: [242, 2161, 733, 2287]
+          anchor: bottom_left
+      max_chars: 4000
+    submit:
+      # The right-side slot is Gemini Live when empty and becomes send once
+      # text is present. After keyboard focus the send button moves upward;
+      # prefer a11y grounding over fixed bounds.
+      trigger:
+        accessibility_id: "发送"
+    prompt_template: "{{user_prompt}}"
+
+  output:
+    method: none
+
+  capabilities:
+
+    - id: foundation_llm
+      description: >
+        Foundation LLM capability in Gemini: Q&A, explanation, rewriting,
+        translation, brainstorming, summarization, extraction, filtering,
+        sorting, comparison, deduplication, fact-check-style retrieval, Deep
+        Research prompts, arXiv/public-web summaries, arithmetic, unit/date/
+        number conversion, and table transformations. Also covers public-web
+        lookups previously split out as separate capabilities — GitHub
+        repo/issue/commit info, securities/finance info (stock price, dividend
+        yield, ESG), and weather — all returned as search-style summaries.
+        Pure chat output; source freshness should be verified for high-stakes
+        use, and finance results are informational only, not investment advice.
+      example_prompts:
+        - "用三句话解释 Transformer 的注意力机制"
+        - "总结这个网页并提取标题、主题和关键实体：https://example.com/article"
+        - "把 1,234.56 美元按 7.1 汇率换算成人民币"
+        - "查询 GitHub 仓库 openai/codex 的主要用途"
+        - "查询 AAPL 当前股价、股息率和 ESG 概况，并给出来源"
+        - "查询今天上海天气，给出一句话结论"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 8
+      failure_modes:
+        - "Some rich search/web cards are visible but not reliably captured by uiautomator text dumps"
+        - "For multi-part transformations, ask for explicit numbered outputs or a table to reduce omitted sub-results"
+
+    - id: poi_nearby_search
+      description: >
+        POI and nearby-place lookup through Gemini/search. Returns candidate
+        places, addresses, and rough local information, but does not open maps,
+        start navigation, or verify live business status.
+      example_prompts:
+        - "找上海交通大学闵行校区附近 3 家咖啡店"
+        - "附近有哪些适合带娃的室内场馆"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 8
+      failure_modes:
+        - "Nearby answers are estimates and should be verified in a map app before travel"
+
+    - id: route_planning
+      description: >
+        Route planning and travel-estimate guidance through Gemini/search:
+        address parsing, route options, approximate distance/time/cost, and
+        transit/driving comparisons. It does not start live navigation.
+      example_prompts:
+        - "从上海交大闵行校区到虹桥火车站怎么走，估算距离时间费用"
+        - "解析地址：上海市闵行区东川路800号"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 8
+      failure_modes:
+        - "Route answers are estimates and should be verified in a map app before travel"
+
+    - id: plan_trip
+      description: >
+        Travel itinerary planning in Gemini, including multi-day schedules,
+        attractions, dining ideas, hotel-area suggestions, and route tradeoffs.
+        Informational only; no booking or payment is performed.
+      example_prompts:
+        - "给我规划一个上海周末亲子游行程"
+        - "帮我安排三天成都旅行，包含景点和餐饮"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 8
+
+    - id: book_train
+      description: >
+        Train-ticket information search in Gemini: route options, likely time
+        windows, approximate prices, and booking guidance. Gemini does not
+        directly book, select seats, or pay in the tested surface.
+      example_prompts:
+        - "查询明天上海到南京的高铁，列出几个合适时段，不要购票"
+        - "查询周五北京到天津的火车选择，不要预订"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      failure_modes:
+        - "Availability and prices are time-sensitive and can be stale"
+
+    - id: book_flight
+      description: >
+        Flight information search in Gemini: route/date options, approximate
+        fares, airline guidance, and booking steps. Gemini does not directly
+        book flights or pay in the tested surface.
+      example_prompts:
+        - "查询下周一上海到北京的机票，不要预订"
+        - "帮我比较明天虹桥到成都的航班时间和大致价格，不要购票"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      failure_modes:
+        - "Availability and prices are time-sensitive and can be stale"
+
+    - id: book_hotel
+      description: >
+        Hotel search and booking guidance in Gemini: area choice, budget filters,
+        hotel recommendations, and booking steps. Gemini does not directly
+        reserve rooms or pay in the tested surface.
+      example_prompts:
+        - "推荐外滩附近 500 元以内酒店，不要预订"
+        - "北京三里屯附近适合商务出差的酒店怎么选"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      failure_modes:
+        - "Availability and prices are time-sensitive and can be stale"
+
+    - id: book_movie_event
+      description: >
+        Movie/event ticket information search and purchase guidance in Gemini:
+        showtime suggestions, event discovery, approximate ticket context, and
+        instructions for external ticketing apps. Gemini does not directly buy
+        tickets in the tested surface.
+      example_prompts:
+        - "查询今晚上海电影院某部电影的排片，不要购票"
+        - "周末上海有哪些演出活动值得看，不要购票"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      failure_modes:
+        - "Booking, seat selection, ticket purchase, and payment require external ticketing apps"
+
+    - id: search_product
+      description: >
+        Product search, recommendations, and comparisons by budget, use case,
+        specs, reviews, or tradeoffs. Gemini can research and compare products
+        but does not add to cart, checkout, or operate ecommerce accounts.
+      example_prompts:
+        - "推荐三款适合学生、预算3000元以内的安卓手机，不要下单"
+        - "比较 iPhone 16 和 Pixel 9 的拍照、续航和性价比"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 8
+      failure_modes:
+        - "Specific prices/promotions require current ecommerce verification"
+
+    - id: order_food
+      description: >
+        Food-delivery guidance in Gemini: estimate cost, identify missing order
+        details, and explain how to finish in an external delivery app. Gemini
+        cannot place delivery orders or access payment systems in the tested
+        surface.
+      example_prompts:
+        - "我想点一杯附近星巴克拿铁，不要下单，说明需要哪些信息"
+        - "附近点外卖怎么选更快，给我一个下单前检查清单"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 18
+      failure_modes:
+        - "User must finish in Starbucks/Meituan/Eleme or similar apps"
+
+    - id: hail_ride
+      description: >
+        Ride-hailing guidance in Gemini: estimate route time/cost and list
+        required ride details, but do not call ride-hailing APIs or confirm a
+        ride. The user must finish in an external ride/map app.
+      example_prompts:
+        - "我从上海交大闵行校区打车去虹桥火车站，估算时间和费用，不要叫车"
+        - "打车去机场前需要确认哪些信息"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 18
+      failure_modes:
+        - "User must finish in Amap/Didi or a similar ride-hailing app"
+
+    - id: write_calendar
+      description: >
+        Google Calendar event creation when the account and connector are
+        authorized. This is a real side-effect capability and should require
+        explicit user intent before creating or modifying calendar data.
+      example_prompts:
+        - "明天上午10点创建一个30分钟日历事件：测试Gemini能力"
+        - "下周一下午3点安排一个项目同步会，持续1小时"
+      executable: true
+      side_effects:
+        - data_write
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 15
+      failure_modes:
+        - "Availability depends on Google account, Calendar connection, permissions, and region"
+
+    - id: set_alarm_reminder
+      description: >
+        Reminder, Google Tasks reminder, or alarm setting when authorized. This
+        writes user-visible reminder/alarm state and requires explicit intent.
+      example_prompts:
+        - "今晚9点提醒我喝水"
+        - "明早7点设置一个闹钟"
+      executable: true
+      side_effects:
+        - data_write
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 12
+      failure_modes:
+        - "Availability depends on Google Tasks/Assistant/Clock integration and device permissions"
+
+    - id: read_email
+      description: >
+        Gmail search/read/summarization when Google account connectors are
+        authorized. The assistant can search accessible messages and summarize
+        matches; no outbound message is sent.
+      example_prompts:
+        - "搜索我最近一封来自 GitHub 的邮件并做一句话摘要"
+        - "找上周关于会议的邮件，总结时间和地点"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 4
+      failure_modes:
+        - "Requires Gmail/Workspace connector authorization"
+        - "No matching messages returns a plain failure summary"
+
+    - id: write_email
+      description: >
+        Email drafting in Gemini, including recipient, subject, and body. Direct
+        sending was refused in the tested app surface, so the user must copy or
+        send manually in an email client.
+      example_prompts:
+        - "给 test@example.com 写一封邮件，主题测试，正文一句话；不要发送"
+        - "帮我草拟一封项目延期说明邮件，不要发送"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 15
+      failure_modes:
+        - "Direct email sending was refused in tested flow"
+
+    - id: read_sms
+      description: >
+        SMS read behavior in Gemini. The tested surface could check current
+        notifications for SMS/message notifications, but direct SMS database
+        access was not verified. Read-only; do not send or draft a reply through
+        this capability.
+      example_prompts:
+        - "读取我最近一条短信的摘要；如果不能访问短信请说明"
+        - "总结今天收到的短信通知，不要回复"
+      executable: false
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      failure_modes:
+        - "SMS read probe only checked notifications and found no SMS notifications"
+        - "Direct SMS database access is not verified in the tested Gemini surface"
+
+    - id: send_sms
+      description: >
+        SMS send or SMS-draft behavior in Gemini. Sending is unverified and
+        potentially irreversible, so never automate a final SMS send action
+        without explicit user approval and a visible system confirmation.
+      example_prompts:
+        - "给这个电话号码发送短信：我晚点到"
+        - "给这个号码草拟短信：我十分钟后到；不要直接发送"
+      executable: true
+      side_effects:
+        - external_communication
+      requires_login: true
+      reversible: false
+      handoff_to_user_required: true
+      typical_latency_seconds: 25
+      failure_modes:
+        - "Direct contact lookup probe said Gemini cannot access phone contacts"
+        - "Never auto-tap a final SMS send action; require user handoff"
+
+    - id: find_file
+      description: >
+        User-selected file understanding via Gemini attachment menu: local file
+        picker and Google Drive. Supports PDF/document reading, summarization,
+        Q&A, outline generation, table/amount/date extraction, and paper parsing.
+        Gemini cannot proactively browse local files; the user must attach one.
+      example_prompts:
+        - "上传这份 PDF 后，抽取金额、日期、购买方和销售方"
+        - "总结这份论文，并提取作者、摘要和主要指标"
+      executable: true
+      side_effects: []
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 25
+      x_attachment_entry:
+        text_or_desc: "添加附件"
+        x_bounds:
+          box: [95, 2161, 221, 2287]
+          anchor: bottom_left
+      x_attachment_options_observed:
+        - "文件"
+        - "云端硬盘"
+      failure_modes:
+        - "Android picker blocks until user selects a file or cancels"
+
+    - id: find_gallery_image
+      description: >
+        Finding images/photos from the device gallery and answering questions
+        about them via Gemini's attachment menu or camera/gallery. The user
+        selects a photo from the gallery and asks about its contents
+        (screenshot/photo Q&A, object identification, extraction).
+      example_prompts:
+        - "从相册选一张冰箱照片，识别里面有哪些食材"
+        - "打开相册里那张白板照片，帮我读出上面的内容"
+      executable: true
+      side_effects:
+        - data_write
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 30
+      x_attachment_entry:
+        text_or_desc: "添加附件"
+        x_bounds:
+          box: [95, 2161, 221, 2287]
+          anchor: bottom_left
+      x_attachment_options_observed:
+        - "相册"
+        - "相机"
+        - "图片"
+      x_tool_menu_entry:
+        open_menu: "添加附件"
+        text_or_desc: "图片"
+      failure_modes:
+        - "Android picker blocks until user selects an image or cancels"
+        - "Mode-specific image output download/share behavior is not fully scripted"
+
+    - id: generate_document
+      description: >
+        Long-form document drafting through Gemini chat or Canvas: reports,
+        product plans, code/text drafts, tables, and structured prose. Export or
+        editor behavior is user-handoff until separately scripted.
+      example_prompts:
+        - "生成一份中文项目周报草稿"
+        - "用 Canvas 帮我起草一份产品方案"
+      executable: true
+      side_effects:
+        - data_write
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 25
+      x_tool_menu_entry:
+        open_menu: "添加附件"
+        text_or_desc: "Canvas"
+      failure_modes:
+        - "Generic writing prompts may invent concrete project details when the user provides too little context"
+
+    - id: generate_slides
+      description: >
+        Presentation outline or slide-content generation through Gemini chat or
+        Canvas. Plain chat can draft slide outlines; actual PPT export/opening
+        remains user-handoff until separately scripted.
+      example_prompts:
+        - "为人工智能在教育中的应用生成一份5页PPT的标题和每页要点"
+        - "用 Canvas 生成一份产品发布演示稿大纲"
+      executable: true
+      side_effects:
+        - data_write
+      requires_login: true
+      reversible: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 25
+      x_tool_menu_entry:
+        open_menu: "添加附件"
+        text_or_desc: "Canvas"
+      failure_modes:
+        - "Plain chat can draft slide outlines; actual PPT/document export via Canvas was not fully verified"
+
+provenance:
+  last_verified: "2026-06-06"
+  verified_app_version: "1.0.913571982"
+  verified_google_app_version: "17.26.28.sa.arm64"
+  verified_os: "android-16"
+  verified_device: "Pixel 9"
+  verification_method: adb_ui_dump_plus_scripted_probe
+  evidence_url: ""
+  x_probe_evidence_dir: "/tmp/gemini_probe_results"
+  x_device_metrics:
+    resolution_px: [1080, 2424]
+    density_dpi: 420
+
+constraints:
+  app_version_min: "1.0.913571982"
+  region: ["US", "CN"]
+  network_required: true
+  known_issues:
+    - "Launcher package is `com.google.android.apps.bard`, but the visible UI package in uiautomator is `com.google.android.googlequicksearchbox`; selectors should not assume package equality."
+    - "The chat input is a native EditText with hint/text `问问 Gemini`, while much of the toolbar is Compose with sparse accessibility metadata."
+    - "The fresh-chat button is `发起新对话`; it should be tapped before probes to avoid stale context."
+    - "The rightmost input button changes role: empty input opens Gemini Live; after text entry the same slot becomes send (`content-desc=发送`). Its visible center moved to about (923, 2110) after keyboard focus on Pixel 9; use a11y/text grounding instead of fixed bottom bounds."
+    - "The attachment button exposes content-desc `添加附件`; observed options include 相册, 相机, 文件, 云端硬盘, 图片, 音乐, Canvas, Deep Research, 学习辅导, and Labs personalization."
+    - "Mode chips shift the input sheet upward; after entering a mode, button coordinates differ from the normal collapsed chat sheet."
+    - "Some Gemini rich cards or WebView-heavy answers are visible on screen but uiautomator text capture may return only the generic disclaimer or status-bar time. This affected weather, stock, and one PPT-outline probe."
+    - "Feature availability depends heavily on Google account, Gemini plan, connected-app settings, country/region, permissions, and workspace policies. Gmail/Calendar/Tasks capabilities are not guaranteed for every account."
+    - "Do not automate irreversible side effects such as SMS send, calendar creation, reminders, alarms, payments, bookings, checkout, or social posting without explicit user intent and a visible confirmation/handoff policy."
+    - "Gemini repeatedly stated it cannot directly access local files, phone contacts, camera roll, Taobao orders, Slack workspace, X/Twitter account, external payment systems, or third-party logistics systems in the tested surface."

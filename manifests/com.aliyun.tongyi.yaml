@@ -1,5 +1,5 @@
 spec_version: "0.1"
-card_version: "0.1.0"
+card_version: "0.2.0"
 app_id: "com.aliyun.tongyi"
 app_name: "通义千问"
 platforms: ["android"]
@@ -54,10 +54,11 @@ embedded_agent:
 
   capabilities:
 
-    - id: chat
+    - id: foundation_llm
       description: >
-        General Q&A and conversation. Pure LLM response, no partner-app
-        handoff, no side effects.
+        Foundation LLM capability in Tongyi Qianwen: general Q&A, explanation,
+        rewriting, translation, summarization, extraction, comparison, and light
+        data transformation. Pure chat output with no partner-app handoff.
       example_prompts:
         - "讲讲二战中的中途岛海战"
         - "帮我把这段话改得更书面一点：……"
@@ -70,11 +71,9 @@ embedded_agent:
 
     - id: book_train
       description: >
-        Search and book train tickets by natural language. Agent lists trains
-        in cards (number, time, price, seat availability); user taps the booking
-        CTA → ticketing flow → payment. Booked via Fliggy: Fliggy OAuth is
-        pre-authorized at app level, but 12306 requires manual password entry
-        each session (service_credential tier). See OQ-12.
+        Train-ticket search and booking via Fliggy/12306. The assistant lists
+        train cards with number, time, price, and seat availability; ticketing,
+        credentials, passenger details, and payment require user handoff.
       example_prompts:
         - "帮我买明天下午两点左右去南京的高铁"
         - "周五早上 8 点上海到杭州的二等座票"
@@ -96,10 +95,10 @@ embedded_agent:
 
     - id: order_food
       description: >
-        Order food / local delivery via Taobao Flash (淘宝闪购). Agent searches
-        nearby stores for drinks, meals, or daily items by location, recommends
-        items, and triggers checkout with stored address and preferences.
-        Order, address, and payment are irreversible; must hand off.
+        Food ordering and local delivery via Taobao Flash. The assistant searches
+        nearby stores, recommends items, applies stored address/preferences, and
+        can proceed to checkout, but final order/address/payment confirmation is
+        irreversible and must be handed to the user.
       example_prompts:
         - "帮我点三杯蜜雪冰城蜜桃四季春"
         - "晚上点份麻辣烫，30 块以内"
@@ -111,10 +110,6 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 8
-      # Mixue/Taobao-Flash order_food renders the store recommendation in a single
-      # bubble already fully visible at done-detection — capture_full scrolling only
-      # added latency (and risked scrolling the CTA out of view) without recovering
-      # more text. Treat as single-bubble: rely on done-detection scrape, no scroll.
       failure_modes:
         - "OAuth bind required on first use; flow terminates if user declines"
       x_partner_app: "com.taobao.litetao"
@@ -139,14 +134,15 @@ embedded_agent:
 
     - id: search_product
       description: >
-        Search and recommend products by natural language via Taobao. Parses
-        budget, brand, specs, use case, delivery constraints. Returns product
-        cards or search results. Agent does not auto-order; user selects
-        manually. Same shopping backend as the Taobao in-app assistant (whose
-        chat surface is itself 千问); routed here through Taobao.
+        Product search, recommendation, and comparison via Taobao. The assistant
+        parses budget, brand, specs, use case, delivery constraints, reviews,
+        and promotions, then returns product cards or comparison guidance. It
+        does not auto-order; purchase/pre-checkout intents route to
+        purchase_guidance.
       example_prompts:
         - "帮我找一台适合学生的平板电脑，预算2000以内"
         - "推荐几款夏天通勤穿的男士防晒衣"
+        - "iPhone 17 和上一代买哪个更划算"
       executable: true
       side_effects: []
       requires_login: true
@@ -161,29 +157,12 @@ embedded_agent:
       x_partner_app: "com.taobao.taobao"
       x_partner_auth: "oauth_bind_required"
 
-    - id: compare_products
+    - id: purchase_guidance
       description: >
-        Compare products by price, specs, reviews, and promotions via Taobao.
-        Informational output only; does not purchase.
-      example_prompts:
-        - "iPhone 17 和上一代买哪个更划算"
-        - "帮我比较这几款扫地机器人适合养宠家庭吗"
-      executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
-      handoff_to_user_required: false
-      typical_latency_seconds: 15
-      x_capture_full_reply:
-        max_scrolls: 6
-      x_partner_app: "com.taobao.taobao"
-      x_partner_auth: "oauth_bind_required"
-
-    - id: buy_product
-      description: >
-        Guide purchase flow for a specific product via Taobao: find listing,
-        confirm specs, apply coupons, add to cart, jump to checkout. Final order
-        confirmation and payment must be manual; OS router must not auto-submit.
+        Purchase guidance and pre-checkout preparation for a specific Taobao
+        product: find listing, confirm specs, apply coupons, add to cart, and
+        jump toward checkout. Final order confirmation and payment must remain
+        manual.
       example_prompts:
         - "帮我买一包猫砂，膨润土的，10公斤左右"
         - "把这款黑色 256G 手机加入购物车"
@@ -202,9 +181,9 @@ embedded_agent:
 
     - id: track_order
       description: >
-        Query order status, logistics, after-sale progress, or refund status
-        via Taobao. Read-only; does not modify orders. If user initiates
-        return/refund, switch to handoff flow.
+        Order, logistics, after-sales, or refund-status lookup via Taobao. This
+        capability is read-only; if the user wants to initiate a return, refund,
+        or modification, switch to a handoff flow.
       example_prompts:
         - "我最近买的键盘到哪了"
         - "查一下刚才那单有没有发货"
@@ -223,11 +202,9 @@ embedded_agent:
 
     - id: hail_ride
       description: >
-        Hail a ride via Amap's aggregator. Multi-step: confirm origin/destination →
-        choose car type → confirm estimate → pay (Alipay), each step user-operated
-        within the agent's response card. Amap OAuth is pre-authorized by default.
-        Same underlying service as the com.autonavi.minimap manifest; OS router
-        should route by context.
+        Ride hailing via Amap's aggregator from within Tongyi. The assistant
+        helps confirm origin/destination, car type, estimate, and payment path;
+        irreversible ride/payment confirmations require user handoff.
       example_prompts:
         - "叫一辆经济型车去虹桥机场"
         - "帮我叫个车回家"
@@ -246,11 +223,9 @@ embedded_agent:
 
     - id: book_hotel
       description: >
-        Search and book hotels by natural language. Agent parses city, district,
-        price range, dates, and guests, recommends options with address/rating/
-        price in cards; user taps the booking CTA → room selection → payment.
-        Booked via Fliggy: OAuth pre-authorized, no login friction; CTA →
-        Fliggy booking flow → Alipay payment.
+        Hotel search and booking via Fliggy. The assistant parses city, district,
+        price range, dates, and guests, recommends options, and links to room
+        selection and Alipay payment. User handoff is required before booking.
       example_prompts:
         - "帮我在上海订一晚酒店，明天入住"
         - "北京三里屯附近 500 以内的酒店，明晚入住"
@@ -268,14 +243,14 @@ embedded_agent:
       x_partner_app: "com.taobao.trip"
       x_partner_auth: "oauth_preauthorized"
 
-    - id: book_movie
+    - id: book_movie_event
       description: >
-        Search and book movie tickets via Damai. First use triggers OAuth bind
-        modal (phone number selection); once authorized, agent searches showtimes,
-        selects seats, and purchases.
+        Movie or event ticket search and purchase via Damai. The assistant can
+        search showtimes, seats, and ticket options, but OAuth binding, seat
+        choice, order confirmation, and payment require user handoff.
       example_prompts:
         - "帮我买今晚上海的电影票"
-        - "周六下午看哪吒, 选两张连座"
+        - "周六下午看星球大战, 选两张连座"
       executable: true
       side_effects:
         - payment

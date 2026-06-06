@@ -1,10 +1,9 @@
 # RelayAgent 任务集（benchmark）
 
-按 [`docs/cross_app_planner.md`](../docs/cross_app_planner.md) 的设计、以 `manifests/*.yaml` 里各 App
-内置 Agent 声明的 **capability** 为来源构造的任务集。借鉴公开 mobile GUI benchmark 的范式：
+以 `manifests/*.yaml` 里各 App 内置 Agent 声明的 **capability** 为来源构造的单 App 任务集。借鉴公开 mobile GUI benchmark 的范式：
 
 - **MobileWorld** (Tongyi-MAI, ACL 2026)：201 任务 / 20 app，含 agent-user 交互 + MCP 增强 —
-  <https://github.com/Tongyi-MAI/MobileWorld>（本仓 MobileWorld fork 即其执行环境）
+  <https://github.com/Tongyi-MAI/MobileWorld>
 - **AndroidWorld** (Google DeepMind, ICLR 2025)：116 参数化任务 / 20 app，每任务带显式 success criteria —
   <https://github.com/google-research/android_world>
 
@@ -16,7 +15,7 @@
 | --- | --- |
 | [`single_app_tasks.yaml`](single_app_tasks.yaml) | **50 条单 App 任务**（单 app + 单 capability，1-step 即可完成） |
 
-> 单 App 任务是 planner 规则 6（“单 app 请求出 1-step plan”）的最小子集，也是后续**跨 App 任务集**的对照基线。
+> 单 App 任务用于验证每张 manifest card 的 capability 是否能稳定到达预期终态。
 
 ## single_app_tasks.yaml 一览
 
@@ -26,7 +25,7 @@
 - 每 App 任务数：千问 17 · 高德 8 · 携程 7 · WPS 7 · 小红书 6 · 微信 5
 
 > **淘宝购物能力已并入千问**：原独立的 `com.taobao.taobao` 卡片已下线（淘宝内置助手本身*就是*千问），
-> 其 `search_product` / `compare_products` / `buy_product` / `track_order` / `order_food` 现声明在
+> 其 `search_product` / `purchase_guidance` / `track_order` / `order_food` 现声明在
 > `com.aliyun.tongyi` manifest 下、经 Taobao 后端路由。故这些任务的 id 形如 `tongyi-shop-*`，`app` 为千问。
 
 字段含义见 YAML 头部注释。**安全语义**：`handoff_required=true` 的任务，agent 须停在
@@ -41,8 +40,8 @@ uv run python scripts/run_test.py com.xingin.xhs "上海有什么值得一去的
 # 购物类现走千问（app_id=com.aliyun.tongyi）
 uv run python scripts/run_test.py com.aliyun.tongyi "帮我找一台适合学生用的平板电脑，预算2000以内"
 
-# 经 planner 合成 1-step plan（只规划+预览）
-uv run python scripts/run_plan.py "帮我找一台适合学生用的平板电脑，预算2000以内" --dry-run
+# 自然语言路由（只看路由决策）
+uv run python scripts/run_nl.py "帮我找一台适合学生用的平板电脑，预算2000以内" --dry-run
 ```
 
 > 注：本任务集一律使用 **manifest-canonical** id；购物能力归到 `com.aliyun.tongyi`，

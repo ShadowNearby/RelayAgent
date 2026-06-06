@@ -1,5 +1,5 @@
 spec_version: "0.1"
-card_version: "0.2.0"
+card_version: "0.3.0"
 app_id: "com.xingin.xhs"
 app_name: "小红书"
 platforms: ["android"]
@@ -62,14 +62,14 @@ embedded_agent:
 
   capabilities:
 
-    - id: qa_community_knowledge
+    - id: search_vertical_content
       description: >
-        Conversational Q&A grounded in Xiaohongshu UGC notes. Covers
-        lifestyle domains: travel, parenting, fashion, food, learning,
-        fitness, beauty, local探店. Reply renders as an AI text answer
-        plus inline POI/note cards (address, hours, photos, mini-map).
-        Route here for "find tips / recommendations / guides / 种草 / 行程"
-        intents — NOT for "buy / book / order / 下单".
+        App-specific vertical content search over Xiaohongshu UGC notes.
+        Use for lifestyle discovery across travel, parenting, fashion, food,
+        learning, fitness, beauty, and local探店: tips, recommendations,
+        guides, 种草 summaries, and light itinerary ideas. Reply renders as
+        AI text plus inline POI/note cards (address, hours, photos, mini-map).
+        Not for buy / book / order / 下单 intents.
       example_prompts:
         - "上海有什么小众咖啡馆"
         - "周末上海带娃去哪玩"
@@ -84,7 +84,7 @@ embedded_agent:
       typical_latency_seconds: 25
       # 点点 replies often stack 3-5 POI cards plus a header summary that
       # exceed one viewport. After the VLM signals done, the adapter scrolls
-      # back through the message (MW direction="down" reveals content above)
+      # back through the message (scroll direction="down" reveals content above)
       # and concatenates per-frame text into _last_agent_reply.
       x_capture_full_reply:
         max_scrolls: 6
