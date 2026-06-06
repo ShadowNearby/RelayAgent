@@ -1,5 +1,5 @@
 spec_version: "0.1"
-card_version: "0.1.0"
+card_version: "0.2.0"
 app_id: "com.autonavi.minimap"
 app_name: "高德地图"
 platforms: ["android"]
@@ -63,10 +63,11 @@ embedded_agent:
     method: none
 
   capabilities:
-    - id: find_nearby
+    - id: poi_nearby_search
       description: >
-        Find nearby POIs (shops, restaurants, gas stations, attractions).
-        Returns list and map markers. Display only; no auto-navigation or ordering.
+        POI and nearby search in Amap for shops, restaurants, gas stations,
+        attractions, and other local places. Returns list/map-marker results
+        only; it does not start navigation, order, or purchase.
       example_prompts:
         - "搜附近24小时便利店"
         - "附近有什么加油站"
@@ -79,11 +80,12 @@ embedded_agent:
       x_capture_full_reply:
         max_scrolls: 6
 
-    - id: navigate_to
+    - id: route_planning
       description: >
-        Plan a route to destination. Returns distance, ETA, traffic info,
-        and a green "Navigate" CTA button. Agent does not auto-start navigation;
-        OS router must not tap the CTA — user may want to switch mode or compare routes.
+        Route planning in Amap, including destination disambiguation, distance,
+        ETA, traffic information, and route options. The assistant may show a
+        Navigate CTA, but scripted flows stop before live turn-by-turn guidance
+        so the user can choose mode and confirm.
       example_prompts:
         - "导航到上海外滩"
         - "我现在去虹桥机场要多久"
@@ -98,9 +100,9 @@ embedded_agent:
 
     - id: hail_ride
       description: >
-        Hail a ride via Amap's aggregator. Multi-step: confirm origin/destination →
-        choose car type → confirm estimate → pay, each step user-operated
-        within the agent's response card.
+        Ride hailing through Amap's aggregator. The assistant helps confirm
+        origin/destination, car type, estimate, and payment path, with every
+        irreversible confirmation left to the user.
       example_prompts:
         - "叫一辆经济型车去虹桥机场"
         - "帮我叫个车回家"
@@ -111,10 +113,6 @@ embedded_agent:
       reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 10
-      # The first VLM "done" reading is often the transient "找到N篇资料"
-      # search-spinner state, not the rendered ride-hailing card. Keep
-      # polling/scrolling past that to capture the actual destination
-      # confirmation + car-type panel before handing back to the user.
       x_capture_full_reply:
         max_scrolls: 3
       failure_modes:
@@ -123,9 +121,9 @@ embedded_agent:
 
     - id: plan_trip
       description: >
-        Generate a multi-day travel itinerary (attractions, dining, hotels)
-        with map previews. Informational only; does not book anything.
-        Uses deep-search mode; expect 30–60s latency.
+        Travel itinerary planning in Amap with attractions, dining, hotels,
+        routes, and map previews. Informational only; it does not book tickets,
+        hotels, rides, or restaurants.
       example_prompts:
         - "帮我规划三亚 3 日游"
         - "周末上海周边亲子游怎么安排"

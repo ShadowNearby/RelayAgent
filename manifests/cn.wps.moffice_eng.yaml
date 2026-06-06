@@ -1,5 +1,5 @@
 spec_version: "0.1"
-card_version: "0.1.0"
+card_version: "0.2.0"
 app_id: "cn.wps.moffice_eng"
 app_name: "WPS Office"
 platforms: ["android"]
@@ -72,13 +72,16 @@ embedded_agent:
 
   capabilities:
 
-    - id: chat
+    - id: foundation_llm
       description: >
-        General Q&A and conversation. Pure LLM response, no partner-app
-        handoff, no side effects.
+        Foundation LLM capability in WPS AI: general Q&A, rewriting,
+        translation, short summarization, pasted-text transformation, and URL
+        or webpage summarization in the chat surface. Pure chat output; no file
+        is created unless the user routes to a document-generation capability.
       example_prompts:
         - "讲讲二战中的中途岛海战"
         - "帮我把这段话改得更书面一点：……"
+        - "帮我总结这个网页：https://example.com/article"
       executable: false
       side_effects: []
       requires_login: false
@@ -86,18 +89,17 @@ embedded_agent:
       handoff_to_user_required: false
       typical_latency_seconds: 10
 
-    - id: ai_ppt
+    - id: generate_slides
       description: >
-        Generate a slide deck from a topic. Quick-access chip "AI PPT"
-        (生成演示文稿) sits above the input. After confirming the outline
-        the agent renders a .pptx into WPS storage; opening it lands in
-        the PPT editor.
+        Slides generation through WPS AI PPT. The quick chip switches the chat
+        surface into a presentation-topic mode, then WPS generates an outline
+        and eventually a .pptx in WPS storage after user confirmation.
       example_prompts:
         - "帮我做一份关于光合作用的 PPT"
         - "用 AI PPT 做一份产品上线复盘的演示稿"
       executable: true
       side_effects:
-        - file_write
+        - data_write
       requires_login: true
       reversible: true
       handoff_to_user_required: true
@@ -107,34 +109,25 @@ embedded_agent:
       x_quick_chip:
         text_or_desc: "AI PPT"
       x_pre_invocation_steps:
-        # AI PPT runs in a dedicated sub-mode of the WPS AI surface: the
-        # chat input is replaced with a topic-only field ("描述创作的主题").
-        # Tap the chip first so the prompt is interpreted as a PPT topic
-        # rather than open-ended chat. uiautomator sees the subtitle
-        # TextView "生成演示文稿" — the bigger "AI PPT" label is not
-        # exposed as a separate node, but tapping the subtitle still
-        # dispatches to the parent chip.
         - tap_label:
             text_or_desc: "生成演示文稿"
             timeout_seconds: 2
             scroll_attempts: 0
         - wait:
-            # Placeholder "描述创作的主题" lives inside the WebView and is
-            # not visible to uiautomator, so wait by time, not by text.
             ms: 1200
 
-    - id: quick_writing
+    - id: generate_document
       description: >
-        "快速写作 / 一键快速成文". Drafts long-form prose (emails, reports,
-        articles) from a short brief. Output is streamed into chat, then
-        a "导出为文档" CTA materializes a .docx file in WPS storage and
-        surfaces it as a clickable doc card in the same chat thread.
+        Document generation through WPS 快速写作. The assistant drafts long-form
+        prose such as emails, reports, articles, summaries, and reflections from
+        a short brief, then can export the result as a .docx card in WPS storage.
       example_prompts:
         - "帮我写一封请假邮件，明天上午有事"
         - "写一篇 800 字的读后感，主题：《活着》"
+        - "根据这些材料整理一份中文总结文档"
       executable: true
       side_effects:
-        - file_write
+        - data_write
       requires_login: true
       reversible: true
       handoff_to_user_required: true
@@ -142,14 +135,6 @@ embedded_agent:
       x_quick_chip:
         text_or_desc: "快速写作"
       x_pre_invocation_steps:
-        # 快速写作 chip swaps the chat input into a topic-only field
-        # ("输入创作的主题") and surfaces a "类型" row (作文 / 读后感 /
-        # 日记 / 周记 / 课件大纲 / 职位描述 / 小红书 / 朋友圈 / 微博 /
-        # 公众号 …). Without explicit type selection the model picks a
-        # default; for type-specific output, add another tap_label step.
-        # uiautomator sees the subtitle "一键快速成文" rather than the
-        # big "快速写作" label, but tapping the subtitle bounds still
-        # dispatches to the parent chip.
         - tap_label:
             text_or_desc: "一键快速成文"
             timeout_seconds: 2
@@ -158,11 +143,8 @@ embedded_agent:
             ms: 1200
       x_post_result_flow:
         description: >
-          After the article finishes streaming, the chat shows a blue
-          "导出为文档" CTA. Tapping it generates a .docx into WPS storage
-          and replaces the CTA with a clickable doc card (title + W icon)
-          that opens the editor on tap. We stop after export — opening
-          the editor is the user's call.
+          After the article finishes streaming, tap "导出为文档" to generate a
+          .docx into WPS storage and stop before opening the editor.
         steps:
           - tap_label:
               text_or_desc: "导出为文档"
@@ -173,11 +155,12 @@ embedded_agent:
         stop_before:
           - "打开文档"
 
-    - id: doc_reading
+    - id: find_file
       description: >
-        "文档阅读 / 总结文档内容". Picks a .doc/.pdf/.pptx from local or
-        cloud storage and produces a summary, Q&A, or outline of it. The
-        chip opens a file picker before the prompt is sent.
+        File selection and document-reading workflow in WPS AI. The 文档阅读
+        chip opens a picker for local/cloud documents and then uses the selected
+        file for summary, Q&A, outline, or translation. The user must select the
+        file manually before the assistant can process it.
       example_prompts:
         - "帮我总结这份合同的关键条款"
         - "把这份 PDF 翻译成英文要点"
@@ -191,22 +174,6 @@ embedded_agent:
         - "file picker blocks until user selects a file or cancels"
       x_quick_chip:
         text_or_desc: "文档阅读"
-
-    - id: web_summary
-      description: >
-        "网页摘要 / 解读网页内容". Takes a URL (pasted or shared in) and
-        summarizes the page. The chip prompts for a link if none is in the
-        clipboard.
-      example_prompts:
-        - "帮我总结这个网页：https://example.com/article"
-      executable: true
-      side_effects: []
-      requires_login: true
-      reversible: true
-      handoff_to_user_required: false
-      typical_latency_seconds: 18
-      x_quick_chip:
-        text_or_desc: "网页摘要"
 
 provenance:
   last_verified: "2026-05-25"

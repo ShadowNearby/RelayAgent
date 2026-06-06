@@ -1,5 +1,5 @@
 spec_version: "0.1"
-card_version: "0.1.0"
+card_version: "0.2.0"
 app_id: "com.tencent.mm"
 app_name: "微信"
 platforms: ["android"]
@@ -83,10 +83,12 @@ embedded_agent:
 
   capabilities:
 
-    - id: ai_search
+    - id: search_vertical_content
       description: >
-        General AI-powered Q&A and web/article search. Pure model+search
-        response, no partner-app handoff.
+        App-specific vertical content search through WeChat AI 搜索, including
+        public-account article retrieval, web/article summarization, cited
+        answer generation, and general search-backed Q&A. Pure model/search
+        response with no partner-app handoff.
       example_prompts:
         - "今天上海天气怎么样"
         - "上海交通大学最近有什么新闻"
