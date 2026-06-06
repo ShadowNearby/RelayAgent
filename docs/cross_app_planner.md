@@ -1,258 +1,258 @@
-# 自动跨 App 规划器（`run_plan.py` / `FlowPlanner`）
+# Auto cross-app planner (`run_plan.py` / `FlowPlanner`)
 
-> English: [`cross_app_planner_en.md`](cross_app_planner_en.md)
+> 中文版：[`cross_app_planner.zh.md`](cross_app_planner.zh.md)
 
-> 一句自然语言 → LLM **自动合成**一条跨 App 的 plan → 校验 → 落盘 → 预览确认 → 真机执行。
+> One NL sentence → LLM **auto-synthesizes** a cross-app plan → validate → persist → preview & confirm → run on a real device.
 >
-> 与已有入口的关系：`run_nl.py` 是在**手写好的** flow / 单 app 能力里**选**一个；`run_flow.py` 直接跑一个**手写**的 flow YAML；`run_plan.py` 则是当**没有**对应手写 flow 时，让模型**现场生成**一条多 app plan。三者共用同一套 `FlowRunner` 执行器与 flow schema。
+> How it relates to the existing entries: `run_nl.py` **picks** one of the **hand-written** flows / single-app capabilities; `run_flow.py` runs a **hand-written** flow YAML directly; `run_plan.py` is for when there is **no** matching hand-written flow — it has the model **synthesize** a multi-app plan on the spot. All three share the same `FlowRunner` executor and flow schema.
 
 ---
 
-## 1. 它解决什么
+## 1. What it solves
 
-在此之前，RelayAgent 的跨 App 能力依赖 `manifests/_flows/` 下**人工预先编排**的 YAML：哪些 app、按什么顺序、用哪个 capability、leg 之间数据怎么 bind，全是手写死的。`run_nl.py` 的 router 只能在这些既有 flow 里**挑一个**（prompt 明确 `do NOT invent ids`）。
+Before this, RelayAgent's cross-app capability relied on **hand-authored** YAML under `manifests/_flows/`: which apps, in what order, which capability, and how data binds between legs were all written by hand. The `run_nl.py` router could only **pick one** of those existing flows (its prompt explicitly says `do NOT invent ids`).
 
-因此，给一句**没有对应 flow** 的跨 App 指令时，系统无法自主把目标拆解成多 app 步骤序列——router 找不到匹配，会回落到单 app 或选错。
+So given a cross-app instruction with **no matching flow**, the system couldn't autonomously decompose the goal into a multi-app step sequence — the router finds no match and falls back to a single app, or picks the wrong one.
 
-`run_plan.py` 补上的就是这一层：**给定全量 app/capability 清单，让 LLM 动态产出 steps + bind 关系**（相当于把过去手写的 flow YAML 交给模型来产出），再交给既有 `FlowRunner` 执行。**不重造执行器，只新增"规划"这一层。**
+`run_plan.py` fills exactly that gap: **given the full app/capability catalog, have the LLM dynamically produce the steps + bind relations** (i.e. have the model produce what used to be the hand-written flow YAML), then hand it to the existing `FlowRunner`. **No new executor — only a new "planning" layer.**
 
 ---
 
-## 2. 流水线
+## 2. Pipeline
 
 ```
-一句话
+one sentence
   │
-  ├─(1) build_catalog()            全量 app + capability（复用自 run_nl.py）
+  ├─(1) build_catalog()            full app + capability list (reused from run_nl.py)
   │
-  ├─(2) 缓存查找                    manifests/_generated/ 里精确串匹配；--no-cache 跳过
-  │        命中 ┐
-  │            └────────────────────────────────┐
-  ├─(3) FlowPlanner.plan()         未命中：LLM 合成 → fenced JSON → 本地校验
+  ├─(2) cache lookup               exact string match in manifests/_generated/; skipped by --no-cache
+  │        hit ┐
+  │           └────────────────────────────────┐
+  ├─(3) FlowPlanner.plan()         miss: LLM synthesize → fenced JSON → local validation
   │        │                                     │
-  │        ├─ 校验不过 → 硬报错退出（repair 是 TODO）
-  │        └─ unsatisfiable → 打印原因退出
+  │        ├─ invalid → hard-fail + exit (repair is a TODO)
+  │        └─ unsatisfiable → print reason + exit
   │                                              │
-  ├─(4) 落盘                        写 plan YAML 到 manifests/_generated/
+  ├─(4) persist                    write plan YAML to manifests/_generated/
   │                                              │
-  ├─(5) 预览 + 确认 ←───────────────────────────┘
-  │        默认 N；非交互 stdin（EOF）= 不执行；--yes 跳过；--dry-run 到此为止
+  ├─(5) preview + confirm ←─────────────────────┘
+  │        default N; non-interactive stdin (EOF) = don't execute; --yes skips; --dry-run stops here
   │
-  └─(6) FlowRunner.run()           每个 app leg 一次 mw test，复用持久化 MobileWorld server
+  └─(6) FlowRunner.run()           one mw test per app leg, reusing the persistent MobileWorld server
 ```
 
-涉及的文件：
+Files involved:
 
-| 文件 | 角色 |
+| File | Role |
 | --- | --- |
-| [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI 入口：缓存 / 落盘 / 预览 / 确认 / 录屏 / 派发 |
-| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`：catalog → prompt → LLM → JSON → 校验（含 repair TODO 空壳） |
-| [`agents/flow_runner.py`](../agents/flow_runner.py) | 既有执行器，被直接复用（生成的 plan 与手写 flow 同 schema） |
-| [`manifests/_generated/`](../manifests/_generated/) | 生成物 + 缓存目录，`.gitignore` 把内容排除出版本库 |
+| [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI entry: cache / persist / preview / confirm / recording / dispatch |
+| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`: catalog → prompt → LLM → JSON → validation (with a repair TODO stub) |
+| [`agents/flow_runner.py`](../agents/flow_runner.py) | the existing executor, reused as-is (generated plans share the hand-written flow schema) |
+| [`manifests/_generated/`](../manifests/_generated/) | generated-artifact + cache dir; `.gitignore` keeps its contents out of version control |
 
 ---
 
-## 3. 生成的 plan schema
+## 3. Generated plan schema
 
-输出**复用 flow YAML 的形状**，所以能直接喂给 `FlowRunner`。与手写 flow 的唯一区别：**没有 `inputs` 块**——句子是具体的，字面值直接烤进 step 的 `prompt`；leg 间数据流仍用 `extract` / `bind` / `{var}`。
+The output **reuses the flow YAML shape**, so it can be fed straight to `FlowRunner`. The only difference from a hand-written flow: **no `inputs` block** — the sentence is concrete, so literal values are baked directly into each step's `prompt`; cross-leg data flow still uses `extract` / `bind` / `{var}`.
 
-落盘后的字段顺序（`run_plan.py:_persist` 固定）：
+Field order after persisting (fixed by `run_plan.py:_persist`):
 
 ```yaml
-flow_id: gen_<8位hash>            # 自动派生
-source_request: <归一化后的原始句子>   # 精确串匹配缓存用
-description: <一句话概述>
-apps_required:                    # 仅供校验 / 预览展示
+flow_id: gen_<8-char hash>          # auto-derived
+source_request: <normalized original sentence>   # used for exact-match caching
+description: <one-line summary>
+apps_required:                      # for validation / preview display only
   - {app_id: ..., use_capability: ...}
 steps: [ ... ]
 ```
 
-`steps` 里每一步是以下两种之一：
+Each entry in `steps` is one of the following two kinds:
 
-**App step**（驱动一个 app 的 agent 跑一个 capability）
+**App step** (drives one app's agent for one capability)
 
 ```yaml
 - id: find_bookstores
-  app: com.xingin.xhs               # 必须是 catalog 里的 app_id
-  capability: qa_community_knowledge # 必须是该 app 上存在的 capability id
+  app: com.xingin.xhs                # must be an app_id in the catalog
+  capability: qa_community_knowledge  # must be a capability id that exists on that app
   prompt: "在上海找三家评价好的小众书店，列出店名、地址和简短推荐理由"
-  extract:                          # 可选：仅当后续 step 要消费这步回复的结构化数据
-    prompt: "抽成 JSON 数组 [{name, address}]"
-    bind_to_array_key: bookstores   # 从 extract 出的 JSON 里取这个 key（数组/字符串都用它）
-  bind: bookstore_list              # 可选：把这步结果存成变量，下游用 {bookstore_list} 引
+  extract:                           # optional: only when a later step consumes this reply's structured data
+    prompt: "parse into a JSON array [{name, address}]"
+    bind_to_array_key: bookstores    # pull this key out of the extracted JSON (works for arrays/strings alike)
+  bind: bookstore_list               # optional: store this step's result as a variable, referenced downstream as {bookstore_list}
 ```
 
-**Ask-user step**（把控制交给用户，再继续）
+**Ask-user step** (hand control to the user, then continue)
 
 ```yaml
 - id: pick_bookstore
   type: ask_user
   bind: selected_bookstore
   prompt_header: "请从以下推荐的小众书店中选择一家："
-  select_from: bookstore_list       # 可选：渲染成编号选单从该列表选 1
-  item_label: "{name}（{address}）"   # 可选：每个列表项怎么显示
+  select_from: bookstore_list        # optional: render a numbered pick list from that list
+  item_label: "{name}（{address}）"    # optional: how to render each list item
 ```
 
-模板：`{var}` 和 `{var.field}` 对 blackboard 取值（FlowRunner 的 `render()`）。blackboard 起始为空（无 inputs），随每步 `bind` 增长。
+Templating: `{var}` and `{var.field}` resolve against the blackboard (`FlowRunner`'s `render()`). The blackboard starts empty (no inputs) and grows with each step's `bind`.
 
 ---
 
-## 4. 规划器规则（写进 system prompt）
+## 4. Planner rules (baked into the system prompt)
 
-`FlowPlanner._PLANNER_SYSTEM` 给模型的硬约束：
+Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 
-1. **只能用 catalog 里出现的 `app_id` / capability id，绝不编造。**
-2. **跨 step 传数据**必须给上游 app step 配 `extract` + `bind`，下游用 `{var}` / `{var.field}` 引；**引用的每个 `{var}` 必须由更早的 step 产出。**
-3. 某步回复是**列表**且要用户选时，插一个带 `select_from` 的 `ask_user`。
-4. **`handoff_to_user_required` 的 capability：**
-   - 若它**不是**整个任务的最后一步 → **必须**紧跟一个 `ask_user`（用 `prompt_header` 显示 agent 抛出的话、收用户回答），再接一个消费该回答的 app step（在那步 prompt 里**重述完整意图**，因为它是全新 agent 会话）。
-   - 若它**是**最后一步（如末尾打车）→ **可以**作终点：它自己的 in-app handoff 就是用户的终态确认，无需再补 `ask_user`。
-5. prompt 尽量用用户原话，只补明显缺口；把请求里的具体值直接烤进 prompt。
-6. 单 app 请求也行——出 1-step plan（`run_plan` 是 `run_nl` 的超集）。
-7. 现有 app 组合**无法满足**时，返回 `{"unsatisfiable": true, "reason": "..."}`，预览阶段如实告知、不执行。
-
----
-
-## 5. 本地校验
-
-`FlowPlanner._validate()` 在执行前挡住坏 plan（返回错误清单，空 = 通过）：
-
-- `steps` 是非空 list；
-- 每个 app step：`app` / `capability` / `prompt` 齐全，`app` 命中 catalog，`capability` 命中该 app；
-- prompt / `extract.prompt` / `prompt_header` 里引用的每个 `{root_var}` 都已被更早的 step bind（**挡悬空引用**）；
-- `ask_user` 的 `select_from` 指向已 bind 的变量；
-- `bind` 名唯一、`id` 不重复；
-- **规则 4 的校验**：`handoff_to_user_required` 的 capability 若**不是**最后一步，下一步必须是 `ask_user`（末尾的允许作终点）。
-
-> **校验失败 = 硬报错退出**，打印错误清单 + 原始 plan。**LLM repair 重修循环是 TODO**（`FlowPlanner._repair` 是空壳），刻意不实现，以免坏 plan 静默执行。
+1. **Use only `app_id` / capability ids that appear in the catalog — never invent them.**
+2. **To pass data across steps**, give the upstream app step an `extract` + `bind`, then reference it downstream via `{var}` / `{var.field}`; **every `{var}` referenced must be produced by an earlier step.**
+3. When a step's reply is a **list** the user should choose from, insert an `ask_user` with `select_from`.
+4. **For a `handoff_to_user_required` capability:**
+   - If it is **not** the final step of the whole task → it **must** be immediately followed by an `ask_user` (show the agent's surfaced message via `prompt_header`, collect the user's answer), then another app step that consumes the answer (**re-state the full intent** in that step's prompt, since it runs as a fresh agent session).
+   - If it **is** the final step (e.g. hailing the ride at the very end) → it **may** be terminal: its own in-app handoff is the user's final confirmation, so no trailing `ask_user` is needed.
+5. Prefer the user's own wording in prompts; only fill obvious gaps; bake concrete values from the request directly into the prompt.
+6. A single-app request is fine too — emit a 1-step plan (`run_plan` is a superset of `run_nl`).
+7. When no combination of available apps can satisfy the request, return `{"unsatisfiable": true, "reason": "..."}`; the preview stage reports it honestly and does not execute.
 
 ---
 
-## 6. handoff 往返：先 A 后 B
+## 5. Local validation
 
-"`handoff_to_user` 后要能 switch 回 agent" 分两个粒度，本版落地 A、给 B 留缝：
+`FlowPlanner._validate()` blocks bad plans before execution (returns an error list; empty = valid):
 
-- **Phase A（已落地）**：handoff leg 结束 → 流程级 `ask_user` 收用户回答 → 下一个 agent leg 是一次**全新 `mw test`**（同 app 或换 app），把回答 + 完整意图重述进 prompt。复用现有 FlowRunner 结构。**局限**：同 app 中途 handoff 会冷启动、清历史，丢 in-app 半成品状态。
-- **Phase B（仅留缝，未接线）**：让 handoff leg **不终止**——把 `flow_runner._run_app_step` 里的 `stdin=DEVNULL` 换成 flow⇄agent 回环通道；agent 的 handoff `ask_user`（`relay_agent.py` 内）不再 EOF 收尾，而是阻塞读 flow 喂回的答案再继续 `predict()`，在**同一会话**里原地续跑。两处都打了 `# TODO(phase-B):` 标记。
+- `steps` is a non-empty list;
+- each app step: `app` / `capability` / `prompt` present, `app` exists in the catalog, `capability` exists on that app;
+- every `{root_var}` referenced in `prompt` / `extract.prompt` / `prompt_header` was already bound by an earlier step (**blocks dangling references**);
+- an `ask_user`'s `select_from` points to an already-bound variable;
+- `bind` names are unique and `id`s don't repeat;
+- **the rule-4 check**: if a `handoff_to_user_required` capability is **not** the last step, the next step must be an `ask_user` (a terminal one at the end is allowed).
 
-> in-app handoff 现状：agent 走到 `handoff` 步时先 `_maybe_persist_reply()`（把回复写 `RELAY_REPLY_OUT`），再发 `action_type="ask_user"`；flow leg 里 stdin 是 DEVNULL → 立刻 EOF → 子进程结束、回复已落盘。
-
----
-
-## 7. 缓存
-
-- **落盘**：校验通过的 plan 写 `manifests/_generated/<slug>_<hash8>.yaml`，内含 `source_request`（归一化后的原句）。
-- **复用**：规划前扫 `_generated/`，**`source_request` 归一化后精确相等**就直接复用那份（仍走预览 + 确认，不再调 LLM）。`--no-cache` 跳过。
-- **语义复用是 TODO**：精确串没命中时回落到 embedding / LLM 判相似——代码里 `run_plan.py:_cache_lookup` 留了 `# TODO(semantic-cache):` 钩子，暂未实现。
+> **Validation failure = hard-fail + exit**, printing the error list + the raw plan. **The LLM repair loop is a TODO** (`FlowPlanner._repair` is a stub), deliberately unimplemented so a bad plan never executes silently.
 
 ---
 
-## 8. 用法
+## 6. Handoff round-trip: phase A first, then B
+
+"after `handoff_to_user`, be able to switch back to the agent" has two granularities; this version ships A and leaves a seam for B:
+
+- **Phase A (shipped)**: the handoff leg ends → a flow-level `ask_user` collects the user's answer → the next agent leg is a **fresh `mw test`** (same app or a different one) with the answer + full intent re-stated in the prompt. Reuses the existing `FlowRunner` structure. **Limitation**: a same-app mid-task handoff cold-launches and clears history, losing in-app half-finished state.
+- **Phase B (seam only, not wired)**: keep the handoff leg from terminating — replace `stdin=DEVNULL` in `flow_runner._run_app_step` with a flow⇄agent channel; the agent's handoff `ask_user` (inside `relay_agent.py`) no longer ends on EOF but blocks reading the answer the flow pipes back, then resumes `predict()` in the **same conversation**. Both spots carry `# TODO(phase-B):` markers.
+
+> In-app handoff today: when the agent reaches the `handoff` step it first calls `_maybe_persist_reply()` (writes the reply to `RELAY_REPLY_OUT`), then emits `action_type="ask_user"`; in a flow leg stdin is DEVNULL → immediate EOF → the subprocess ends with the reply already persisted.
+
+---
+
+## 7. Cache
+
+- **Persist**: a validated plan is written to `manifests/_generated/<slug>_<hash8>.yaml`, carrying `source_request` (the normalized original sentence).
+- **Reuse**: before planning, scan `_generated/`; if a plan's **normalized `source_request` exactly matches**, reuse it directly (still goes through preview + confirm, no LLM call). Skipped by `--no-cache`.
+- **Semantic reuse is a TODO**: falling back to embedding / LLM similarity when the exact string misses — `run_plan.py:_cache_lookup` leaves a `# TODO(semantic-cache):` hook, not yet implemented.
+
+---
+
+## 8. Usage
 
 ```bash
-# 基本：合成 → 预览 → 询问 y/N → 执行
+# basic: synthesize → preview → ask y/N → execute
 uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去"
 
-# 只规划 + 预览，不执行（不碰设备、只调一次 LLM）
+# plan + preview only, don't execute (no device, one LLM call)
 uv run python scripts/run_plan.py "..." --dry-run
 
-# 跳过确认直接执行（自动化 / 真机批跑）
+# skip the confirm and execute (automation / real-device batch runs)
 uv run python scripts/run_plan.py "..." --yes
 
-# 忽略缓存，强制重新生成
+# ignore the cache, force regeneration
 uv run python scripts/run_plan.py "..." --no-cache
 
-# 录屏（parent-owned，跨 leg 连续录；自动开 RELAY_SKIP_STEP_SCREENSHOT）
+# record the screen (parent-owned, continuous across legs; auto-enables RELAY_SKIP_STEP_SCREENSHOT)
 uv run python scripts/run_plan.py "..." --record
 uv run python scripts/run_plan.py "..." --record /path/to/dir
 
-# `--` 之后的参数透传给底层每个 mw test
+# args after `--` are forwarded to each underlying mw test
 uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 ```
 
-**flag 一览**
+**Flag reference**
 
-| flag | 作用 |
+| flag | effect |
 | --- | --- |
-| `--dry-run` | 合成 + 预览后停，不执行 |
-| `--yes` / `-y` | 跳过 y/N 确认 |
-| `--no-cache` | 不复用 `_generated/` 里的缓存，强制重新生成 |
-| `--record [DIR]` | adb 录屏；缺省落 `traj_logs/recordings/<ts>/` |
-| `-- <args>` | `--` 之后透传给底层 `mw test` |
+| `--dry-run` | stop after synthesize + preview; don't execute |
+| `--yes` / `-y` | skip the y/N confirm |
+| `--no-cache` | don't reuse a cached plan in `_generated/`; force regeneration |
+| `--record [DIR]` | adb screen recording; defaults to `traj_logs/recordings/<ts>/` |
+| `-- <args>` | everything after `--` is forwarded to the underlying `mw test` |
 
-**环境**
+**Environment**
 
-- 规划用 `.env` 的 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（=`qwen`），与 `run_nl` router 同端点。
-- 执行复用持久化 MobileWorld server（`scripts/_mw_server.py:ensure_server` 注入 `--aw_host`），与 `run_nl` / `run_flow` 一致。
-- 真机要求同项目其余部分：adb + USB 调试 + `com.android.adbkeyboard/.AdbIME`，`RELAY_ANDROID_SERIAL` 选设备。
+- Planning uses `.env`'s `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (= `qwen`), the same endpoint as the `run_nl` router.
+- Execution reuses the persistent MobileWorld server (`scripts/_mw_server.py:ensure_server` injects `--aw_host`), consistent with `run_nl` / `run_flow`.
+- Real-device requirements as elsewhere in the project: adb + USB debugging + `com.android.adbkeyboard/.AdbIME`; `RELAY_ANDROID_SERIAL` selects the device.
 
-**中途 `ask_user` 的非交互行为**：流程级 `ask_user` 读父进程 stdin。`< /dev/null`（或管道 EOF）时，选单步**自动取第一个候选**、自由输入步取空串——适合 `--yes` 批跑。要人工选就在真终端里交互运行。
+**Non-interactive behavior of mid-flow `ask_user`**: a flow-level `ask_user` reads the parent process's stdin. With `< /dev/null` (or a piped EOF), a pick step **auto-takes the first candidate** and a freeform step takes the empty string — suitable for `--yes` batch runs. To pick by hand, run interactively in a real terminal.
 
-**安全**：默认 N；非交互 stdin 视为不执行。带 `handoff_to_user_required` 的 capability（如打车、下单）会停在**不可逆 CTA 之前**交还，不会真下单/付款。
+**Safety**: default N; a non-interactive stdin is treated as don't-execute. A `handoff_to_user_required` capability (e.g. hailing a ride, placing an order) stops **before the irreversible CTA** and hands back — it does not actually order/pay.
 
 ---
 
-## 9. 已知局限 / TODO
+## 9. Known limitations / TODO
 
-| 项 | 状态 | 位置 |
+| Item | Status | Location |
 | --- | --- | --- |
-| LLM repair 重修循环 | TODO（硬报错代替） | `flow_planner.py:_repair` + `# TODO(repair):` |
-| 语义缓存复用 | TODO（仅精确串匹配） | `run_plan.py:_cache_lookup` `# TODO(semantic-cache):` |
-| Phase B 同会话续跑 | 仅留缝 | `flow_runner.py` / `relay_agent.py` 的 `# TODO(phase-B):` |
-| 静态一次性规划 | 设计如此 | 不做逐步 / 失败重规划；leg 输出异常不自适应 |
-| plan 复杂度 | 不设硬上限 | ≥4 个 app leg 时只 `logger.warning` 提示 |
+| LLM repair loop | TODO (hard-fail instead) | `flow_planner.py:_repair` + `# TODO(repair):` |
+| Semantic cache reuse | TODO (exact string match only) | `run_plan.py:_cache_lookup` `# TODO(semantic-cache):` |
+| Phase B same-session resume | seam only | `# TODO(phase-B):` in `flow_runner.py` / `relay_agent.py` |
+| Static one-shot planning | by design | no step-by-step / failure replanning; doesn't adapt to surprising leg output |
+| Plan complexity | no hard cap | only a `logger.warning` at ≥4 app legs |
 
 ---
 
-## 10. 一次真机实跑（worked example）
+## 10. A real-device run (worked example)
 
-输入：`"在上海找三家评价好的小众书店，挑一家打车过去"`（Pixel 9，`--yes`，stdin `</dev/null`）。
+Input: `"在上海找三家评价好的小众书店，挑一家打车过去"` (Pixel 9, `--yes`, stdin `</dev/null`).
 
-合成的 plan（与手写 [`xhs_to_amap_place.yaml`](../manifests/_flows/xhs_to_amap_place.yaml) 结构一致）：
+The synthesized plan (same structure as the hand-written [`xhs_to_amap_place.yaml`](../manifests/_flows/xhs_to_amap_place.yaml)):
 
 ```
-1. [agent]    小红书 / qa_community_knowledge  →  extract → bind bookstore_list
-2. [ask_user] 从 bookstore_list 选 1           →  bind selected_bookstore
-3. [agent]    高德地图 / hail_ride（末尾 handoff，作终点）
+1. [agent]    Xiaohongshu / qa_community_knowledge  →  extract → bind bookstore_list
+2. [ask_user] pick 1 from bookstore_list            →  bind selected_bookstore
+3. [agent]    Amap / hail_ride (terminal handoff)
 ```
 
-执行轨迹：
+Execution trace:
 
-- **Leg 1（点点 qa）**：点点回复 915 字 → extract 抽出 3 家 `[{犀牛书店,…},{i人书房,…},{1691 Coffee Bar,…}]` → bind `bookstore_list`。task wall_s **79.1s**。
-- **ask_user**：stdin EOF → 自动取第一家 **犀牛书店** → bind `selected_bookstore`。
-- **Leg 2（高德 hail_ride）**：prompt 渲染成 `帮我叫一辆车去 犀牛书店，地址是 苏州河畔老建筑`（`{selected_bookstore.name}` / `.address` 跨 leg 传值生效）→ agent 走到 handoff、**停在打车确认前交还，未下单**。task wall_s **68.6s**。
+- **Leg 1 (点点 qa)**: 点点 replies ~915 chars → extract pulls 3 stores `[{犀牛书店,…},{i人书房,…},{1691 Coffee Bar,…}]` → bind `bookstore_list`. task wall_s **79.1s**.
+- **ask_user**: stdin EOF → auto-takes the first, **犀牛书店** → bind `selected_bookstore`.
+- **Leg 2 (Amap hail_ride)**: prompt renders to `帮我叫一辆车去 犀牛书店，地址是 苏州河畔老建筑` (`{selected_bookstore.name}` / `.address` cross-leg passing works) → the agent reaches handoff and **stops before the ride-confirm CTA, does not order**. task wall_s **68.6s**.
 
-整条跨 app 任务 ≈ **2.5 分钟**，全程 exit 0、无 error。
+The whole cross-app task ≈ **2.5 minutes**, exit 0 throughout with no errors.
 
 ---
 
-## 11. 改动说明（本次引入）
+## 11. Change notes (introduced here)
 
-新增"自动合成跨 App plan"这一层，全部改动如下。
+This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 
-**新增**
+**Added**
 
-| 文件 | 内容 |
+| File | Content |
 | --- | --- |
-| `agents/flow_planner.py` | `FlowPlanner`：catalog → system prompt → LLM → fenced JSON → 本地校验（`_validate`）。`PlanValidationError` 携带错误清单。`_repair` 是 TODO 空壳。 |
-| `scripts/run_plan.py` | CLI 入口：精确串缓存 / 合成 / 落盘 / 预览 / 确认 / 录屏 / 派发 `FlowRunner`。flag：`--dry-run` `--yes` `--no-cache` `--record` `-- <透传>`。 |
-| `manifests/_generated/.gitignore` | 把生成的 plan / 缓存排除出版本库，只保留 `.gitignore` 自身。 |
-| `docs/cross_app_planner.md` | 本文档。 |
+| `agents/flow_planner.py` | `FlowPlanner`: catalog → system prompt → LLM → fenced JSON → local validation (`_validate`). `PlanValidationError` carries the error list. `_repair` is a TODO stub. |
+| `scripts/run_plan.py` | CLI entry: exact-string cache / synthesize / persist / preview / confirm / recording / dispatch to `FlowRunner`. Flags: `--dry-run` `--yes` `--no-cache` `--record` `-- <forward>`. |
+| `manifests/_generated/.gitignore` | keeps generated plans / cache out of version control, retaining only `.gitignore` itself. |
+| `docs/cross_app_planner.md` / `docs/cross_app_planner.zh.md` | this document (English / Chinese). |
 
-**修改**
+**Modified**
 
-| 文件 | 改动 |
+| File | Change |
 | --- | --- |
-| `agents/flow_runner.py` | ① `# TODO(phase-B):` 缝注释（`stdin=DEVNULL` 处）。② 新增 `_traj_stem()`：手写 flow 仍用文件名 stem；自动合成的 plan（有 `source_request`、无 `inputs`）改用 `plan_<app1>_<app2>…` 命名 traj 目录，避免冗长的 NL-slug 文件名当目录名。 |
-| `agents/relay_agent.py` | handoff 分支加 `# TODO(phase-B):` 缝注释（不改逻辑）。 |
-| `CLAUDE.md` | `跑测试` 加 run_plan 入口；新增"自动跨 App 规划"速览节并指向本文档；"三个→四个入口脚本"。 |
-| `README_zh.md` | scripts 目录清单加 run_plan；`自然语言入口` 后加"自动合成跨 App plan"小节。 |
+| `agents/flow_runner.py` | ① `# TODO(phase-B):` seam comment (at `stdin=DEVNULL`). ② new `_traj_stem()`: hand-written flows still use the file stem; auto-synthesized plans (marked by `source_request`, no `inputs`) name the traj dir `plan_<app1>_<app2>…` instead, avoiding a long NL-slug filename as a directory name. |
+| `agents/relay_agent.py` | `# TODO(phase-B):` seam comment on the handoff branch (no logic change). |
+| `CLAUDE.md` | added the run_plan entry under `跑测试`; added an "auto cross-app planning" overview section pointing here; "three → four entry scripts". |
+| `README.md` / `README_zh.md` | added run_plan to the scripts listing; added an "auto-synthesize a cross-app plan" subsection after the NL entry point. |
 
-**设计决策记录（为什么这么做）**
+**Design decisions (why)**
 
-- **静态一次性规划**而非逐步/ReAct：复用现有 `FlowRunner`，改动最小、可立即落地；代价是 leg 输出异常不自适应。
-- **独立 `run_plan.py`** 而非并进 `run_nl`：对现有 NL 路由零侵入。
-- **预览 + 确认（默认 N）**：跨 App 含不可逆副作用（打车/下单），执行前必须人能看清并放行。
-- **校验失败硬报错、repair 留 TODO**：宁可中止也不让坏 plan 静默执行。
-- **handoff 末尾可作终点、中间才强插 ask_user**：与手写 `xhs_to_amap_place` 收尾在 hail_ride 的形态一致；末尾 leg 的 in-app handoff 本身即终态确认。
-- **缓存先精确串匹配、语义复用留 TODO**：先把主链路跑通，避免在缓存上过早投入。
+- **Static one-shot planning** rather than step-by-step / ReAct: reuses the existing `FlowRunner`, minimal change, immediately shippable; the cost is no adaptation to surprising leg output.
+- **A dedicated `run_plan.py`** rather than folding into `run_nl`: zero intrusion on the existing NL routing.
+- **Preview + confirm (default N)**: cross-app carries irreversible side effects (ride-hailing / ordering), so a human must see and approve before execution.
+- **Hard-fail on validation, repair left as TODO**: better to abort than let a bad plan execute silently.
+- **Handoff may be terminal at the end, ask_user forced only mid-flow**: matches the hand-written `xhs_to_amap_place` ending on hail_ride; the final leg's in-app handoff is itself the terminal confirmation.
+- **Cache exact-string first, semantic reuse left as TODO**: get the main path working before investing in caching.
