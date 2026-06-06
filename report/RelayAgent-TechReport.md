@@ -132,7 +132,7 @@ order of magnitude and — equally important for a system — made the cost
    — materializes a card into deterministic device actions (accessibility-tree-first,
    provider-agnostic across VLMs), adds a two-stage (perceptual-hash + a11y-text-hash)
    reply-completion precheck and an a11y-scrape-first text path (measured A/B), and
-   chains cards across apps via multi-app flows + NL routing. (§5–§7)
+   supports single-app natural-language routing. (§5–§7)
 5. **A four-configuration efficiency study** on a real device, isolating (a) the
    paradigm's value (using the in-app agent at all), (b) structured delegation vs.
    re-driving the UI, and (c) the two optimizations — plus a *predictability*
@@ -313,21 +313,18 @@ NL request ─▶ Capability Router ─▶ Card (entry + capability + handoff)
 
 A request enters as natural language. The **capability router**
 (`agents/capability_router.py`) consults a catalog of cards and picks one
-capability (or, for cross-app intents, a whole flow). The chosen card names a
-**launcher entry path** and a **capability** with its slots, latency hint, and
-handoff policy. The **relay adapter** (`agents/relay_agent.py`, built on a
-planner in `agents/action_planner.py`) materializes that card into a deterministic
-action sequence under MobileWorld: cold-launch the app, open a fresh conversation,
-type the prompt, wait for the in-app agent's reply to complete, scrape the reply
-text, and — when the capability is marked irreversible — hand control back to the
-user. **Flows** (`agents/flow_runner.py`, `manifests/_flows/*.yaml`) chain cards
-across apps, relaying each step's reply forward through a small text-LLM extract.
-A shared adb helper (`agents/_adb.py`) backs cold-launch, swipes, and device
-selection.
+capability. The chosen card names a **launcher entry path** and a **capability**
+with its slots, latency hint, and handoff policy. The **relay adapter**
+(`agents/relay_agent.py`, built on a planner in `agents/action_planner.py`)
+materializes that card into a deterministic action sequence: cold-launch the app,
+open a fresh conversation, type the prompt, wait for the in-app agent's reply to
+complete, scrape the reply text, and — when the capability is marked irreversible
+— hand control back to the user. A shared adb helper (`agents/_adb.py`) backs
+cold-launch, swipes, and device selection.
 
 The remainder of the paper details the card spec (§4), the adapter mechanisms
-(§5), flows and routing (§6), the two efficiency optimizations (§7), and the
-benchmark (§8).
+(§5), natural-language routing (§6), the two efficiency optimizations (§7), and
+the benchmark (§8).
 
 ---
 
@@ -437,23 +434,14 @@ failure, and is how the benchmark's non-interactive runs end.
 
 ---
 
-## 6. Multi-App Flows and Natural-Language Routing
-
-**Flows** (`agents/flow_runner.py`, `manifests/_flows/*.yaml`) chain cards across
-apps. Each step cold-launches its app, pins one capability, captures the reply,
-and relays it forward through a small text-LLM `extract` that pulls structured
-fields (e.g. a candidate list) into the flow blackboard. An `ask_user` step lets
-the user choose among candidates. Reference flows: `xhs_to_amap_place` (find
-niche/new places in Xiaohongshu, pick one, hail an Amap ride there) and
-`wechat_to_wps_summary`. Each sub-step runs as its own MobileWorld invocation under
-a per-leg `--log-file-root`, so per-leg trajectories and token counts are
-recoverable (used throughout §8).
+## 6. Natural-Language Routing
 
 **NL routing** (`scripts/run_nl.py` + `agents/capability_router.py`) builds a
-catalog of all cards and flows and asks the text LLM to pick the best executor —
-a single capability or a whole flow — before dispatch, with a `--dry-run` mode for
-routing inspection. The motivating end-to-end case is the `xhs_to_amap_place` demo
-("在上海找三家评价好的小众书店，挑一家打车过去").
+catalog of all app cards and asks the text LLM to pick the best single app +
+capability before dispatch, with a `--dry-run` mode for routing inspection. The
+router returns a concrete app id, capability id, and rewritten goal; execution is
+then delegated to the native single-app runner with `RELAY_FORCE_CAPABILITY` and
+`RELAY_INVOCATION_TEXT` set so the in-app invocation stays pinned to that choice.
 
 ---
 
@@ -829,9 +817,8 @@ stalled adb call. Together these made the long unattended n=3 batch reproducible
 
 ### 8.8 Case studies (annotated trajectories)
 
-Two end-to-end trajectories make the cost numbers concrete. Demo recordings:
-`assets/RelayAgentDemoOrder/RelayAgentDemoOrder.gif` (T1) and
-`assets/RelayAgentDemoFlow/RelayAgentDemoFlow.gif` (T2). Step strings below are
+One end-to-end trajectory makes the cost numbers concrete. Demo recording:
+`assets/RelayAgentDemoOrder/RelayAgentDemoOrder.gif` (T1). Step strings below are
 verbatim from the run `prediction` fields in `traj.json`.
 
 #### 8.8.1 T1 order_food — RA optimized (run `n3_retest/order_food_optimized_r1`, 3987 tokens, 2 VLM calls)
@@ -870,28 +857,6 @@ reached the same payment screen, but re-deriving each step (cart, store pick,
 quantity) from full screenshots plus a 3-image visual history cost an order of
 magnitude more than RA, and the step count (hence cost) swung run to run with how
 much the assistant auto-resolved.
-
-#### 8.8.2 T2 flow — RA optimized (run `flow_optimized_r1`, 8662 tokens total)
-
-The cross-app flow ran as two independently-logged MobileWorld legs (§6):
-
-- **Leg 1 — discover (Xiaohongshu `qa_community_knowledge`, 5853 tok).** 6-step
-  plan → 15 runner steps. After submit, precheck skipped 5 streaming ticks, the
-  VLM confirmed `done`, then the `x_capture_full_reply` loop scrolled the
-  RecyclerView **3 of 6** allotted scrolls, scraping each frame (zero VLM text
-  calls), and stitched the restaurant list. The flow's text-LLM `extract` then
-  pulled the candidate list into the blackboard.
-- **Leg 2 — ride (Amap `hail_ride`, 2809 tok).** 9-step plan → 16 runner steps,
-  including the `tap_unless_present` conditional that flips the AI tab from voice
-  to text mode (probe `有什么问题尽管问我` absent → tap keyboard glyph). Same
-  precheck-then-capture pattern (1 scroll), ending at the `立即打车` handoff
-  screen — no confirm tap (§8.6).
-
-Both legs reached their terminal state with **zero per-leg VLM grounding calls**
-(every tap resolved through uiautomator), which is why the whole two-app flow
-cost less than a *single* general_e2e order leg. The discover leg alone replaced
-the **23 native-UI steps** a manual run needed to scroll notes by hand (§8.2,
-Q1) with 6 plan steps.
 
 ### 8.9 Threats to validity
 
@@ -1039,16 +1004,15 @@ the optimizations buy: token/cost, not wall-clock (which the in-app assistant's
 own latency dominates).
 
 Future work: more cards (and OEM-published cards); richer handoff semantics;
-cross-app flow planning; non-Android platforms; and **A2A forward-compatibility** —
+non-Android platforms; and **A2A forward-compatibility** —
 when apps ship endpoints, cards become a thin shim or disappear (SPEC §14).
 
 ---
 
 ## Appendix A. Reproducibility
 
-- **Entry points.** `scripts/run_test.py <pkg> "<goal>"` (single app),
-  `scripts/run_flow.py <flow.yaml> --nl "<goal>"` (multi-app),
-  `scripts/run_nl.py "<goal>"` (routed). All cold-launch the target and set
+- **Entry points.** `scripts/run_test.py <pkg> "<goal>"` (single app) and
+  `scripts/run_nl.py "<goal>"` (routed). Both cold-launch the target and set
   `RELAY_SKIP_OPEN_APP=1`.
 - **A/B flags.** `RELAY_PRECHECK=0 RELAY_SCRAPE=0` reproduces the pre-optimization
   baseline; `RELAY_TIMING=1` writes a per-run `wall_clock.json`.

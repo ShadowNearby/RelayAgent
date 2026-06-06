@@ -4,17 +4,15 @@
 
 > 一句自然语言 → LLM **自动合成**一条跨 App 的 plan → 校验 → 落盘 → 预览确认 → 真机执行。
 >
-> 与已有入口的关系：`run_nl.py` 是在**手写好的** flow / 单 app 能力里**选**一个；`run_flow.py` 直接跑一个**手写**的 flow YAML；`run_plan.py` 则是当**没有**对应手写 flow 时，让模型**现场生成**一条多 app plan。三者共用同一套 `FlowRunner` 执行器与 flow schema。
+> 与已有入口的关系：`run_nl.py` 把一句话**路由**到单个 app + capability；`run_plan.py` 面向跨 app 目标——让模型**现场生成**一条多 app plan，再交给 `FlowRunner` 执行。
 
 ---
 
 ## 1. 它解决什么
 
-在此之前，RelayAgent 的跨 App 能力依赖 `manifests/_flows/` 下**人工预先编排**的 YAML：哪些 app、按什么顺序、用哪个 capability、leg 之间数据怎么 bind，全是手写死的。`run_nl.py` 的 router 只能在这些既有 flow 里**挑一个**（prompt 明确 `do NOT invent ids`）。
+`run_nl.py` 只能把一句话路由到**单个** app + capability，无法把跨 App 目标拆解成多 app 步骤序列。给一句横跨多个 app 的指令时，router 会回落到单 app 或选错。
 
-因此，给一句**没有对应 flow** 的跨 App 指令时，系统无法自主把目标拆解成多 app 步骤序列——router 找不到匹配，会回落到单 app 或选错。
-
-`run_plan.py` 补上的就是这一层：**给定全量 app/capability 清单，让 LLM 动态产出 steps + bind 关系**（相当于把过去手写的 flow YAML 交给模型来产出），再交给既有 `FlowRunner` 执行。**不重造执行器，只新增"规划"这一层。**
+`run_plan.py` 补上的就是这一层：**给定全量 app/capability 清单，让 LLM 动态产出 steps + bind 关系**，再交给 `FlowRunner` 执行。**不重造执行器，只新增"规划"这一层。**
 
 ---
 
@@ -38,7 +36,7 @@
   ├─(5) 预览 + 确认 ←───────────────────────────┘
   │        默认 N；非交互 stdin（EOF）= 不执行；--yes 跳过；--dry-run 到此为止
   │
-  └─(6) FlowRunner.run()           每个 app leg 一次 mw test，复用持久化 MobileWorld server
+  └─(6) FlowRunner.run()           每个 app leg 一个 run_native 子进程（直 adb）
 ```
 
 涉及的文件：
@@ -47,14 +45,14 @@
 | --- | --- |
 | [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI 入口：缓存 / 落盘 / 预览 / 确认 / 录屏 / 派发 |
 | [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`：catalog → prompt → LLM → JSON → 校验（含 repair TODO 空壳） |
-| [`agents/flow_runner.py`](../agents/flow_runner.py) | 既有执行器，被直接复用（生成的 plan 与手写 flow 同 schema） |
+| [`agents/flow_runner.py`](../agents/flow_runner.py) | 执行器：跑每个 leg、bind 回复、处理 ask_user / extract |
 | [`manifests/_generated/`](../manifests/_generated/) | 生成物 + 缓存目录，`.gitignore` 把内容排除出版本库 |
 
 ---
 
 ## 3. 生成的 plan schema
 
-输出**复用 flow YAML 的形状**，所以能直接喂给 `FlowRunner`。与手写 flow 的唯一区别：**没有 `inputs` 块**——句子是具体的，字面值直接烤进 step 的 `prompt`；leg 间数据流仍用 `extract` / `bind` / `{var}`。
+输出是一条 flow plan，直接喂给 `FlowRunner`。**没有 `inputs` 块**——句子是具体的，字面值直接烤进 step 的 `prompt`；leg 间数据流用 `extract` / `bind` / `{var}`。
 
 落盘后的字段顺序（`run_plan.py:_persist` 固定）：
 
@@ -132,7 +130,7 @@ steps: [ ... ]
 
 "`handoff_to_user` 后要能 switch 回 agent" 分两个粒度，本版落地 A、给 B 留缝：
 
-- **Phase A（已落地）**：handoff leg 结束 → 流程级 `ask_user` 收用户回答 → 下一个 agent leg 是一次**全新 `mw test`**（同 app 或换 app），把回答 + 完整意图重述进 prompt。复用现有 FlowRunner 结构。**局限**：同 app 中途 handoff 会冷启动、清历史，丢 in-app 半成品状态。
+- **Phase A（已落地）**：handoff leg 结束 → 流程级 `ask_user` 收用户回答 → 下一个 agent leg 是一个**全新 `run_native` 子进程**（同 app 或换 app），把回答 + 完整意图重述进 prompt。复用现有 FlowRunner 结构。**局限**：同 app 中途 handoff 会冷启动、清历史，丢 in-app 半成品状态。
 - **Phase B（仅留缝，未接线）**：让 handoff leg **不终止**——把 `flow_runner._run_app_step` 里的 `stdin=DEVNULL` 换成 flow⇄agent 回环通道；agent 的 handoff `ask_user`（`relay_agent.py` 内）不再 EOF 收尾，而是阻塞读 flow 喂回的答案再继续 `predict()`，在**同一会话**里原地续跑。两处都打了 `# TODO(phase-B):` 标记。
 
 > in-app handoff 现状：agent 走到 `handoff` 步时先 `_maybe_persist_reply()`（把回复写 `RELAY_REPLY_OUT`），再发 `action_type="ask_user"`；flow leg 里 stdin 是 DEVNULL → 立刻 EOF → 子进程结束、回复已落盘。
@@ -166,7 +164,7 @@ uv run python scripts/run_plan.py "..." --no-cache
 uv run python scripts/run_plan.py "..." --record
 uv run python scripts/run_plan.py "..." --record /path/to/dir
 
-# `--` 之后的参数透传给底层每个 mw test
+# `--` 之后的参数透传给底层每个 run_native
 uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 ```
 
@@ -178,12 +176,12 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 | `--yes` / `-y` | 跳过 y/N 确认 |
 | `--no-cache` | 不复用 `_generated/` 里的缓存，强制重新生成 |
 | `--record [DIR]` | adb 录屏；缺省落 `traj_logs/recordings/<ts>/` |
-| `-- <args>` | `--` 之后透传给底层 `mw test` |
+| `-- <args>` | `--` 之后透传给底层 `run_native` |
 
 **环境**
 
 - 规划用 `.env` 的 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（=`qwen`），与 `run_nl` router 同端点。
-- 执行复用持久化 MobileWorld server（`scripts/_mw_server.py:ensure_server` 注入 `--aw_host`），与 `run_nl` / `run_flow` 一致。
+- 执行时每个 leg 是一个直 adb 的 `run_native` 子进程，与 `run_nl` 一致。
 - 真机要求同项目其余部分：adb + USB 调试 + `com.android.adbkeyboard/.AdbIME`，`RELAY_ANDROID_SERIAL` 选设备。
 
 **中途 `ask_user` 的非交互行为**：流程级 `ask_user` 读父进程 stdin。`< /dev/null`（或管道 EOF）时，选单步**自动取第一个候选**、自由输入步取空串——适合 `--yes` 批跑。要人工选就在真终端里交互运行。
@@ -208,7 +206,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 输入：`"在上海找三家评价好的小众书店，挑一家打车过去"`（Pixel 9，`--yes`，stdin `</dev/null`）。
 
-合成的 plan（与手写 [`xhs_to_amap_place.yaml`](../manifests/_flows/xhs_to_amap_place.yaml) 结构一致）：
+合成的 plan：
 
 ```
 1. [agent]    小红书 / qa_community_knowledge  →  extract → bind bookstore_list
@@ -243,7 +241,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | 文件 | 改动 |
 | --- | --- |
-| `agents/flow_runner.py` | ① `# TODO(phase-B):` 缝注释（`stdin=DEVNULL` 处）。② 新增 `_traj_stem()`：手写 flow 仍用文件名 stem；自动合成的 plan（有 `source_request`、无 `inputs`）改用 `plan_<app1>_<app2>…` 命名 traj 目录，避免冗长的 NL-slug 文件名当目录名。 |
+| `agents/flow_runner.py` | ① `# TODO(phase-B):` 缝注释（`stdin=DEVNULL` 处）。② `_traj_stem()`：用 plan 涉及的 app 命名 traj 目录——`plan_<app1>_<app2>…`——而非冗长的 NL-slug 文件名。 |
 | `agents/relay_agent.py` | handoff 分支加 `# TODO(phase-B):` 缝注释（不改逻辑）。 |
 | `CLAUDE.md` | `跑测试` 加 run_plan 入口；新增"自动跨 App 规划"速览节并指向本文档；"三个→四个入口脚本"。 |
 | `README_zh.md` | scripts 目录清单加 run_plan；`自然语言入口` 后加"自动合成跨 App plan"小节。 |
@@ -254,5 +252,5 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 - **独立 `run_plan.py`** 而非并进 `run_nl`：对现有 NL 路由零侵入。
 - **预览 + 确认（默认 N）**：跨 App 含不可逆副作用（打车/下单），执行前必须人能看清并放行。
 - **校验失败硬报错、repair 留 TODO**：宁可中止也不让坏 plan 静默执行。
-- **handoff 末尾可作终点、中间才强插 ask_user**：与手写 `xhs_to_amap_place` 收尾在 hail_ride 的形态一致；末尾 leg 的 in-app handoff 本身即终态确认。
+- **handoff 末尾可作终点、中间才强插 ask_user**：如一条收尾在打车的 plan；末尾 leg 的 in-app handoff 本身即终态确认。
 - **缓存先精确串匹配、语义复用留 TODO**：先把主链路跑通，避免在缓存上过早投入。

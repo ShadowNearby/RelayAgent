@@ -4,8 +4,8 @@
 
 - venv 在 `.venv/`，**Python 3.12**（`pyproject.toml` 锁 `>=3.12,<3.13`，匹配现有 lock）。
 - 装依赖（不装本项目，靠 `uv run` 跑源码）：`uv venv --python 3.12 && uv sync --no-install-project`。
-- **已摘掉 MobileWorld**（见下「Native 运行时」）。运行时是纯 Python over adb，无外部 runner、无 server、无 `mw` 二进制。
-- pydantic 锁 `<2.11` 是**历史遗留**（原为 fastmcp via mw，现都已删）；保守保留以对齐已解析的 lock，`action_model.py` 的 `JSONAction` 用它。
+- 运行时是纯 Python over adb，无外部 runner、无 server（见下「Native 运行时」）。
+- pydantic 锁 `<2.11`：保守保留以对齐已解析的 lock，`action_model.py` 的 `JSONAction` 用它。
 
 ## LLM 端点
 
@@ -17,49 +17,34 @@
 
 ```bash
 uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
-uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"   # 多 app NL 路由（选既有 flow / 单 app）
-uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml --nl "..."  # 跑手写 flow
-uv run python scripts/run_plan.py "在上海找三家小众书店，挑一家打车过去" --dry-run  # 自动合成跨 app plan
+uv run python scripts/run_nl.py "帮我找一台适合学生的平板电脑，预算2000以内"   # 单 App NL 路由（选 app + capability）
 ```
 
 - `scripts/run_test.py` 现在是**指向 `run_native.py` 的弃用 shim**（保留旧调用习惯），新代码直接用 `run_native.py`。
 - 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.2）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
 
-需要 adb + 真机 USB 调试。**`run_native` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）——这步原来是 mw 的 prerequisite 替你做的。`RELAY_ANDROID_SERIAL` 选设备。
+需要 adb + 真机 USB 调试。**`run_native` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
 
-## 自动跨 App 规划（`run_plan.py` / `FlowPlanner`）
+## Native 运行时
 
-**详细设计 + 用法见 [`docs/cross_app_planner.md`](docs/cross_app_planner.md)。** 速览：
+运行时是纯 Python over adb，**无 server、无框架冷启动**，由以下模块组成：
 
-- 定位：`run_nl` 是在**手写** flow / 单 app 里**选**；`run_flow` 跑**手写** flow；**`run_plan` 在没有对应手写 flow 时让 LLM 现场合成**一条跨 app plan。三者共用 `FlowRunner` 与 flow schema。
-- 链路（`scripts/run_plan.py` + `agents/flow_planner.py`）：`build_catalog`（复用 run_nl）→ 缓存查找 → `FlowPlanner.plan`（LLM→fenced JSON→本地校验）→ 落盘 `manifests/_generated/`（gitignore）→ 预览 + 确认（默认 N，非交互 EOF=不执行）→ `FlowRunner.run()`。
-- 生成的 plan **复用 flow YAML 形状但无 `inputs` 块**（值直接烤进 prompt）；leg 间数据流仍 `extract`/`bind`/`{var}`。
-- 校验挡：未知 app/capability id、悬空 `{var}`、`bind`/`id` 重复、**`handoff_to_user_required` 非末尾必须紧跟 `ask_user`（末尾可作终点）**。
-- **handoff 往返 = 先 A 后 B**：A（已落地）handoff leg → 流程 `ask_user` → 全新 `run_native` leg 消费回答；B（仅留缝，`# TODO(phase-B):`）同会话原地续跑。
-- 故意留的 TODO：**repair 重修循环**（校验失败硬报错代替，`_repair` 空壳）、**语义缓存复用**（仅精确串匹配）。
-- 旋钮：`--dry-run`（只规划+预览）/ `--yes`（跳确认）/ `--no-cache`（强制重生成）/ `--record` / `-- <透传 run_native>`。批跑时 stdin `</dev/null` → 中途选单步自动取第一候选。
-
-## Native 运行时（替代 MobileWorld）
-
-**已彻底摘掉 MobileWorld**（commit `refactor: drop ... phase 1/2`）。从前依赖 mw 的三样东西被本地化，server + runner 被直 adb 替换：
-
-- `agents/action_model.py` — `JSONAction` + action-type 常量（从 mw `runtime/utils/models` 逐字移植，validator/`__eq__`/`model_dump` 行为不变）。
-- `agents/agent_base.py` — `BaseAgent` + `MCPAgent`（OpenAI client、token 计数、`openai_chat_completions_create` 含 claude/gpt/o1/kimi 分支）。`relay_agent` 仍 `from agents.agent_base import MCPAgent as _MCPAgentBase`（别名排序见文件头注释，让 loader 选 RelayAgent）。
+- `agents/action_model.py` — `JSONAction` + action-type 常量（validator/`__eq__`/`model_dump`）。
+- `agents/agent_base.py` — `BaseAgent` + `MCPAgent`（OpenAI client、token 计数、`openai_chat_completions_create` 含 claude/gpt/o1/kimi 分支）。`relay_agent` 经 `from agents.agent_base import MCPAgent as _MCPAgentBase`（别名排序见文件头注释，让 loader 选 RelayAgent）。
 - `agents/_img.py` — `pil_to_base64`。
-- `agents/native_runtime.py` — **`NativeEnv`**（`JSONAction`→直 adb，镜像旧 server `/step` + controller：swipe 几何、scroll 方向反转、`ADB_INPUT_B64` 键盘广播、`skip_screenshot` 复用上一帧）+ 进程内 `obs→predict→execute` 循环（替 mw runner）+ **AdbKeyboard IME 激活**（替 mw prerequisite）。
-- `scripts/run_native.py` — 单 app 入口；`agents/flow_runner.py` / `run_nl` / `run_plan` / `run_single_app_benchmark` 每 leg/task spawn 一个 `run_native` 子进程（无 server、无 `--aw_host`）。agent 仍经 `RELAY_WALL_OUT`/`RELAY_REPLY_OUT` 落 `wall_clock.json`/`reply.json`，这正是这些消费方读的。
-
-**没有 server / 没有框架冷启动**：旧的 ensure_server(6800)、`_mw_server.py`、`MW_ADB_TIMEOUT`、4 个 fork patch 全删。
+- `agents/native_runtime.py` — **`NativeEnv`**（`JSONAction`→直 adb：swipe 几何、scroll 方向反转、`ADB_INPUT_B64` 键盘广播、`skip_screenshot` 复用上一帧）+ 进程内 `obs→predict→execute` 循环 + **AdbKeyboard IME 激活**。
+- `scripts/run_native.py` — 单 app 入口；`run_nl` / `run_single_app_benchmark` 按 task spawn `run_native` 子进程（无 server）。agent 经 `RELAY_WALL_OUT`/`RELAY_REPLY_OUT` 落 `wall_clock.json`/`reply.json`，这正是这些消费方读的。
 
 ## 性能旋钮
 
-每步墙钟 ≈ 几个 sleep + 一次 ~1.5s 截图（**实测：截图是设备/adb 绑定的最大单步成本，直 adb 与旧 server 持平**）。
+每步墙钟 ≈ 几个 sleep + 一次 ~1.5s 截图（**实测：截图是设备/adb 绑定的最大单步成本**）。
 
 | 旋钮 | 默认 | 作用范围 |
 | --- | --- | --- |
 | `--step_wait_time` / `RELAY_STEP_WAIT` | 0.2 | 每步 observe 前 settle |
-| `MW_WAIT_SECONDS` | 0.2 | `wait` action 的 sleep（now native `NativeEnv` 本地读，非 server 端）|
+| `RELAY_WAIT_SECONDS` | 0.2 | `wait` action 的 sleep（`NativeEnv` 本地读）|
 | `RELAY_POLL_SKIP_SLEEP` | 0.3 | wait_for_reply skip 拍 |
+| `RELAY_STEP_LOG` | 1（开） | 每步落截图 + action + 点击位置（见下「Step 日志」）。**性能测试设 0 关掉**——它每步写 PNG，tap/swipe 还要重编码一张标注帧，是真实单步开销 |
 
 **录屏跳每步截图（`RELAY_SKIP_STEP_SCREENSHOT`，`run_nl.py --record` 自动开）**：确定性 step 不读 incoming 截图。agent 在 `predict` look-ahead，下一步不在 `_VISION_STEP_KINDS`(=`{wait_for_reply}`) 就打 `skip_screenshot` 标 → `NativeEnv.execute_action` 复用上一帧；打标后睡 `RELAY_BLIND_STEP_SLEEP`（0.15s）吃动画。`tap_text`/`nm_ground_tap` 走 VLM 前自调 `_fresh_vision_frame()` 抓新帧。
 
@@ -94,6 +79,15 @@ uv run python scripts/run_plan.py "在上海找三家小众书店，挑一家打
 ## Trajectory 日志目录
 
 每次 `run_native` 启动（`_rotate_traj_dir`）把上次 `traj_logs/user_task/` 搬到 `traj_logs/user_task_backup_<ts>/`（ts = 新跑启动时刻），再 mkdir + seed 空 `traj.json`（供 agent `_append_llm_call`）。**本次输出永远在 `traj_logs/user_task/`**；`ls -td ...backup_* | head -1` 是**上一次**的内容。
+
+### Step 日志（逐步轨迹）
+
+`agents/native_runtime.py:StepLogger`，在 `run_task` 循环里每步落盘，**默认开**：记下 agent 这一步**看到的截图**、它返回的 **action**、以及**点击位置**。
+
+- 落 `traj_logs/user_task/steps/`（跟 traj.json 同目录，享受同样的 backup 轮转）。`RELAY_STEP_LOG_DIR` 可改目录。
+- 每步：`step_<n>.png`（agent 行动所依据的那帧，pre-action obs，所以 action 的 `(x,y)` 就落在这帧上）+ `step_<n>_marked.png`（在帧上画标记：tap/long_press/double_tap 画红点+十字，swipe/scroll/drag 画红箭头；无坐标的 action 如 input_text 不出 marked 帧）+ `steps.json`（索引：step、ts、action_type、完整 action dict、`click=[x,y]`、agent 的 thought、两张图文件名）。`steps.json` 每步整体重写，跑崩了也是合法 JSON。
+- best-effort：`record` 包 try/except，落盘失败只 warning，绝不打断 obs→predict→execute 循环。
+- **`RELAY_STEP_LOG=0` 关掉**——**性能测试必关**：每步一次 PNG 写盘，tap/swipe 还要 `convert('RGB')`+重编码一张标注帧，是真实单步开销，会污染墙钟。
 
 ## Handoff
 

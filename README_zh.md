@@ -18,13 +18,7 @@
 
 每个 App 一张机器可读的**卡片（card）**。默认走 GUI 中介，厂商配合**可选不强制**。
 
-> **状态：** 早期，但已有实测。SPEC v0.1、7 张已验证的安卓参考卡片（28 个能力）、一个 MobileWorld 接入适配器、跨 App flow 运行器，以及一组真机 A/B 基准测试。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
-
-<p align="center">
-  <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare.gif" alt="同一任务——在小红书搜附近餐厅、选一家打车前往——左为 RelayAgent，右为纯 VLM 智能体" width="100%">
-  <br>
-  <em>同一任务——<em>在小红书上搜索附近餐厅，选择一家打车前往</em>。<strong>左：RelayAgent</strong> 委派给 App 内置助手；<strong>右：纯 VLM 智能体</strong> 手动驱动原生 UI。视频 4 倍速播放；完成墙钟：<strong>RelayAgent 86s vs 纯 VLM 131s</strong>。token 数据见 §结果。</em>
-</p>
+> **状态：** 早期，但已有实测。SPEC v0.1、7 张已验证的安卓参考卡片（28 个能力）、一个原生 Android 中继适配器，以及一组真机 A/B 基准测试。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
 
 ---
 
@@ -52,7 +46,7 @@ RelayAgent 背后的观察是：大多数超级 App **本身就已经内置了�
 ## 工作原理——三块拼图
 
 1. **发现（Discovery）—— 卡片。** 每个 App 一份 YAML manifest（`manifests/*.yaml`，由 `spec/schema.json` 做 JSON-Schema 校验），描述进入内置助手的 launcher 入口路径、能力列表、示例 prompt、延迟提示和 handoff 策略。*（规范见 §4。）*
-2. **接入（Access）—— 中继适配器。** `agents/relay_agent.py` 在 [MobileWorld](https://github.com/Tongyi-MAI/MobileWorld) 之上，把一张卡片落地为确定性的设备动作：冷启动 → 走入口路径 → 输入 prompt → 等待回复 → 抓取文本 → handoff。优先走无障碍树（accessibility tree），且对各家 VLM 通用。*（§5。）*
+2. **接入（Access）—— 中继适配器。** `agents/relay_agent.py` 直 adb 把一张卡片落地为确定性的设备动作：冷启动 → 走入口路径 → 输入 prompt → 等待回复 → 抓取文本 → handoff。优先走无障碍树（accessibility tree），且对各家 VLM 通用。*（§5。）*
 3. **安全（Safety）—— handoff 契约。** 标了 `handoff_to_user_required: true` 的能力*必须*在**任何不可逆操作之前**——支付、确认叫车、提交订单——发出 `ask_user` 并交还控制权。可逆的准备工作由内置助手完成；不可逆的那一步由人来授权。*（§4.1。）*
 
 ### 一张卡片是怎么用的
@@ -76,23 +70,15 @@ OS 级智能体
 
 ## 演示
 
-两段真机端到端运行（也就是 §8.8 基准测试背后的轨迹）：
+一段真机端到端运行：
 
 **T1 —— 单 App 下单。** *「帮我点三杯蜜雪冰城蜜桃四季春，温度和糖度都用默认」* → 千问（Qwen）内置助手凑好 3 杯的购物车，停在支付页等用户确认。
 
 ![通过内置助手下单](assets/RelayAgentDemoOrder/RelayAgentDemoOrder.gif)
 
-**T2 —— 跨 App flow。** 一句自然语言 *「在上海找三家评价好的小众书店，挑一家打车过去」*，路由到 [`xhs_to_amap_place`](manifests/_flows/xhs_to_amap_place.yaml) flow：小红书的点点返回三家书店，用户挑一家，高德的语音 tab 直接把这个选择带进打车卡片——并停在最终 CTA 之前。
-
-![小红书 → 高德 找书店 + 打车](assets/RelayAgentDemoFlow/RelayAgentDemoFlow.gif)
-
-```bash
-uv run python scripts/run_nl.py "在上海找三家评价好的小众书店，挑一家打车过去" --record
-```
-
 ## 实测结果
 
-真机上的四配置 A/B（技术报告 §8）用来分离*委派到底省下了什么*。两个任务：**T1** 点三杯蜜雪冰城（单 App）；**T2** 跨小红书 + 高德的「先发现再打车」。T1 里所有配置下的**同一笔单子都走同一个后端**（淘宝闪购的助手*就是*千问），只有交互方式不同。中位数 token，RelayAgent / 纯 VLM 配置取 n=3：
+真机上的四配置 A/B（技术报告 §8）用来分离*委派到底省下了什么*。这里保留 **T1**：单 App 点三杯蜜雪冰城。所有配置下的**同一笔单子都走同一个后端**（淘宝闪购的助手*就是*千问），只有交互方式不同。中位数 token，RelayAgent / 纯 VLM 配置取 n=3：
 
 **T1 —— order_food**
 
@@ -103,24 +89,14 @@ uv run python scripts/run_nl.py "在上海找三家评价好的小众书店，�
 | RelayAgent，关闭优化（baseline） | 9 585 | 2.4× |
 | **RelayAgent，开启优化** | **3 986** | **1×** |
 
-**T2 —— 跨 App flow（小红书 → 高德）**
-
-| 配置 | token 中位数 | 相对 RA optimized |
-| --- | ---: | ---: |
-| 纯 VLM，手动驱动原生 UI | 294 695 | 34.0× |
-| 纯 VLM，*使用*内置助手（`general_e2e`） | 95 296 | 11.0× |
-| RelayAgent，关闭优化（baseline） | 31 174 | 3.6× |
-| **RelayAgent，开启优化** | **8 662** | **1×** |
-
 逐层看这些梯度：
 
-- **「用不用内置助手」**的收益*随任务复杂度成正比*——在浅层的下单任务上几乎打平（T1，+2.5%），但在以发现为主的 flow 上达到 **−68%**（T2，23 步原生 UI 操作塌缩成 7 个助手回合）。一个重新驱动 UI 的智能体只在重任务上才吃到这份红利。
-- **结构化委派（RelayAgent）**则在**两类任务上都赢**：相对*同一个*内置助手的纯 VLM 驱动，**19.4×**（T1）、**11.0×**（T2）——因为它去掉的是每一步的 VLM 重新驱动，而这份开销不论任务难易都要付。这个差距具体就是 **~1 张截图 vs ~30 张**（成本里 ~97–99% 是图像 prompt token）。一个去掉 manifest 的委派中继落在两者中间，说明这个差距**主要来自委派，manifest 是次要项**（§8.9）。
-- **两项与 App 无关的优化**（两阶段「回复是否完成」预检 + 优先走无障碍抓取的文本路径）在未优化的委派 baseline 之上再带来 **2.4× / 3.6×**（§7）。
+- **结构化委派（RelayAgent）**相对*同一个*内置助手的纯 VLM 驱动赢在去掉每一步的 VLM 重新驱动。这个差距具体就是 **~1 张截图 vs ~30 张**（成本里 ~97–99% 是图像 prompt token）。一个去掉 manifest 的委派中继落在两者中间，说明这个差距**主要来自委派，manifest 是次要项**（§8.9）。
+- **两项与 App 无关的优化**（两阶段「回复是否完成」预检 + 优先走无障碍抓取的文本路径）在未优化的委派 baseline 之上再带来 **2.4×**（§7）。
 
 **「可预测性」本身就是一个结果。** RelayAgent 每个任务的成本几乎恒定——T1 为 **3987 / 3986 / 3950** token（VLM 调用固定为 2 次）——而纯 VLM 智能体在同一个任务上波动于 **38k → 97k token、46 → 379 秒**（三次都到了同一个支付前页面），早期探索中还出现过过早退出和失控空转的长尾。对按 token 付费的人来说，一个可预测的 ~4k 胜过几倍的方差。换算成钱（§8.2），RelayAgent optimized 约 **$0.001/任务**，纯 VLM 约 **$0.016**（16.6×）。
 
-**安全保障守住了。** 每一次 `handoff_to_user_required` 运行都停在了不可逆 CTA 之前——下单停在 `立即支付`、打车停在 `立即打车`——零次确认点击。功能覆盖：7 张卡片的 **28/28 个能力**都到达了预期终态（§8.2.1）。
+**安全保障守住了。** 每一次 `handoff_to_user_required` 运行都停在了不可逆 CTA 之前——下单停在 `立即支付`——零次确认点击。功能覆盖：7 张卡片的 **28/28 个能力**都到达了预期终态（§8.2.1）。
 
 > 上述数字为 2026-06-02 的 n=3 复跑结果；完整方法、有效性威胁与冻结数据见[技术报告](report/RelayAgent-TechReport.md)及 `report/benchmark-data-n3.md`。
 
@@ -131,47 +107,33 @@ RelayAgent/
 ├── SPEC.md                    # manifest 规范 (v0.1)
 ├── SPEC-OPEN-QUESTIONS.md     # 仍在讨论的设计问题
 ├── spec/schema.json           # SPEC 的 JSON Schema 镜像（规范性校验器）
-├── manifests/                 # 每个 App 一张 YAML 卡片；7 张安卓卡片 + _flows/ 存放跨 App 的 YAML
-├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、flow 运行器、adb 辅助
-├── scripts/                   # run_test.py（单 App）、run_flow.py（手写跨 App flow）、run_nl.py（NL 路由）、run_plan.py（自动合成跨 App plan）
-├── docs/                      # 设计文档 —— 能力分类法、跨 App planner
+├── manifests/                 # 每个 App 一张 YAML 卡片；7 张安卓卡片
+├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、adb 辅助
+├── scripts/                   # run_test.py/run_native.py（单 App）、run_nl.py（单 App NL 路由）
+├── docs/                      # 设计文档 —— 能力分类法
 ├── report/                    # 技术报告 + 冻结的基准数据
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
 ```
 
-## 在 MobileWorld 下运行（多 VLM 真机运行器）
+## 运行（真机、多 VLM）
 
-`agents/relay_agent.py` 以 `--agent-type` 的形式把 RelayAgent 接入 [MobileWorld](https://github.com/Tongyi-MAI/MobileWorld)。MobileWorld 提供一个对各家 VLM 通用（Claude、Gemini、Qwen-VL、Kimi……）的真机运行器；卡片负责提供确定性的入口路径和 handoff 策略。
+`agents/relay_agent.py` 在进程内 `obs → predict → execute` 循环里直 adb 驱动 RelayAgent（无 server）。VLM 对各家通用（Claude、Gemini、Qwen-VL、Kimi……）；卡片负责提供确定性的入口路径和 handoff 策略。
 
-需要 **Python 3.12**（MobileWorld 锁 `>=3.12,<3.13`），以及一台装好 adb、开启 USB 调试、运行 `com.android.adbkeyboard/.AdbIME` 的手机，主机为 Linux/WSL。
+需要 **Python 3.12**，以及一台装好 adb、开启 USB 调试、运行 `com.android.adbkeyboard/.AdbIME` 的手机，主机为 Linux/WSL。
 
 ```bash
-# 1. 建 venv。MobileWorld 在 pyproject.toml 里通过 [tool.uv.sources]
-#    声明为 git 依赖；uv sync 会自动 clone + 安装。
-#    pydantic 锁 <2.11（fastmcp 2.9.2 不兼容），无需手动 pin。
+# 1. 建 venv（靠 `uv run` 跑源码，不安装本项目）
 uv venv --python 3.12
 uv sync --no-install-project
 
 # 2. 填好 .env（LLM_BASE_URL / LLM_API_KEY / LLM_MODEL），然后跑一个目标
-uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-`scripts/run_test.py` 会 load `.env`、通过 `agents/_adb.py` 冷启动目标 App（force-stop + monkey LAUNCHER）、设置 `RELAY_SKIP_OPEN_APP=1` 让 planner 跳过自己的 `open_app` 步、在 6800 端口**自动起一个常驻 MobileWorld server 并复用**，并把额外 flag（如 `--max-step 40`）原样转发给 `mw test`。
+`scripts/run_native.py` 会 load `.env`、激活 AdbKeyboard 输入法、通过 `agents/_adb.py` 冷启动目标 App（force-stop + monkey LAUNCHER）、设置 `RELAY_SKIP_OPEN_APP=1` 让 planner 跳过自己的 `open_app` 步、在进程内直 adb 跑循环，并把额外 flag（如 `--max-step 40`）原样转发给 agent。不走 `.env` 时可用 `--model` / `--base-url` / `--api-key` 覆盖 LLM 配置。
 
-如果你想自己调 `mw test`，要显式传 LLM 配置：
-
-```bash
-set -a; source .env; set +a
-export RELAY_TARGET_APP=com.aliyun.tongyi
-uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
-    --agent-type   "$PWD/agents/relay_agent.py" \
-    --model_name   "$LLM_MODEL" \
-    --llm_base_url "$LLM_BASE_URL" \
-    --api_key      "$LLM_API_KEY"
-```
-
-`--model_name` 对各家通用——指向任意 OpenAI 兼容的 VLM 即可（`qwen/qwen3-vl-235b-a22b`、`anthropic/claude-sonnet-4-5`、`google/gemini-3`……）。每个任务里 VLM 用得很省（这正是 §8 成本数字的来源）：
+`--model` 对各家通用——指向任意 OpenAI 兼容的 VLM 即可（`qwen/qwen3-vl-235b-a22b`、`anthropic/claude-sonnet-4-5`、`google/gemini-3`……）。每个任务里 VLM 用得很省（这正是 §8 成本数字的来源）：
 
 - 1 次纯文本 LLM 调用，从卡片里挑出能力。
 - 每个文本选择器先试 `uiautomator dump`（精确、零 token）；只有 miss 时才发一次小的 VLM grounding 调用。
@@ -190,46 +152,15 @@ uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
 
 适配器遵守 `handoff_to_user_required`：对任何不可逆能力，会在终态 CTA 之前发 `ask_user`，而不是自动确认。
 
-### 跨 App flow
-
-`scripts/run_flow.py` 运行一个串起多张卡片的 YAML flow —— 每一步冷启动一个 App、钉死单个能力、抓取内置助手的回复，再通过一次小的文本 LLM `extract` 把结果喂给下一步。`manifests/_flows/` 下有两个参考 flow：
-
-```bash
-# 小红书（POI 发现）→ 高德（打车）
-uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \
-    --input category="独立书店" --input city=北京
-
-# 或者给一句自然语言，让 LLM 来填 flow 的输入：
-uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \
-    --nl "在北京找三家独立书店，挑一家打车过去"
-
-# 微信（聊天总结）→ WPS（文档生成）
-uv run python scripts/run_flow.py manifests/_flows/wechat_to_wps_summary.yaml
-```
-
 ### 自然语言入口
 
-`scripts/run_nl.py` 接收一句自然语言，构建一份包含所有卡片 + flow 的目录，让文本 LLM 在分发前挑出最合适的执行体（单 App 能力或跨 App flow）。用 `--dry-run` 可只看路由决策、不真正启动。
+`scripts/run_nl.py` 接收一句自然语言，构建一份所有 App 卡片的目录，让文本 LLM 在分发前挑出最合适的单 App + capability。用 `--dry-run` 可只看路由决策、不真正启动。
 
 ```bash
 uv run python scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
-uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"
-uv run python scripts/run_nl.py --dry-run "把和老王的聊天总结成一份周报 docx"
+uv run python scripts/run_nl.py "帮我找一台适合学生的平板电脑，预算2000以内"
+uv run python scripts/run_nl.py --dry-run "把这段材料整理成一份中文总结文档"
 ```
-
-### 自动合成跨 App plan
-
-`run_nl.py` 只能在**已有**的手写 flow 里挑；当没有对应 flow 时，`scripts/run_plan.py` 让 LLM 基于全量 app/capability 目录**现场合成**一条跨 App plan（steps + leg 间 `bind`），本地校验后落盘到 `manifests/_generated/`，预览 + 确认，再交给同一个 `FlowRunner` 执行。生成的 plan 与手写 flow 同 schema。
-
-```bash
-# 合成 → 预览 → 询问 y/N → 执行
-uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去"
-
-# 只规划 + 预览，不执行（不碰设备）
-uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去" --dry-run
-```
-
-完整设计与用法见 [`docs/cross_app_planner.zh.md`](docs/cross_app_planner.zh.md)。
 
 ## 运行测试
 
@@ -257,7 +188,7 @@ python -m unittest tests.test_manifest_real_adb -v
 | App | 包名 | 能力 | 卡片类型 |
 | --- | --- | --- | --- |
 | 高德地图 (Amap) | com.autonavi.minimap | POI 搜索、导航、打车、行程规划 | mixed |
-| 通义千问 (Tongyi Qwen) | com.aliyun.tongyi | 聊天、火车/打车/外卖/酒店/电影预订、商品搜索/比价/购买/订单追踪 | mixed |
+| 通义千问 (Tongyi Qwen) | com.aliyun.tongyi | foundation_llm、火车/打车/外卖/酒店/电影活动预订、商品搜索/购买引导/订单追踪 | mixed |
 | 携程旅行 (Ctrip) | ctrip.android.view | 机票、酒店、火车、景点、跟团游 | mixed |
 | 小红书 (Xiaohongshu) | com.xingin.xhs | 通过 AI 搜索做社区 UGC 问答 | multi-node |
 | 微信 (WeChat) | com.tencent.mm | 元宝聊天界面、AI 搜索 | mixed |
@@ -269,7 +200,7 @@ python -m unittest tests.test_manifest_real_adb -v
 
 ## 已知阻塞点
 
-- **淘宝服务端风控（「访问被拒绝」）。** 淘宝购物能力现已并入 千问 (Qwen) 卡片、经 Taobao 后端路由——独立的 `com.taobao.taobao` 卡片已下线，因为淘宝内置助手本身*就是*千问，而走千问承载的路径会经过同一个履约后端、但不直接驱动淘宝 App 的 GUI（更安全的路径）。风控墙仍可能出现在 `buy_product` / `order_food`（即淘宝闪购的本地配送卡片）的 deep-link 目标页：一个服务端渲染的「亲，访问被拒绝」墙（或一次性的实名/身份验证关卡），而不是商品 / 本地配送流程。这是账号级、设备级的风控，**不是**适配器或 manifest 的 bug：入口路径执行正确，失败发生在内置助手触发*之后*的 deep-link 目标页。缓解办法：用有正常购买记录的账号登录设备、在 我的淘宝 → 设置 → 账号与安全 里清掉待办的实名/设备信任校验、不要在刚刷机的设备上连续背靠背地跑同一个被风控的能力。
+- **淘宝服务端风控（「访问被拒绝」）。** 淘宝购物能力现已并入 千问 (Qwen) 卡片、经 Taobao 后端路由——独立的 `com.taobao.taobao` 卡片已下线，因为淘宝内置助手本身*就是*千问，而走千问承载的路径会经过同一个履约后端、但不直接驱动淘宝 App 的 GUI（更安全的路径）。风控墙仍可能出现在 `purchase_guidance` / `order_food`（即淘宝闪购的本地配送卡片）的 deep-link 目标页：一个服务端渲染的「亲，访问被拒绝」墙（或一次性的实名/身份验证关卡），而不是商品 / 本地配送路径。这是账号级、设备级的风控，**不是**适配器或 manifest 的 bug：入口路径执行正确，失败发生在内置助手触发*之后*的 deep-link 目标页。缓解办法：用有正常购买记录的账号登录设备、在 我的淘宝 → 设置 → 账号与安全 里清掉待办的实名/设备信任校验、不要在刚刷机的设备上连续背靠背地跑同一个被风控的能力。
 
 ## 这个项目*不是*什么
 
@@ -287,7 +218,6 @@ python -m unittest tests.test_manifest_real_adb -v
 
 ## 致谢
 
-- [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld)（Tongyi-MAI）—— RelayAgent 适配器所接入的真机、多 VLM 运行器，也是我们基准测试中 `general_e2e` / 手动 UI baseline 的来源。
 - [**MobiAgent**](https://github.com/IPADS-SAI/MobiAgent)（SJTU IPADS）—— 我们对标定位的纯 GUI 移动智能体路线，也是我们[技术报告](report/RelayAgent-TechReport.md)的结构范本。
 
 ## 许可证

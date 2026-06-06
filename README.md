@@ -18,13 +18,7 @@
 
 One machine-readable **card** per app. GUI-mediated by default. Vendor-cooperation-*optional*.
 
-> **Status:** early but measured. SPEC v0.1, seven verified Android reference cards (28 capabilities), a MobileWorld relay adapter, multi-app flow runner, and a real-device A/B benchmark. Full method and numbers: [**Tech Report**](report/RelayAgent-TechReport.md). Contributors welcome.
-
-<p align="center">
-  <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare.gif" alt="Same task — search nearby restaurants on Xiaohongshu, pick one and hail a ride — RelayAgent on the left vs a pure-VLM agent on the right" width="100%">
-  <br>
-  <em>Same task — <em>search nearby restaurants on Xiaohongshu, pick one and hail a ride there</em>. <strong>Left: RelayAgent</strong> delegating to the in-app assistant. <strong>Right: a pure-VLM agent</strong> hand-driving the native UI. Playback is 4× speed; wall-clock to completion: <strong>RelayAgent 86 s vs pure-VLM 131 s</strong>. See §Results for the token numbers.</em>
-</p>
+> **Status:** early but measured. SPEC v0.1, seven verified Android reference cards (28 capabilities), a native Android relay adapter, and a real-device A/B benchmark. Full method and numbers: [**Tech Report**](report/RelayAgent-TechReport.md). Contributors welcome.
 
 ---
 
@@ -52,7 +46,7 @@ A neighbor is emerging fast in 2026: vendors wiring their *own* assistant into t
 ## How it works — three pieces
 
 1. **Discovery — the card.** A per-app YAML manifest (`manifests/*.yaml`, JSON-Schema-validated by `spec/schema.json`) describing the launcher entry path into the embedded agent, its capabilities, example prompts, latency hints, and handoff policy. *(Spec: §4.)*
-2. **Access — the relay adapter.** `agents/relay_agent.py` materializes a card into deterministic device actions under [MobileWorld](https://github.com/Tongyi-MAI/MobileWorld): cold-launch → walk the entry path → type the prompt → wait for the reply → scrape it → hand off. Accessibility-tree-first, provider-agnostic across VLMs. *(§5.)*
+2. **Access — the relay adapter.** `agents/relay_agent.py` materializes a card into deterministic device actions over direct adb: cold-launch → walk the entry path → type the prompt → wait for the reply → scrape it → hand off. Accessibility-tree-first, provider-agnostic across VLMs. *(§5.)*
 3. **Safety — the handoff contract.** A capability marked `handoff_to_user_required: true` *must* emit an `ask_user` and return control **before any irreversible action** — payment, ride confirmation, order submission. The in-app agent does the reversible preparation; the human authorizes the irreversible step. *(§4.1.)*
 
 ### A card in use
@@ -76,23 +70,15 @@ The target app is **explicit**. The OS agent selects a capability within it. The
 
 ## Demo
 
-Two real-device end-to-end runs (these are the trajectories behind the benchmark in §8.8):
+One real-device end-to-end run:
 
 **T1 — single-app order.** *"帮我点三杯蜜雪冰城蜜桃四季春，温度和糖度都用默认"* → the 千问 (Qwen) in-app assistant assembles a 3-cup cart and stops at the payment screen for the user to confirm.
 
 ![Order food via the in-app assistant](assets/RelayAgentDemoOrder/RelayAgentDemoOrder.gif)
 
-**T2 — cross-app flow.** One NL sentence, *"在上海找三家评价好的小众书店，挑一家打车过去"*, routed to the [`xhs_to_amap_place`](manifests/_flows/xhs_to_amap_place.yaml) flow: Xiaohongshu's 点点 returns three bookstores, the user picks one, and Amap's voice tab takes the pick straight into a ride card — stopping before the final CTA.
-
-![Xiaohongshu → Amap bookstore + ride](assets/RelayAgentDemoFlow/RelayAgentDemoFlow.gif)
-
-```bash
-uv run python scripts/run_nl.py "在上海找三家评价好的小众书店，挑一家打车过去" --record
-```
-
 ## Results
 
-A four-configuration A/B on a real device (Tech Report §8) isolates *what delegation buys*. Two tasks: **T1** order three Mixue drinks (single app); **T2** discover-then-ride across Xiaohongshu + Amap. For T1 all configs place the **same order through the same backend** (Taobao 闪购's assistant *is* 千问), varying only interaction style. Median tokens, n=3 for the RelayAgent / pure-VLM configs:
+A four-configuration A/B on a real device (Tech Report §8) isolates *what delegation buys* on **T1**, a single-app order for three Mixue drinks. All configs place the same order through the same backend (Taobao 闪购's assistant *is* 千问), varying only interaction style. Median tokens, n=3 for the RelayAgent / pure-VLM configs:
 
 **T1 — order_food**
 
@@ -103,24 +89,14 @@ A four-configuration A/B on a real device (Tech Report §8) isolates *what deleg
 | RelayAgent, optimizations off (baseline) | 9 585 | 2.4× |
 | **RelayAgent, optimized** | **3 986** | **1×** |
 
-**T2 — cross-app flow (xhs → amap)**
-
-| Configuration | Median tokens | vs RA optimized |
-| --- | ---: | ---: |
-| Pure-VLM, hand-driving native UI | 294 695 | 34.0× |
-| Pure-VLM, *using* the in-app assistant (`general_e2e`) | 95 296 | 11.0× |
-| RelayAgent, optimizations off (baseline) | 31 174 | 3.6× |
-| **RelayAgent, optimized** | **8 662** | **1×** |
-
 Reading the gradients:
 
-- **Using the in-app assistant at all** pays off *in proportion to task complexity* — flat on the shallow order (T1, +2.5%) but **−68%** on the discovery-heavy flow (T2, where 23 native-UI steps collapse to 7 assistant turns). A re-driving agent only banks this on the heavy task.
-- **Structured delegation (RelayAgent)** wins on **both**: **19.4×** (T1) and **11.0×** (T2) vs. the pure-VLM agent driving the *same* assistant — because it removes per-step VLM re-driving, which is paid regardless of complexity. The gap is concretely **~1 screenshot vs ~30** (the cost is ~97–99% image-prompt tokens). A manifest-free delegation relay lands in between, attributing the gap to **mostly delegation, manifest secondary** (§8.9).
-- **Two app-agnostic optimizations** (a two-stage reply-completion precheck + an a11y-scrape-first text path) add a further **2.4× / 3.6×** over the un-optimized delegation baseline (§7).
+- **Structured delegation (RelayAgent)** wins against a pure-VLM agent driving the *same* assistant because it removes per-step VLM re-driving. The gap is concretely **~1 screenshot vs ~30** (the cost is ~97–99% image-prompt tokens). A manifest-free delegation relay lands in between, attributing the gap to **mostly delegation, manifest secondary** (§8.9).
+- **Two app-agnostic optimizations** (a two-stage reply-completion precheck + an a11y-scrape-first text path) add a further **2.4×** over the un-optimized delegation baseline (§7).
 
 **Predictability is itself a result.** RelayAgent's per-task cost is nearly constant — T1 **3987 / 3986 / 3950** tokens (VLM calls fixed at 2) — while the pure-VLM agent varied **38k → 97k tokens at 46 → 379 s** on the identical task (all three reaching the same pre-payment screen), with premature-exit and runaway-loop tails seen in earlier exploration. A predictable ~4k beats a several-fold spread for anyone paying per token. Restated in dollars (§8.2), RelayAgent optimized is ~**$0.001/task** vs. ~**$0.016** for the pure-VLM agent (16.6×).
 
-**Safety held.** Every `handoff_to_user_required` run stopped before the irreversible CTA — the food order at `立即支付`, the ride at `立即打车` — with zero confirm taps. Functional coverage: **28/28 capabilities** across the 7 cards reached their expected terminal state (§8.2.1).
+**Safety held.** Every `handoff_to_user_required` run stopped before the irreversible CTA — the food order at `立即支付` — with zero confirm taps. Functional coverage: **28/28 capabilities** across the 7 cards reached their expected terminal state (§8.2.1).
 
 > Numbers are the 2026-06-02 n=3 re-run; full method, threats-to-validity, and frozen data are in the [Tech Report](report/RelayAgent-TechReport.md) and `report/benchmark-data-n3.md`.
 
@@ -131,47 +107,34 @@ RelayAgent/
 ├── SPEC.md                    # manifest specification (v0.1)
 ├── SPEC-OPEN-QUESTIONS.md     # known design questions still in flight
 ├── spec/schema.json           # JSON Schema mirror of SPEC (normative validator)
-├── manifests/                 # one YAML card per app; 7 Android cards + _flows/ for multi-app YAMLs
-├── agents/                    # relay adapter, planner, capability router, card loader, flow runner, adb helper
-├── scripts/                   # run_test.py (single app), run_flow.py (hand-written multi-app flow), run_nl.py (NL routing), run_plan.py (auto-synthesized cross-app plan)
-├── docs/                      # design docs — capability taxonomy, cross-app planner
+├── manifests/                 # one YAML card per app; 7 Android cards
+├── agents/                    # relay adapter, planner, capability router, card loader, adb helper
+├── scripts/                   # run_test.py/run_native.py (single app), run_nl.py (single-app NL routing)
+├── docs/                      # design docs — capability taxonomy
 ├── report/                    # tech report + frozen benchmark data
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
 ```
 
-## Run under MobileWorld (multi-VLM real-device runner)
+## Run it (real-device, multi-VLM)
 
-`agents/relay_agent.py` plugs RelayAgent into [MobileWorld](https://github.com/Tongyi-MAI/MobileWorld) as an `--agent-type`. MobileWorld provides a real-device runner with provider-agnostic VLM support (Claude, Gemini, Qwen-VL, Kimi, …); the card supplies the deterministic entry path and handoff policy.
+`agents/relay_agent.py` drives RelayAgent over direct adb in an in-process
+`obs → predict → execute` loop (no server). The VLM is provider-agnostic (Claude, Gemini, Qwen-VL, Kimi, …); the card supplies the deterministic entry path and handoff policy.
 
-Requires **Python 3.12** (MobileWorld pins `>=3.12,<3.13`) and a Linux/WSL host with adb + a USB-debugging phone running `com.android.adbkeyboard/.AdbIME`.
+Requires **Python 3.12** and a Linux/WSL host with adb + a USB-debugging phone running `com.android.adbkeyboard/.AdbIME`.
 
 ```bash
-# 1. set up the venv. MobileWorld is declared as a git dep in pyproject.toml
-#    via [tool.uv.sources]; uv sync clones + installs it automatically.
-#    pydantic is pinned <2.11 (fastmcp 2.9.2 incompatibility), so no manual pin needed.
+# 1. set up the venv (run the sources directly via `uv run`, don't install the project)
 uv venv --python 3.12
 uv sync --no-install-project
 
 # 2. fill in .env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL), then drive a goal
-uv run python scripts/run_test.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-`scripts/run_test.py` loads `.env`, cold-launches the target app via `agents/_adb.py` (force-stop + monkey LAUNCHER), sets `RELAY_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, **auto-starts/reuses a persistent MobileWorld server** on port 6800, and forwards any extra flags (e.g. `--max-step 40`) straight through to `mw test`.
+`scripts/run_native.py` loads `.env`, activates the AdbKeyboard IME, cold-launches the target app via `agents/_adb.py` (force-stop + monkey LAUNCHER), sets `RELAY_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, runs the in-process loop over direct adb, and forwards any extra flags (e.g. `--max-step 40`) straight to the agent. Override the LLM config with `--model` / `--base-url` / `--api-key` if not using `.env`.
 
-If you prefer to call `mw test` yourself, pass the LLM config explicitly:
-
-```bash
-set -a; source .env; set +a
-export RELAY_TARGET_APP=com.aliyun.tongyi
-uv run mw test "帮我点三杯蜜雪冰城蜜桃四季春" \
-    --agent-type   "$PWD/agents/relay_agent.py" \
-    --model_name   "$LLM_MODEL" \
-    --llm_base_url "$LLM_BASE_URL" \
-    --api_key      "$LLM_API_KEY"
-```
-
-`--model_name` is provider-agnostic — point it at any OpenAI-compatible VLM (`qwen/qwen3-vl-235b-a22b`, `anthropic/claude-sonnet-4-5`, `google/gemini-3`, …). Per task, the VLM is used sparingly (this is the source of the §8 cost numbers):
+`--model` is provider-agnostic — point it at any OpenAI-compatible VLM (`qwen/qwen3-vl-235b-a22b`, `anthropic/claude-sonnet-4-5`, `google/gemini-3`, …). Per task, the VLM is used sparingly (this is the source of the §8 cost numbers):
 
 - 1 text-only LLM call to pick a capability from the card.
 - For each text selector, `uiautomator dump` is tried first (precise, zero-token); a small VLM grounding call only on miss.
@@ -190,46 +153,15 @@ Optional env vars (full list in `.env.example`):
 
 The adapter honors `handoff_to_user_required`: for any irreversible capability it emits `ask_user` before the terminal CTA rather than auto-confirming.
 
-### Multi-app flows
-
-`scripts/run_flow.py` runs a YAML flow that chains multiple app cards — each step cold-launches one app, pins a single capability, captures the in-app agent's reply, and feeds it forward to the next step via a small text-LLM `extract` call. Two reference flows live under `manifests/_flows/`:
-
-```bash
-# Xiaohongshu (POI discovery) → Amap (ride hailing)
-uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \
-    --input category="独立书店" --input city=北京
-
-# Or pass a natural-language request and let the LLM fill flow inputs:
-uv run python scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \
-    --nl "在北京找三家独立书店，挑一家打车过去"
-
-# WeChat (chat summary) → WPS (doc generation)
-uv run python scripts/run_flow.py manifests/_flows/wechat_to_wps_summary.yaml
-```
-
 ### Natural-language entry point
 
-`scripts/run_nl.py` takes a single NL sentence, builds a catalog of all cards + flows, and asks the text LLM to pick the best executor (single-app capability or multi-app flow) before dispatching. Use `--dry-run` to inspect the routing decision without launching anything.
+`scripts/run_nl.py` takes a single NL sentence, builds a catalog of all app cards, and asks the text LLM to pick the best single app + capability before dispatching. Use `--dry-run` to inspect the routing decision without launching anything.
 
 ```bash
 uv run python scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
-uv run python scripts/run_nl.py "在北京找三家独立书店，挑一家打车过去"
-uv run python scripts/run_nl.py --dry-run "把和老王的聊天总结成一份周报 docx"
+uv run python scripts/run_nl.py "帮我找一台适合学生的平板电脑，预算2000以内"
+uv run python scripts/run_nl.py --dry-run "把这段材料整理成一份中文总结文档"
 ```
-
-### Auto-synthesize a cross-app plan
-
-`run_nl.py` can only *pick* among the flows that already exist. When no flow matches, `scripts/run_plan.py` asks the LLM to **synthesize** a fresh cross-app plan (steps + cross-leg `bind`s) from the full app/capability catalog, validates it locally, persists it to `manifests/_generated/`, previews + confirms, then runs it through the same `FlowRunner`. The generated plan uses the same schema as the hand-written flows.
-
-```bash
-# synthesize → preview → ask y/N → execute
-uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去"
-
-# plan + preview only, don't execute (no device involved)
-uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去" --dry-run
-```
-
-Full design and usage: [`docs/cross_app_planner.md`](docs/cross_app_planner.md).
 
 ## Run tests
 
@@ -257,7 +189,7 @@ Seven verified reference cards, **28 capabilities** total, each exercised end-to
 | App | Package | Capabilities | Card class |
 | --- | --- | --- | --- |
 | Amap (高德地图) | com.autonavi.minimap | POI search, navigation, ride hailing, trip planning | mixed |
-| Tongyi Qwen (通义千问) | com.aliyun.tongyi | chat, train/ride/food/hotel/movie booking, product search/comparison/purchase/order tracking | mixed |
+| Tongyi Qwen (通义千问) | com.aliyun.tongyi | foundation_llm, train/ride/food/hotel/movie-event booking, product search/purchase guidance/order tracking | mixed |
 | Ctrip (携程旅行) | ctrip.android.view | flights, hotels, trains, attractions, package tours | mixed |
 | Xiaohongshu (小红书) | com.xingin.xhs | community UGC Q&A via AI search | multi-node |
 | WeChat (微信) | com.tencent.mm | Yuanbao chat surface, AI search | mixed |
@@ -269,7 +201,7 @@ Quality bar per card: all required SPEC fields populated, ≥2 real example prom
 
 ## Known blockers
 
-- **Taobao server-side risk control ("访问被拒绝").** The Taobao shopping capabilities are now hosted in the 千问 (Qwen) card and routed through the Taobao backend — the standalone `com.taobao.taobao` card has been retired, since Taobao's in-app assistant *is* 千问 and the Qwen-hosted path goes through the same fulfillment backend without driving the Taobao app's GUI directly (the safer route). The risk-control wall may still surface on the deep-link target pages of `buy_product` / `order_food` (the 淘宝闪购 local-delivery card): a server-rendered "亲，访问被拒绝" wall (or a one-time identity gate) instead of the product / local-delivery flow. This is account- and device-level 风控, **not** an adapter or manifest bug: the entry path executes correctly and the failure happens on the deep-link target page *after* the in-app agent fires. Mitigations: sign the device into an account with normal purchase history, clear pending real-name / device-trust checks in 我的淘宝 → 设置 → 账号与安全, and avoid running the same risk-controlled capability back-to-back on a freshly-imaged device.
+- **Taobao server-side risk control ("访问被拒绝").** The Taobao shopping capabilities are now hosted in the 千问 (Qwen) card and routed through the Taobao backend — the standalone `com.taobao.taobao` card has been retired, since Taobao's in-app assistant *is* 千问 and the Qwen-hosted path goes through the same fulfillment backend without driving the Taobao app's GUI directly (the safer route). The risk-control wall may still surface on the deep-link target pages of `purchase_guidance` / `order_food` (the 淘宝闪购 local-delivery card): a server-rendered "亲，访问被拒绝" wall (or a one-time identity gate) instead of the product / local-delivery path. This is account- and device-level 风控, **not** an adapter or manifest bug: the entry path executes correctly and the failure happens on the deep-link target page *after* the in-app agent fires. Mitigations: sign the device into an account with normal purchase history, clear pending real-name / device-trust checks in 我的淘宝 → 设置 → 账号与安全, and avoid running the same risk-controlled capability back-to-back on a freshly-imaged device.
 
 ## What this project is *not*
 
@@ -287,7 +219,6 @@ Quality bar per card: all required SPEC fields populated, ≥2 real example prom
 
 ## Acknowledgements
 
-- [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld) (Tongyi-MAI) — the real-device, multi-VLM runner RelayAgent's adapter plugs into, and the source of the `general_e2e` / manual-UI baselines in our benchmark.
 - [**MobiAgent**](https://github.com/IPADS-SAI/MobiAgent) (SJTU IPADS) — the pure-GUI mobile-agent line we position against, and the structural model for our [Tech Report](report/RelayAgent-TechReport.md).
 
 ## License

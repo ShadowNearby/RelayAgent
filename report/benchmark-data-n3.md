@@ -58,7 +58,7 @@
 > （opt 153.5 vs baseline 115.8）—— 本次只重测 opt、未同 session 重测 baseline，故不对 flow 的
 > 「opt≈baseline 墙钟」下新结论（order_food 的同 session 交错对照已单独验证该结论）。
 
-> flow 的「VLM 总时间」无法从现有 run 目录提取：flow 经 `flow_runner` 分腿走子进程 `mw test`
+> flow 的「VLM 总时间」无法从现有 run 目录提取：旧版多 app 任务分腿走子进程 `mw test`
 > （`--log-file-root`），子run 的 traj 只落聚合 `token_usage`、不写 per-call `elapsed_s`
 > （见 `aggregate_metrics.py:108-117` 的 fallback 分支），故 `vlm_s` 不可得。要补 flow 的
 > VLM 总时间需带 per-call 计时重跑 flow。
