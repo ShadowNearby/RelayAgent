@@ -44,16 +44,16 @@ if str(_REPO_ROOT) not in sys.path:
 
 from loguru import logger
 
-# Aliased to a leading-underscore name on purpose: MobileWorld's agent
-# registry (mobile_world/agents/registry.py) collects every BaseAgent subclass
-# in this module via inspect.getmembers (alphabetically sorted) and instantiates
-# agent_classes[0]. If the base is exposed as "MCPAgent" it sorts before
-# "RelayAgent" and the registry tries to instantiate the abstract base → "Can't
+# Aliased to a leading-underscore name on purpose: the file→agent loader
+# (scripts/run_native.py:_load_agent_class) collects every BaseAgent subclass in
+# this module via inspect.getmembers (alphabetically sorted) and instantiates
+# the first. If the base were exposed as "MCPAgent" it would sort before
+# "RelayAgent" and the loader would try to instantiate the abstract base → "Can't
 # instantiate abstract class MCPAgent". "_MCPAgentBase" sorts AFTER "RelayAgent"
 # (ASCII '_' > 'R'), so RelayAgent is picked.
-from mobile_world.agents.base import MCPAgent as _MCPAgentBase
-from mobile_world.agents.utils.helpers import pil_to_base64
-from mobile_world.runtime.utils.models import JSONAction
+from agents.agent_base import MCPAgent as _MCPAgentBase
+from agents._img import pil_to_base64
+from agents.action_model import JSONAction
 
 from agents._adb import adb_base, force_stop, swipe_down
 from agents._adb import cold_launch as _cold_launch
