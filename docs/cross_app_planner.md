@@ -4,17 +4,15 @@
 
 > One NL sentence → LLM **auto-synthesizes** a cross-app plan → validate → persist → preview & confirm → run on a real device.
 >
-> How it relates to the existing entries: `run_nl.py` **picks** one of the **hand-written** flows / single-app capabilities; `run_flow.py` runs a **hand-written** flow YAML directly; `run_plan.py` is for when there is **no** matching hand-written flow — it has the model **synthesize** a multi-app plan on the spot. All three share the same `FlowRunner` executor and flow schema.
+> How it relates to the existing entries: `run_nl.py` **routes** a sentence to a single app + capability; `run_plan.py` is for a cross-app goal — it has the model **synthesize** a multi-app plan on the spot, then runs it via `FlowRunner`.
 
 ---
 
 ## 1. What it solves
 
-Before this, RelayAgent's cross-app capability relied on **hand-authored** YAML under `manifests/_flows/`: which apps, in what order, which capability, and how data binds between legs were all written by hand. The `run_nl.py` router could only **pick one** of those existing flows (its prompt explicitly says `do NOT invent ids`).
+`run_nl.py` routes a sentence to **one** app + capability; it cannot decompose a cross-app goal into a multi-app step sequence. Given an instruction that spans several apps, the router falls back to a single app, or picks the wrong one.
 
-So given a cross-app instruction with **no matching flow**, the system couldn't autonomously decompose the goal into a multi-app step sequence — the router finds no match and falls back to a single app, or picks the wrong one.
-
-`run_plan.py` fills exactly that gap: **given the full app/capability catalog, have the LLM dynamically produce the steps + bind relations** (i.e. have the model produce what used to be the hand-written flow YAML), then hand it to the existing `FlowRunner`. **No new executor — only a new "planning" layer.**
+`run_plan.py` fills exactly that gap: **given the full app/capability catalog, have the LLM dynamically produce the steps + bind relations**, then hand it to `FlowRunner`. **No new executor — only a new "planning" layer.**
 
 ---
 
@@ -38,7 +36,7 @@ one sentence
   ├─(5) preview + confirm ←─────────────────────┘
   │        default N; non-interactive stdin (EOF) = don't execute; --yes skips; --dry-run stops here
   │
-  └─(6) FlowRunner.run()           one mw test per app leg, reusing the persistent MobileWorld server
+  └─(6) FlowRunner.run()           one run_native subprocess per app leg (direct adb)
 ```
 
 Files involved:
@@ -47,14 +45,14 @@ Files involved:
 | --- | --- |
 | [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI entry: cache / persist / preview / confirm / recording / dispatch |
 | [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`: catalog → prompt → LLM → JSON → validation (with a repair TODO stub) |
-| [`agents/flow_runner.py`](../agents/flow_runner.py) | the existing executor, reused as-is (generated plans share the hand-written flow schema) |
+| [`agents/flow_runner.py`](../agents/flow_runner.py) | the executor: runs each leg, binds replies, handles ask_user / extract |
 | [`manifests/_generated/`](../manifests/_generated/) | generated-artifact + cache dir; `.gitignore` keeps its contents out of version control |
 
 ---
 
 ## 3. Generated plan schema
 
-The output **reuses the flow YAML shape**, so it can be fed straight to `FlowRunner`. The only difference from a hand-written flow: **no `inputs` block** — the sentence is concrete, so literal values are baked directly into each step's `prompt`; cross-leg data flow still uses `extract` / `bind` / `{var}`.
+The output is a flow plan fed straight to `FlowRunner`. There is **no `inputs` block** — the sentence is concrete, so literal values are baked directly into each step's `prompt`; cross-leg data flow uses `extract` / `bind` / `{var}`.
 
 Field order after persisting (fixed by `run_plan.py:_persist`):
 
@@ -132,7 +130,7 @@ Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 
 "after `handoff_to_user`, be able to switch back to the agent" has two granularities; this version ships A and leaves a seam for B:
 
-- **Phase A (shipped)**: the handoff leg ends → a flow-level `ask_user` collects the user's answer → the next agent leg is a **fresh `mw test`** (same app or a different one) with the answer + full intent re-stated in the prompt. Reuses the existing `FlowRunner` structure. **Limitation**: a same-app mid-task handoff cold-launches and clears history, losing in-app half-finished state.
+- **Phase A (shipped)**: the handoff leg ends → a flow-level `ask_user` collects the user's answer → the next agent leg is a **fresh `run_native` subprocess** (same app or a different one) with the answer + full intent re-stated in the prompt. Reuses the existing `FlowRunner` structure. **Limitation**: a same-app mid-task handoff cold-launches and clears history, losing in-app half-finished state.
 - **Phase B (seam only, not wired)**: keep the handoff leg from terminating — replace `stdin=DEVNULL` in `flow_runner._run_app_step` with a flow⇄agent channel; the agent's handoff `ask_user` (inside `relay_agent.py`) no longer ends on EOF but blocks reading the answer the flow pipes back, then resumes `predict()` in the **same conversation**. Both spots carry `# TODO(phase-B):` markers.
 
 > In-app handoff today: when the agent reaches the `handoff` step it first calls `_maybe_persist_reply()` (writes the reply to `RELAY_REPLY_OUT`), then emits `action_type="ask_user"`; in a flow leg stdin is DEVNULL → immediate EOF → the subprocess ends with the reply already persisted.
@@ -166,7 +164,7 @@ uv run python scripts/run_plan.py "..." --no-cache
 uv run python scripts/run_plan.py "..." --record
 uv run python scripts/run_plan.py "..." --record /path/to/dir
 
-# args after `--` are forwarded to each underlying mw test
+# args after `--` are forwarded to each underlying run_native
 uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 ```
 
@@ -178,12 +176,12 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 | `--yes` / `-y` | skip the y/N confirm |
 | `--no-cache` | don't reuse a cached plan in `_generated/`; force regeneration |
 | `--record [DIR]` | adb screen recording; defaults to `traj_logs/recordings/<ts>/` |
-| `-- <args>` | everything after `--` is forwarded to the underlying `mw test` |
+| `-- <args>` | everything after `--` is forwarded to the underlying `run_native` |
 
 **Environment**
 
 - Planning uses `.env`'s `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (= `qwen`), the same endpoint as the `run_nl` router.
-- Execution reuses the persistent MobileWorld server (`scripts/_mw_server.py:ensure_server` injects `--aw_host`), consistent with `run_nl` / `run_flow`.
+- Execution runs each leg as a direct-adb `run_native` subprocess, consistent with `run_nl`.
 - Real-device requirements as elsewhere in the project: adb + USB debugging + `com.android.adbkeyboard/.AdbIME`; `RELAY_ANDROID_SERIAL` selects the device.
 
 **Non-interactive behavior of mid-flow `ask_user`**: a flow-level `ask_user` reads the parent process's stdin. With `< /dev/null` (or a piped EOF), a pick step **auto-takes the first candidate** and a freeform step takes the empty string — suitable for `--yes` batch runs. To pick by hand, run interactively in a real terminal.
@@ -208,7 +206,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 Input: `"在上海找三家评价好的小众书店，挑一家打车过去"` (Pixel 9, `--yes`, stdin `</dev/null`).
 
-The synthesized plan (same structure as the hand-written [`xhs_to_amap_place.yaml`](../manifests/_flows/xhs_to_amap_place.yaml)):
+The synthesized plan:
 
 ```
 1. [agent]    Xiaohongshu / qa_community_knowledge  →  extract → bind bookstore_list
@@ -243,7 +241,7 @@ This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 
 | File | Change |
 | --- | --- |
-| `agents/flow_runner.py` | ① `# TODO(phase-B):` seam comment (at `stdin=DEVNULL`). ② new `_traj_stem()`: hand-written flows still use the file stem; auto-synthesized plans (marked by `source_request`, no `inputs`) name the traj dir `plan_<app1>_<app2>…` instead, avoiding a long NL-slug filename as a directory name. |
+| `agents/flow_runner.py` | ① `# TODO(phase-B):` seam comment (at `stdin=DEVNULL`). ② `_traj_stem()`: names the traj dir after the apps a plan touches — `plan_<app1>_<app2>…` — instead of the verbose NL-slug filename. |
 | `agents/relay_agent.py` | `# TODO(phase-B):` seam comment on the handoff branch (no logic change). |
 | `CLAUDE.md` | added the run_plan entry under `跑测试`; added an "auto cross-app planning" overview section pointing here; "three → four entry scripts". |
 | `README.md` / `README_zh.md` | added run_plan to the scripts listing; added an "auto-synthesize a cross-app plan" subsection after the NL entry point. |
@@ -254,5 +252,5 @@ This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 - **A dedicated `run_plan.py`** rather than folding into `run_nl`: zero intrusion on the existing NL routing.
 - **Preview + confirm (default N)**: cross-app carries irreversible side effects (ride-hailing / ordering), so a human must see and approve before execution.
 - **Hard-fail on validation, repair left as TODO**: better to abort than let a bad plan execute silently.
-- **Handoff may be terminal at the end, ask_user forced only mid-flow**: matches the hand-written `xhs_to_amap_place` ending on hail_ride; the final leg's in-app handoff is itself the terminal confirmation.
+- **Handoff may be terminal at the end, ask_user forced only mid-flow**: e.g. a plan ending on hailing a ride — the final leg's in-app handoff is itself the terminal confirmation.
 - **Cache exact-string first, semantic reuse left as TODO**: get the main path working before investing in caching.
