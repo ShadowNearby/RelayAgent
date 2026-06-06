@@ -27,8 +27,8 @@
 | # | Capability |
 |---|---|
 | 12 | Product search & recommendation |
-| 13 | Purchase guidance / add-to-cart / pre-checkout preparation (boundary: payment → user handoff) |
-| 14 | Food delivery / local delivery ordering (same boundary) |
+| 13 | Purchase guidance / add-to-cart / pre-checkout preparation |
+| 14 | Food ordering |
 | 15 | Order / logistics / after-sales status |
 
 ## Calendar & reminders
@@ -55,8 +55,8 @@
 | 26 | File find & filter |
 | 27 | File operations — copy / move / rename / delete |
 | 28 | Text file creation & writing |
-| 29 | Document generation & export |
-| 30 | PPT generation |
+| 29 | Document generation |
+| 30 | Slides generation |
 | 31 | Image find & classification |
 
 ## Vertical lookup
@@ -66,10 +66,11 @@
 | 33 | Securities information query & filtering |
 | 34 | Weather |
 | 35 | Banking / bills / balance |
+| 36 | App-specific vertical content search |
 
 ## System
 | # | Capability |
 |---|---|
-| 36 | System settings operations |
-| 37 | Media playback control |
-| 38 | Notes / memo |
+| 37 | System settings operations |
+| 38 | Media playback control |
+| 39 | Notes / Memos |
