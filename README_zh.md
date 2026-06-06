@@ -229,7 +229,7 @@ uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，
 uv run python scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去" --dry-run
 ```
 
-完整设计与用法见 [`docs/cross_app_planner.md`](docs/cross_app_planner.md)。
+完整设计与用法见 [`docs/cross_app_planner.zh.md`](docs/cross_app_planner.zh.md)。
 
 ## 运行测试
 
