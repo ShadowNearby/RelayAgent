@@ -134,6 +134,7 @@ RelayAgent/
 ├── manifests/                 # one YAML card per app; 7 Android cards + _flows/ for multi-app YAMLs
 ├── agents/                    # relay adapter, planner, capability router, card loader, flow runner, adb helper
 ├── scripts/                   # run_test.py (single app), run_flow.py (hand-written multi-app flow), run_nl.py (NL routing), run_plan.py (auto-synthesized cross-app plan)
+├── docs/                      # design docs — capability taxonomy, cross-app planner
 ├── report/                    # tech report + frozen benchmark data
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0

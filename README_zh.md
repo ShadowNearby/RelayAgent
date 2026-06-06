@@ -134,6 +134,7 @@ RelayAgent/
 ├── manifests/                 # 每个 App 一张 YAML 卡片；7 张安卓卡片 + _flows/ 存放跨 App 的 YAML
 ├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、flow 运行器、adb 辅助
 ├── scripts/                   # run_test.py（单 App）、run_flow.py（手写跨 App flow）、run_nl.py（NL 路由）、run_plan.py（自动合成跨 App plan）
+├── docs/                      # 设计文档 —— 能力分类法、跨 App planner
 ├── report/                    # 技术报告 + 冻结的基准数据
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
