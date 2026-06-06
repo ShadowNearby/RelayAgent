@@ -1,9 +1,9 @@
 """a11y-text-input baseline (§8.9 item 2 follow-up).
 
-A pure step-by-step *re-driving* agent that, unlike MobileWorld's `general_e2e`
+A pure step-by-step *re-driving* agent that, unlike a pure-VLM general agent
 (which is fed a screenshot + a 3-image visual history every step), is fed the
 **accessibility tree as text** and nothing else. It isolates a single variable
-vs. general_e2e — the input *modality* (a11y text vs. screenshots) — while
+vs. the pure-VLM baseline — the input *modality* (a11y text vs. screenshots) — while
 holding everything else constant: it still re-drives the UI step by step, still
 uses the app's in-app assistant, same task / model / gateway / step cap /
 cold-launch / "do not actually pay" instruction.
@@ -19,7 +19,7 @@ It subclasses RelayAgent only to inherit the LLM-call logging wrapper
 `scripts/aggregate_metrics.py` reads) and `build_openai_client`. It loads NO
 card and builds NO plan.
 
-Run via:  RELAY_AGENT_FILE=$PWD/agents/a11y_agent.py scripts/run_test.py <pkg> "<goal>"
+Run via:  RELAY_AGENT_FILE=$PWD/agents/a11y_agent.py scripts/run_native.py <pkg> "<goal>"
 Knobs:    A11Y_MAX_NODES (60) · A11Y_TEXT_TRUNC (50) · A11Y_HISTORY_K (12)
           A11Y_STEP_CAP (50) · A11Y_MAX_DUMP_FAIL (4)
 """

@@ -1,8 +1,8 @@
 """LLM-based capability matcher.
 
-Takes the user's instruction and one app's card, asks the same VLM/LLM
-that MobileWorld is driving (via the agent's openai client) to pick a
-capability id and render an invocation prompt for the in-app agent.
+Takes the user's instruction and one app's card, asks the LLM (via the
+agent's openai client) to pick a capability id and render an invocation
+prompt for the in-app agent.
 """
 
 from __future__ import annotations
@@ -70,10 +70,10 @@ def route_capability(
     Returns (capability_id, invocation_text). Raises if the LLM reply is
     unparseable or names an unknown capability.
 
-    If RELAY_FORCE_CAPABILITY is set (used by the flow runner to skip
-    routing in single-capability sub-runs), it is validated against the
-    card and returned as-is, paired with RELAY_INVOCATION_TEXT (falling
-    back to the original instruction).
+    If RELAY_FORCE_CAPABILITY is set (used by batch and NL runners to skip
+    routing in single-capability sub-runs), it is validated against the card
+    and returned as-is, paired with RELAY_INVOCATION_TEXT (falling back to
+    the original instruction).
     """
     forced = os.getenv(_FORCE_CAP_ENV)
     if forced:

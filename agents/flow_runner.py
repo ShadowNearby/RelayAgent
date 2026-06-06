@@ -1,13 +1,14 @@
 """Multi-app flow runner.
 
-Reads a YAML flow under `manifests/_flows/`, executes its steps as a
-sequence of (a) `mw test` sub-runs pinned to one app + one capability,
+Executes a flow plan (the step/bind schema produced by `FlowPlanner` and
+persisted under `manifests/_generated/` by `scripts/run_plan.py`) as a
+sequence of (a) `run_native` sub-runs pinned to one app + one capability,
 (b) user-input prompts, and (c) text-LLM extract steps that parse the
 last sub-run's captured reply into structured data.
 
 Design notes (see CLAUDE.md for project context):
 
-- Each app step is a fresh `mw test` subprocess. We DON'T reuse one long-
+- Each app step is a fresh `run_native` subprocess. We DON'T reuse one long-
   lived RelayAgent across apps because plan cursor / chat history are
   scoped to a single card.
 - The capability router is bypassed via RELAY_FORCE_CAPABILITY +
@@ -18,19 +19,17 @@ Design notes (see CLAUDE.md for project context):
 - Extract steps run a small text-only chat completion against the same
   LLM endpoint configured in `.env` (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL).
 - Templating: `{var}` and `{var.field}` substitution against a flat
-  blackboard dict that starts as `inputs` and grows as steps bind values.
-
-Usage:
-    scripts/run_flow.py manifests/_flows/xhs_to_amap_place.yaml \\
-        --input category="独立书店" --input city=北京
+  blackboard dict that starts empty and grows as steps bind values
+  (synthesized plans bake concrete values into prompts, so there is no
+  separate `inputs` block).
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,7 +44,7 @@ from openai import OpenAI
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
-# Each app leg is a fresh `run_native.py` subprocess (direct adb; no mw server).
+# Each app leg is a fresh `run_native.py` subprocess (direct adb).
 RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
 
 
@@ -104,9 +103,7 @@ class FlowRunner:
         self,
         flow_path: Path,
         env_overrides: dict[str, str] | None = None,
-        input_overrides: dict[str, str] | None = None,
-        nl_request: str | None = None,
-        extra_mw_args: list[str] | None = None,
+        extra_args: list[str] | None = None,
     ) -> None:
         self.flow_path = flow_path
         self.flow = yaml.safe_load(flow_path.read_text(encoding="utf-8"))
@@ -121,62 +118,30 @@ class FlowRunner:
                 raise RuntimeError(f"Missing required config: {k} (set in .env or env)")
             self.env[k] = v
 
-        self.extra_mw_args = extra_mw_args or []
+        self.extra_args = extra_args or []
         self._llm = OpenAI(base_url=self.env["LLM_BASE_URL"], api_key=self.env["LLM_API_KEY"])
 
         # Each flow run gets its own traj root so the sub-runs don't keep
-        # overwriting `traj_logs/user_task/`. MW's TrajLogger always writes
-        # to `<log_file_root>/user_task/`, so we give each step its own
-        # `log_file_root` and group them under one flow-scoped parent.
-        #
-        # Hand-written flows have a meaningful file stem (e.g.
-        # `xhs_to_amap_place`), so we keep it. Auto-synthesized cross-app
-        # plans (run_plan) instead carry a verbose NL-slug+hash filename,
-        # which makes for an ugly dir; for those we name the root after the
-        # apps they touch: `plan_<app1>_<app2>...`.
+        # overwriting `traj_logs/user_task/`. The agent's TrajLogger always
+        # writes to `<log_file_root>/user_task/`, so we give each step its own
+        # `log_file_root` and group them under one flow-scoped parent named
+        # after the apps it touches: `plan_<app1>_<app2>...`.
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.flow_traj_root = REPO_ROOT / "traj_logs" / f"{self._traj_stem()}_{ts}"
         self._step_idx = 0
         logger.info(f"flow traj root: {self.flow_traj_root}")
 
-        inputs_spec = self.flow.get("inputs") or {}
-        nl_derived: dict[str, Any] = {}
-        if nl_request:
-            nl_derived = self._resolve_nl_inputs(nl_request, inputs_spec)
-            logger.info(f"NL → inputs: {nl_derived}")
-
         self.bb: dict[str, Any] = {}
-        for name, spec in inputs_spec.items():
-            type_name = spec.get("type", "string")
-            if input_overrides and name in input_overrides:
-                self.bb[name] = _coerce(input_overrides[name], type_name)
-            elif name in nl_derived:
-                self.bb[name] = _coerce_value(nl_derived[name], type_name)
-            elif "default" in spec:
-                dflt = spec["default"]
-                # Defaults can be templates that reference earlier inputs
-                # (e.g. topic: "{city}{category}"); render against the
-                # partially-built blackboard so later steps see the
-                # composed string, not the literal template.
-                if isinstance(dflt, str) and "{" in dflt:
-                    dflt = render(dflt, self.bb)
-                self.bb[name] = dflt
-            else:
-                raise ValueError(f"Flow input {name!r} has no default and was not supplied")
-        logger.info(f"resolved inputs: {_redact(self.bb)}")
 
     # ------------------------------------------------------------- traj naming
 
     def _traj_stem(self) -> str:
         """Name for the flow-scoped traj dir.
 
-        Hand-written flows keep their file stem. Auto-synthesized cross-app
-        plans (marked by `source_request`, no `inputs`) get named after the
-        apps they touch — `plan_<app1>_<app2>...` — using the last segment
-        of each leg's package id, deduped in step order.
+        Named after the apps the plan touches — `plan_<app1>_<app2>...` —
+        using the last segment of each leg's package id, deduped in step
+        order. Falls back to the file stem if no app legs are present.
         """
-        if not self.flow.get("source_request"):
-            return self.flow_path.stem
         apps: list[str] = []
         for step in self.flow.get("steps", []):
             pkg = step.get("app")
@@ -185,58 +150,7 @@ class FlowRunner:
             short = str(pkg).rsplit(".", 1)[-1]
             if short and short not in apps:
                 apps.append(short)
-        return "plan_" + "_".join(apps) if apps else "plan"
-
-    # ------------------------------------------------------------- NL inputs
-
-    def _resolve_nl_inputs(self, nl: str, inputs_spec: dict) -> dict[str, Any]:
-        """Ask the text LLM to map a natural-language request to flow inputs.
-
-        Only fields the LLM actually reads from the sentence are returned;
-        everything else falls back to YAML defaults so we don't hallucinate
-        values the user never mentioned.
-        """
-        if not inputs_spec:
-            return {}
-        schema_lines = []
-        for name, spec in inputs_spec.items():
-            t = spec.get("type", "string")
-            desc = spec.get("description", "")
-            dflt = spec.get("default", "")
-            schema_lines.append(f"- {name} ({t}): {desc} [default: {dflt!r}]")
-        schema = "\n".join(schema_lines)
-        system = (
-            "You map a user's natural-language request to a flow's input "
-            "parameters. Return ONLY a JSON object inside a ```json``` fence. "
-            "Include a key ONLY if the sentence clearly specifies it; omit "
-            "keys the user did not mention (the caller will use defaults). "
-            "Do not invent values."
-        )
-        user = (
-            f"Flow inputs schema:\n{schema}\n\n"
-            f"User request:\n{nl}\n\n"
-            "Return the JSON object now."
-        )
-        resp = self._llm.chat.completions.create(
-            model=self.env["LLM_MODEL"],
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.0,
-            max_tokens=512,
-        )
-        out = (resp.choices[0].message.content or "").strip()
-        logger.debug(f"NL-inputs raw reply: {out}")
-        try:
-            data = _parse_fenced_json(out)
-        except Exception as e:
-            logger.warning(f"NL-inputs parse failed ({e}); ignoring NL hint")
-            return {}
-        if not isinstance(data, dict):
-            logger.warning(f"NL-inputs expected object, got {type(data).__name__}; ignoring")
-            return {}
-        return {k: v for k, v in data.items() if k in inputs_spec}
+        return "plan_" + "_".join(apps) if apps else self.flow_path.stem
 
     # ------------------------------------------------------------------ run
 
@@ -263,9 +177,9 @@ class FlowRunner:
         prompt = render(step["prompt"], self.bb)
 
         # Cold-launch is deferred to the agent's first predict
-        # (RELAY_AGENT_LAUNCH below) so this leg's MobileWorld framework
-        # cold-start lands before the launch and is excluded from the leg's
-        # task wall-clock (which the agent writes to RELAY_WALL_OUT).
+        # (RELAY_AGENT_LAUNCH below) so process/leg startup lands before the
+        # launch and is excluded from the leg's task wall-clock (which the
+        # agent writes to RELAY_WALL_OUT).
         self._step_idx += 1
         step_log_root = self.flow_traj_root / f"{self._step_idx:02d}_{step['id']}"
         step_log_root.mkdir(parents=True, exist_ok=True)
@@ -289,15 +203,20 @@ class FlowRunner:
                 "RELAY_FORCE_CAPABILITY": capability,
                 "RELAY_INVOCATION_TEXT": prompt,
                 "RELAY_REPLY_OUT": str(reply_path),
-                # Agent writes the framework-excluded wall_clock.json into this
-                # leg's dir; create it first (run_native has no --log-file-root).
+                # Agent writes the framework-excluded wall_clock.json straight
+                # into this leg's dir. run_native still rotates and writes the
+                # global traj_logs/user_task/ (traj.json + token logs + steps/),
+                # which the NEXT leg's startup would rotate away — so after the
+                # sub-run we copy that global dir into this leg's user_task/ to
+                # preserve the per-leg trajectory (see the copy below). Create
+                # the dir first so the agent's wall_clock.json has a home.
                 "RELAY_WALL_OUT": str(step_log_root / "user_task" / "wall_clock.json"),
             }
             (step_log_root / "user_task").mkdir(parents=True, exist_ok=True)
             # run_native reads LLM_* + RELAY_* from the child env (no flags).
             cmd = [
                 sys.executable, str(RUN_NATIVE), app, prompt,
-                *self.extra_mw_args,
+                *self.extra_args,
             ]
             logger.info(
                 f"→ run_native for app={app} capability={capability!r} prompt={prompt!r}"
@@ -324,6 +243,23 @@ class FlowRunner:
                 logger.info(f"leg gross wall_s={round(time.monotonic() - t0, 1)}")
             if rc != 0:
                 logger.warning(f"run_native exited rc={rc}; continuing if reply was captured")
+
+            # Preserve this leg's trajectory before the next leg's run_native
+            # startup rotates the global traj_logs/user_task/ away. Merge the
+            # global dir (traj.json, token logs, steps/, agent_reply.json) into
+            # this leg's user_task/ without clobbering the agent's wall_clock.json
+            # already written there. Best-effort: a logging gap must not abort
+            # the flow.
+            global_traj = REPO_ROOT / "traj_logs" / "user_task"
+            if global_traj.is_dir():
+                try:
+                    shutil.copytree(
+                        global_traj,
+                        step_log_root / "user_task",
+                        dirs_exist_ok=True,
+                    )
+                except OSError as e:
+                    logger.warning(f"failed to copy leg trajectory into {step_log_root}: {e}")
 
             reply = ""
             if reply_path.exists() and reply_path.stat().st_size > 0:
@@ -424,29 +360,6 @@ def _parse_fenced_json(text: str) -> Any:
     return json.loads(payload)
 
 
-def _coerce(value: str, type_name: str) -> Any:
-    if type_name == "int":
-        return int(value)
-    if type_name == "float":
-        return float(value)
-    if type_name == "bool":
-        return value.lower() in ("1", "true", "yes", "y")
-    return value
-
-
-def _coerce_value(value: Any, type_name: str) -> Any:
-    """Coerce a possibly-non-string value (LLM may already return int/float/bool)."""
-    if isinstance(value, str):
-        return _coerce(value, type_name)
-    if type_name == "int":
-        return int(value)
-    if type_name == "float":
-        return float(value)
-    if type_name == "bool":
-        return bool(value)
-    return str(value)
-
-
 def _redact(d: dict[str, Any]) -> dict[str, Any]:
     """Shallow redact obvious secrets in blackboard logging."""
     out = {}
@@ -474,39 +387,3 @@ def _resolve_choice(raw: str, items: list[Any], label_tpl: str) -> Any:
         if isinstance(it, dict) and lowered in str(it.get("name", "")).lower():
             return it
     raise ValueError(f"Could not resolve user choice {raw!r} among {len(items)} items")
-
-
-def _parse_kv(kvs: list[str]) -> dict[str, str]:
-    out = {}
-    for s in kvs or []:
-        if "=" not in s:
-            raise SystemExit(f"--input expects KEY=VALUE, got {s!r}")
-        k, _, v = s.partition("=")
-        out[k.strip()] = v.strip()
-    return out
-
-
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("flow", help="Path to a flow YAML (e.g. manifests/_flows/xhs_to_amap_place.yaml)")
-    p.add_argument("--input", action="append", default=[], metavar="KEY=VALUE",
-                   help="Override a flow input; repeatable")
-    p.add_argument("--nl", default=None, metavar="TEXT",
-                   help="Natural-language request; LLM extracts flow inputs from it. "
-                        "Explicit --input values still take precedence.")
-    args, extra = p.parse_known_args(argv)
-
-    # No persistent server anymore: each leg is a direct-adb run_native
-    # subprocess. Any extra args are forwarded to run_native verbatim.
-    runner = FlowRunner(
-        flow_path=Path(args.flow).resolve(),
-        input_overrides=_parse_kv(args.input),
-        nl_request=args.nl,
-        extra_mw_args=extra,
-    )
-    runner.run()
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

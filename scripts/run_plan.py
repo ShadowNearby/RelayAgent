@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Auto-synthesize and run a cross-app plan from one natural-language sentence.
 
-Unlike `run_nl.py` — which *routes* a sentence to an existing hand-written
-flow or single app — this entry *synthesizes* a brand-new multi-app plan with
-the LLM (see `agents/flow_planner.py`), then executes it through the existing
-`FlowRunner`. The generated plan uses the same step/bind schema as the
-hand-written flows under `manifests/_flows/`, so no new executor is needed.
+Unlike `run_nl.py` — which *routes* a sentence to a single app + capability —
+this entry *synthesizes* a brand-new multi-app plan with the LLM (see
+`agents/flow_planner.py`), then executes it through `FlowRunner`. The generated
+plan uses the step/bind schema `FlowRunner` executes, so no new executor is
+needed.
 
 Pipeline:
     1. build_catalog()  — every app + capability (reused from run_nl).
@@ -16,8 +16,7 @@ Pipeline:
                           failure is a TODO; for now we hard-fail.
     4. persist          — write the plan yaml to manifests/_generated/.
     5. preview + confirm — print the legs; execute only on y (default N).
-    6. FlowRunner.run() — one `mw test` per app leg, reusing the persistent
-                          MobileWorld server.
+    6. FlowRunner.run() — one `run_native` subprocess per app leg (direct adb).
 
 Usage:
     scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去"
@@ -25,7 +24,7 @@ Usage:
     scripts/run_plan.py "..." --yes         # skip the confirm prompt
     scripts/run_plan.py "..." --no-cache    # ignore any cached plan
     scripts/run_plan.py "..." --record      # screen-record the run
-    scripts/run_plan.py "..." -- --step_wait_time 0.3   # forward to mw test
+    scripts/run_plan.py "..." -- --step_wait_time 0.3   # forward to run_native
 """
 from __future__ import annotations
 
@@ -196,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         env[k] = v
 
     catalog = build_catalog()
-    logger.info(f"catalog: {len(catalog['apps'])} apps, {len(catalog['flows'])} flows")
+    logger.info(f"catalog: {len(catalog['apps'])} apps")
 
     # 1) cache lookup, else 2) synthesize + validate + persist.
     plan: dict[str, Any]
@@ -257,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.info(f"screen recording (parent-owned) → {out_dir}")
 
     try:
-        runner = FlowRunner(flow_path=plan_path, extra_mw_args=extra)
+        runner = FlowRunner(flow_path=plan_path, extra_args=extra)
         runner.run()
         return 0
     finally:

@@ -1,15 +1,12 @@
-"""MobileWorld adapter for RelayAgent.
+"""RelayAgent — the capability-driven in-app agent.
 
 Run with:
 
-    RELAY_TARGET_APP=com.aliyun.tongyi \\
-    mw test "在通义里点一杯蜜雪冰城" \\
-        --agent-type /abs/path/RelayAgent/agents/relay_agent.py \\
-        --model_name anthropic/claude-sonnet-4-5
+    scripts/run_native.py com.aliyun.tongyi "在通义里点一杯蜜雪冰城"
 
 Design:
-- Subclass MobileWorld's MCPAgent so we get its provider-agnostic openai
-  client, token accounting, and the model_name plumbing for free.
+- Subclass MCPAgent (agents/agent_base.py) for the provider-agnostic openai
+  client, token accounting, and the model_name plumbing.
 - One LLM call per task picks a capability + invocation text from the card.
 - The rest of the turns walk a deterministic plan: open_app, taps using
   card x_bounds, input_text, submit, optional post-result flow.
@@ -35,8 +32,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
-# MobileWorld loads this file via importlib.util.spec_from_file_location, so
-# the package directory is NOT on sys.path automatically. Add the repo root
+# The file→agent loader loads this file via importlib.util.spec_from_file_location,
+# so the package directory is NOT on sys.path automatically. Add the repo root
 # so the sibling modules under `agents/` resolve as a package.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -82,10 +79,10 @@ _SCRAPE_ENV = "RELAY_SCRAPE"  # set to "0" to disable uiautomator reply-text scr
 _NO_MANIFEST_ENV = "RELAY_NO_MANIFEST"
 
 # Defer the target-app cold-launch to the agent's FIRST predict instead of
-# pre-launching it before `mw test`. By then MobileWorld's framework cold-start
-# (Python import + uvicorn server boot + env validation + client connect, ~2.7s)
-# is already done — so it lands BEFORE the app launch, outside both the screen
-# recording and the task wall-clock. Set RELAY_AGENT_LAUNCH=1 (the scripts do).
+# pre-launching it. Subprocess startup, module import and IME activation all
+# happen before the first predict — so they land BEFORE the app launch, outside
+# both the screen recording and the task wall-clock. Set RELAY_AGENT_LAUNCH=1
+# (the scripts do).
 # Keep RELAY_SKIP_OPEN_APP=1 alongside it: the agent owns the launch, so the
 # planner must still skip its own open_app step. See CLAUDE.md §3.6.
 _AGENT_LAUNCH_ENV = "RELAY_AGENT_LAUNCH"
@@ -94,16 +91,15 @@ _AGENT_LAUNCH_ENV = "RELAY_AGENT_LAUNCH"
 # on tape) and stops/finalizes it at process exit via atexit.
 _RECORD_DIR_ENV = "RELAY_RECORD_DIR"
 # Where to write the framework-excluded task wall_clock.json. Defaults to the
-# live traj dir (traj_logs/user_task). Flow legs run with --log-file-root, so
-# their traj lives elsewhere; flow_runner sets this to that leg's user_task dir
-# so aggregate_metrics finds wall_clock.json next to the leg's traj.json.
+# live traj dir (traj_logs/user_task). Batch runners set this per task so
+# aggregate_metrics finds wall_clock.json next to that task's traj.json.
 _WALL_OUT_ENV = "RELAY_WALL_OUT"
 
-# Skip MobileWorld's post-step screencap for deterministic steps. RelayAgent's
+# Skip the runtime's post-step screencap for deterministic steps. RelayAgent's
 # plan is deterministic and most steps never read the incoming screenshot; the
 # ~0.85s screencap + ~0.2s settle after such a step is dead time. When on, the
-# agent tags those actions with action_json["skip_screenshot"] so the (patched)
-# MW client reuses the last real frame instead of re-capturing. Auto-enabled by
+# agent tags those actions with action_json["skip_screenshot"] so NativeEnv
+# reuses the last real frame instead of re-capturing. Auto-enabled by
 # `run_nl.py --record` (the screen video already covers the run). Default off.
 # See CLAUDE.md "录屏模式跳过每步截图".
 _SKIP_STEP_SCREENSHOT_ENV = "RELAY_SKIP_STEP_SCREENSHOT"
@@ -118,17 +114,17 @@ _BLIND_STEP_SLEEP = float(os.getenv("RELAY_BLIND_STEP_SLEEP", "0.15"))
 _VISION_STEP_KINDS = frozenset({"wait_for_reply"})
 
 # Inter-tick sleep on a wait_for_reply precheck skip. Keeps the poll loop from
-# busy-spinning while the reply streams, but stacks on top of MobileWorld's own
-# per-step settle (client step_wait_time + server WAIT sleep), so a large value
+# busy-spinning while the reply streams, but stacks on top of the runtime's own
+# per-step settle (step_wait_time + WAIT sleep), so a large value
 # just inflates every poll tick. 0.3s is enough to avoid a tight spin while
 # letting the next observe happen promptly. Tunable via RELAY_POLL_SKIP_SLEEP.
 _POLL_SKIP_SLEEP = float(os.getenv("RELAY_POLL_SKIP_SLEEP", "0.3"))
 
-# MobileWorld writes the active run under traj_logs/user_task/ (see CLAUDE.md).
+# The active run is written under traj_logs/user_task/ (see CLAUDE.md).
 # We append every LLM call into traj.json at top-level under "0".llm_calls so
-# the calls live alongside the per-step traj entries. MW's log_traj rewrites
-# the whole file each step but preserves unknown sibling keys, so the field
-# survives across step writes.
+# the calls live alongside the per-step traj entries. The per-step traj writer
+# rewrites the whole file each step but preserves unknown sibling keys, so the
+# field survives across step writes.
 _TRAJ_DIR = Path("traj_logs") / "user_task"
 
 _GROUNDING_SYSTEM = (
@@ -158,7 +154,7 @@ _NM_ADVANCE_SYSTEM = (
     "an in-app AI assistant. The assistant has replied and may show option cards "
     "(store choices, item specs, quantities). Your job is NOT to make real "
     "choices for the user — only to ACCEPT the assistant's recommended DEFAULTS "
-    "and advance the flow until the screen reaches the final human-confirmation "
+    "and advance the interaction until the screen reaches the final human-confirmation "
     "step, then STOP. Rules, in priority order:\n"
     "1. If ANY visible button would perform an IRREVERSIBLE action — pay, place/"
     "submit the order, confirm payment, confirm a ride or booking (labels like "
@@ -858,7 +854,8 @@ class RelayAgent(_MCPAgentBase):
         self._reply_precheck_disabled: bool = False
         self._reply_last_shot_hash: str | None = None
         self._reply_last_dump_text_hash: str | None = None
-        self._reply_stable_streak: int = 0
+        self._reply_text_stable_streak: int = 0
+        self._reply_empty_scrape_streak: int = 0
         self._reply_start_ts: float | None = None
         self._wait_text_start_ts: float | None = None
         self._last_agent_reply: str | None = None
@@ -880,8 +877,8 @@ class RelayAgent(_MCPAgentBase):
         self._permission_dismissed_count: int = 0
         # Deferred-launch / recording / task-clock state. The app cold-launch,
         # the screen recorder, and the wall-clock anchor are all established on
-        # the FIRST predict (see _begin_task_once) so MobileWorld's framework
-        # cold-start lands before them and is excluded from both the recording
+        # the FIRST predict (see _begin_task_once) so subprocess/import/IME
+        # startup lands before them and is excluded from both the recording
         # and wall_clock.json. _begin_task_once runs at most once per task.
         self.agent_launch: bool = os.getenv(_AGENT_LAUNCH_ENV, "0") == "1"
         self.record_dir: str | None = os.getenv(_RECORD_DIR_ENV) or None
@@ -944,7 +941,7 @@ class RelayAgent(_MCPAgentBase):
     def _append_llm_call(self, record: dict) -> None:
         """Append one LLM-call record to traj_logs/user_task/traj.json under
         log_data["0"]["llm_calls"]. Defensive: creates the bucket and stub
-        traj/tools fields so MW's first log_traj does not KeyError on them."""
+        traj/tools fields so the first traj write does not KeyError on them."""
         traj_path = _TRAJ_DIR / "traj.json"
         try:
             if not traj_path.exists():
@@ -954,7 +951,7 @@ class RelayAgent(_MCPAgentBase):
                     data = json.load(f)
             except json.JSONDecodeError:
                 # Either a fresh `{}` mid-write or a corrupted file. Skip this
-                # record rather than clobber MW's writer.
+                # record rather than clobber the traj writer.
                 return
             if not isinstance(data, dict):
                 return
@@ -1004,7 +1001,8 @@ class RelayAgent(_MCPAgentBase):
         self._reply_precheck_disabled = False
         self._reply_last_shot_hash = None
         self._reply_last_dump_text_hash = None
-        self._reply_stable_streak = 0
+        self._reply_text_stable_streak = 0
+        self._reply_empty_scrape_streak = 0
         self._reply_start_ts = None
         self._wait_text_start_ts = None
         self._last_agent_reply = None
@@ -1064,14 +1062,14 @@ class RelayAgent(_MCPAgentBase):
     def _begin_task_once(self) -> None:
         """First-predict hook: anchor the task wall-clock, optionally launch the
         target app, and optionally start the screen recorder — in that order, so
-        everything after MobileWorld's framework cold-start (already done by the
-        time predict is first called) is excluded from both the recording and
-        wall_clock.json. Idempotent: the body runs once per task.
+        subprocess/import/IME startup (already done by the time predict is first
+        called) is excluded from both the recording and wall_clock.json.
+        Idempotent: the body runs once per task.
 
-        atexit (fires when the `mw test` subprocess exits — on finished, on EOF
+        atexit (fires when the run_native subprocess exits — on finished, on EOF
         after a handoff ask_user, or on error) finalizes the recording and
-        writes wall_clock.json (phase="task", framework-excluded). The scripts
-        no longer write wall_clock.json themselves; this is the source of truth.
+        writes wall_clock.json (phase="task"). The scripts no longer write
+        wall_clock.json themselves; this is the source of truth.
         """
         if self._task_started:
             return
@@ -1160,8 +1158,8 @@ class RelayAgent(_MCPAgentBase):
         # System permission popup hook — runs BEFORE the planned step. If a
         # known permission controller is foreground we tap the most-permissive
         # Allow, return a no-op wait that does NOT advance the cursor, and let
-        # MW capture a fresh screenshot. Next predict re-enters cleanly with
-        # the popup gone. Bounded so a stuck dialog can't infinite-loop.
+        # the runtime capture a fresh screenshot. Next predict re-enters cleanly
+        # with the popup gone. Bounded so a stuck dialog can't infinite-loop.
         MAX_DISMISSALS = 8
         if (
             self.dismiss_permissions
@@ -1187,8 +1185,8 @@ class RelayAgent(_MCPAgentBase):
             self.cursor += 1
 
         # Look-ahead screencap skip: if the NEXT step the runner will feed a
-        # screenshot to is vision-independent, tell the (patched) MW client to
-        # skip its post-step screencap and reuse the last real frame. The next
+        # screenshot to is vision-independent, tell NativeEnv to skip its
+        # post-step screencap and reuse the last real frame. The next
         # step is plan[cursor] after advancing, or the same held step otherwise;
         # a plan-exhausted next step (→ finished) needs no screenshot either.
         if self.skip_step_screenshot:
@@ -1235,20 +1233,17 @@ class RelayAgent(_MCPAgentBase):
 
         if kind == "open_app":
             # Cold-launch policy: always force-stop before launching so the
-            # in-app agent observes a clean home surface. MobileWorld's
-            # `open_app` is launcher-tap-based and does NOT force-stop, so we
-            # do it ourselves. The run_test.py / flow_runner wrappers do the
-            # FULL cold-launch (force-stop + monkey LAUNCHER) before reaching
+            # in-app agent observes a clean home surface. The native runner does
+            # the FULL cold-launch (force-stop + monkey LAUNCHER) before reaching
             # this code path; duplicating force-stop here covers direct
-            # `mw test` invocations that bypass those wrappers — MobileWorld
-            # will perform the launcher tap itself via the returned action.
+            # invocations that bypass the runner-owned launch.
             pkg = p["package"]
             try:
                 force_stop(pkg)
             except Exception as e:  # pragma: no cover — best-effort
                 logger.warning(f"force-stop {pkg} failed (continuing): {e}")
-            # MobileWorld's open_app expects the launcher label (e.g. "千问"),
-            # not the package id. Prefer the card's embedded_agent.name as the
+            # The open_app action carries the launcher label (e.g. "千问"), not
+            # the package id. Prefer the card's embedded_agent.name as the
             # launcher label; fall back to app_name, then the package id.
             launcher_label = (
                 (self.card or {}).get("embedded_agent", {}).get("name")
@@ -1336,7 +1331,7 @@ class RelayAgent(_MCPAgentBase):
 
         if kind == "wait_text":
             # Poll uiautomator until `text` shows up or timeout elapses. Each
-            # call to _materialize is one tick of MobileWorld's step loop;
+            # call to _materialize is one tick of the runner's step loop;
             # we hold the cursor (advance=False) while waiting so subsequent
             # ticks re-enter this branch.
             target = p.get("text") or ""
@@ -1445,10 +1440,10 @@ class RelayAgent(_MCPAgentBase):
                     self._capture_idle = 0
                     return JSONAction(action_type="wait"), True, "capture done"
                 self._capture_scrolls += 1
-                # Issue our own larger-than-default swipe (MW's built-in
+                # Issue our own larger-than-default swipe (the built-in
                 # scroll is fixed at ~0.4*width vertical, which means many
-                # frames + many VLM calls). Then return a no-op so MW just
-                # captures the next screenshot.
+                # frames + many VLM calls). Then return a no-op so the runtime
+                # just captures the next screenshot.
                 swipe_down()
                 return (
                     JSONAction(action_type="wait"),
@@ -1456,57 +1451,80 @@ class RelayAgent(_MCPAgentBase):
                     f"capture scroll {self._capture_scrolls}/{max_capture_scrolls}",
                 )
 
-            # Phase 1: poll for done. Budget is WALL-CLOCK seconds, not poll
-            # count — each poll is a real VLM call (multiple seconds), so a
-            # poll-count budget under-reports actual latency wildly.
+            # Phase 1: decide when the in-app reply is COMPLETE, purely from
+            # uiautomator text-hash stability. Budget is wall-clock seconds.
+            #
+            # TODO(reply-done-vlm): we used to call the VLM here and trust its
+            # `done` flag. With qwen as the judge that was unreliable — it kept
+            # returning done=false on a stable, fully-rendered reply, so every
+            # long reply rode to the timeout ceiling. For now we do NOT ask the
+            # VLM at all: once the visible reply text stops changing for
+            # STABLE_DUMPS_FOR_DONE consecutive dumps we treat it as done and
+            # scrape the full text verbatim. The captured content always comes
+            # from the scrape (full node text), so this only changes WHEN we
+            # stop, never WHAT we return. Re-introduce a proper VLM
+            # confirmation later as an optional cross-check.
             if self._reply_start_ts is None:
                 self._reply_start_ts = time.monotonic()
             max_seconds = max(1, int(p.get("max_seconds", 30)))
             elapsed = time.monotonic() - self._reply_start_ts
 
-            # Two-stage pre-check before paying for a VLM call. Stage 1 is
-            # essentially free; stage 2 only fires when stage 1 says the
-            # screen is stable.
-            #
-            #  Stage 1 — screenshot hash diff over the message-area crop
-            #    (see _hash_screenshot_region). Streaming text → pixels change
-            #    → hash flips → SKIP both the dump and the VLM. This is the
-            #    common case during the first few seconds of a reply and
-            #    cuts the bulk of dump cost.
-            #
-            #  Stage 2 — once the screen has been stable for one tick,
-            #    uiautomator dump and HASH the visible text. Compare to the
-            #    previous dump's text hash:
-            #      - first dump (no baseline): fall through to VLM
-            #      - hash CHANGED: text is still growing → skip VLM
-            #      - hash STABLE: two consecutive dumps with identical text →
-            #        call VLM to confirm done + extract text
-            #    This replaces the old "look for 停止生成 marker" heuristic,
-            #    which was brittle (not every app has a stop button; some
-            #    apps' stop buttons stay around after generation completes).
-            #    Text-diff is app-agnostic and directly measures the signal
-            #    we actually care about.
-            #
-            # Hardening so a broken uiautomator can't strand us:
-            #  * CIRCUIT BREAKER — 2 consecutive dump failures disable the
-            #    stage-2 dump for the rest of this wait_for_reply; once the
-            #    screen is stable we go straight to VLM.
-            #  * WATCHDOG — force a VLM poll after MAX_SKIPS_BEFORE_FORCE
-            #    consecutive precheck skips, so an animated UI element that
-            #    keeps flipping the hash cannot block detection of done.
+            # 3 byte-identical dumps (pixel-stable + unchanged visible text) is
+            # well past any inter-token streaming gap, so we don't truncate a
+            # reply that briefly pauses mid-stream.
+            STABLE_DUMPS_FOR_DONE = 3
             MAX_DUMP_FAILS = 2
+            # Some apps render the reply in a WebView / canvas that isn't in the
+            # a11y tree: the text-hash stabilizes (on chrome) but the a11y
+            # scrape stays empty. When that happens we fall back to the VLM to
+            # read the frame verbatim (see the empty-scrape branch below), so a
+            # WebView reply — or the RELAY_SCRAPE=0 VLM-only baseline — is still
+            # captured instead of silently advancing empty-handed.
+            # An animated element (spinner, autoplay media, blinking cursor)
+            # flips the pixel hash forever; force a text dump after this many
+            # pixel-changed skips so it can't starve the text check.
             MAX_SKIPS_BEFORE_FORCE = 5
-            force_vlm = (
+
+            # Timeout safety net: text never stabilized (or dumps kept
+            # failing). Scrape whatever is on screen and advance.
+            if elapsed >= max_seconds:
+                text = None
+                if self.scrape_enabled:
+                    text = _extract_reply_text_from_dump(
+                        self._last_input_text, screen_h
+                    )
+                logger.warning(
+                    f"In-app agent reply text did not stabilize within "
+                    f"{max_seconds}s ({self._reply_polls} dump(s)); advancing "
+                    f"anyway (last text={text!r})"
+                )
+                self._last_agent_reply = text
+                self._reply_polls = 0
+                self._reply_precheck_skips = 0
+                self._reply_precheck_skips_since_vlm = 0
+                self._reply_dump_fail_streak = 0
+                self._reply_precheck_disabled = False
+                self._reply_last_shot_hash = None
+                self._reply_last_dump_text_hash = None
+                self._reply_text_stable_streak = 0
+                self._reply_empty_scrape_streak = 0
+                self._reply_start_ts = None
+                return JSONAction(action_type="wait"), True, "timeout"
+
+            force_dump = (
                 self._reply_precheck_skips_since_vlm >= MAX_SKIPS_BEFORE_FORCE
             )
-            if self.precheck_enabled and not force_vlm and elapsed < max_seconds:
-                # Stage 1: free screenshot hash.
+
+            # Stage 1 — free pixel-hash pre-skip. While the reply streams the
+            # pixels mutate, so we wait without paying for a dump. We do NOT
+            # reset the text-stable streak here: a pixel flip with unchanged
+            # text (e.g. a blinking cursor) must not block convergence — the
+            # next dump compares hashes and tells the truth.
+            if self.precheck_enabled and not force_dump:
                 shot_hash = _hash_screenshot_region(screenshot)
                 shot_changed = shot_hash != self._reply_last_shot_hash
                 self._reply_last_shot_hash = shot_hash
                 if shot_changed:
-                    # Don't even dump — pixels are mutating.
-                    self._reply_stable_streak = 0
                     self._reply_precheck_skips += 1
                     self._reply_precheck_skips_since_vlm += 1
                     time.sleep(_POLL_SKIP_SLEEP)
@@ -1518,149 +1536,138 @@ class RelayAgent(_MCPAgentBase):
                             f"(screen changed) @ {elapsed:.1f}s/{max_seconds}s"
                         ),
                     )
-                # Screen pixels are stable — but pixel-stability at 48×96
-                # downscale can miss small text growth. Stage 2 is the
-                # semantic check.
-                self._reply_stable_streak += 1
 
-                # Stage 2: dump and hash visible text. Skipped if breaker
-                # tripped — stable screens then go straight to VLM.
-                if not self._reply_precheck_disabled:
-                    text_hash = _dump_visible_text_hash()
-                    if text_hash is None:
-                        self._reply_dump_fail_streak += 1
-                        if self._reply_dump_fail_streak >= MAX_DUMP_FAILS:
-                            self._reply_precheck_disabled = True
-                            logger.warning(
-                                "wait_for_reply stage-2 dump disabled for "
-                                f"this wait — {self._reply_dump_fail_streak} "
-                                "consecutive dump failures; stable screens "
-                                "will go straight to VLM"
-                            )
-                    else:
-                        self._reply_dump_fail_streak = 0
-                        prev = self._reply_last_dump_text_hash
-                        self._reply_last_dump_text_hash = text_hash
-                        # Skip VLM only when we have a baseline AND the text
-                        # changed since last tick — that's the "still growing"
-                        # signal. First dump (no baseline) or unchanged text
-                        # → fall through to VLM (it's the authoritative done
-                        # judge; pixel-stable + text-stable is when it lands).
-                        if prev is not None and text_hash != prev:
-                            self._reply_precheck_skips += 1
-                            self._reply_precheck_skips_since_vlm += 1
-                            time.sleep(_POLL_SKIP_SLEEP)
-                            return (
-                                JSONAction(action_type="wait"),
-                                False,
-                                (
-                                    f"precheck skip #{self._reply_precheck_skips} "
-                                    f"(text still growing) "
-                                    f"@ {elapsed:.1f}s/{max_seconds}s"
-                                ),
-                            )
-
-            if force_vlm:
-                logger.info(
-                    f"wait_for_reply watchdog: forcing VLM poll after "
-                    f"{self._reply_precheck_skips_since_vlm} consecutive "
-                    "precheck skips"
+            # Circuit breaker: after repeated dump failures we can no longer
+            # measure stability — stop dumping and wait out the ceiling (the
+            # timeout branch above scrapes on the way out).
+            if self._reply_precheck_disabled:
+                self._reply_precheck_skips += 1
+                time.sleep(_POLL_SKIP_SLEEP)
+                return (
+                    JSONAction(action_type="wait"),
+                    False,
+                    (
+                        f"dump disabled; waiting out ceiling "
+                        f"@ {elapsed:.1f}s/{max_seconds}s"
+                    ),
                 )
-            done, text = self._poll_agent_reply(screenshot)
-            self._reply_polls += 1
+
+            # Stage 2 — pixels stable (or forced): dump + hash the visible text.
+            text_hash = _dump_visible_text_hash()
             self._reply_precheck_skips_since_vlm = 0
-            elapsed = time.monotonic() - self._reply_start_ts
-            # Trust `done` only if the VLM also produced text. If text is None,
-            # the VLM is telling us it cannot read any reply on screen — which
-            # almost always means generation has not actually finished. Keep
-            # polling until we either get text or hit the timeout.
-            if done and text:
-                # VLM said done and gave us a text snippet. Try to UPGRADE that
-                # text via direct uiautomator scrape — the VLM is asked to cap
-                # at 500 chars, and on long replies it summarizes the tail. The
-                # scrape returns the full visible text verbatim, no token cost.
-                if self.scrape_enabled:
-                    scraped = _extract_reply_text_from_dump(
-                        self._last_input_text, screen_h
+            if text_hash is None:
+                self._reply_dump_fail_streak += 1
+                self._reply_text_stable_streak = 0
+                if self._reply_dump_fail_streak >= MAX_DUMP_FAILS:
+                    self._reply_precheck_disabled = True
+                    logger.warning(
+                        "wait_for_reply text-hash dump disabled for this wait "
+                        f"— {self._reply_dump_fail_streak} consecutive dump "
+                        "failures; will wait out the timeout ceiling"
                     )
-                    if scraped and len(scraped) > len(text):
-                        logger.info(
-                            f"reply text upgrade: VLM={len(text)} chars → "
-                            f"uiautomator scrape={len(scraped)} chars"
-                        )
-                        text = scraped
-                self._last_agent_reply = text
-                logger.info(
-                    f"In-app agent reply DONE after {self._reply_polls} poll(s) "
-                    f"({self._reply_precheck_skips} precheck skip(s) saved) "
-                    f"/ {elapsed:.1f}s; text={text!r}"
+                time.sleep(_POLL_SKIP_SLEEP)
+                return (
+                    JSONAction(action_type="wait"),
+                    False,
+                    f"dump failed @ {elapsed:.1f}s/{max_seconds}s",
                 )
-                self._reply_polls = 0
-                self._reply_precheck_skips = 0
-                self._reply_precheck_skips_since_vlm = 0
-                self._reply_dump_fail_streak = 0
-                self._reply_precheck_disabled = False
-                self._reply_last_shot_hash = None
-                self._reply_last_dump_text_hash = None
-                self._reply_stable_streak = 0
-                self._reply_start_ts = None
-                if capture_full:
-                    self._capture_phase = "scrolling"
-                    self._captured_chunks = [text]
-                    self._capture_scrolls = 0
-                    self._capture_idle = 0
-                    swipe_down()
-                    return (
-                        JSONAction(action_type="wait"),
-                        False,
-                        "done; entering full-reply capture",
-                    )
-                return JSONAction(action_type="wait"), True, f"done; text={text!r}"
-            if done and not text:
-                logger.warning(
-                    f"VLM reported done but returned no text on poll "
-                    f"{self._reply_polls} ({elapsed:.1f}s/{max_seconds}s) — "
-                    "distrusting, continuing"
+
+            self._reply_dump_fail_streak = 0
+            self._reply_polls += 1
+            prev = self._reply_last_dump_text_hash
+            self._reply_last_dump_text_hash = text_hash
+            if prev is not None and text_hash == prev:
+                self._reply_text_stable_streak += 1
+            else:
+                # First dump, or text changed since the last dump (still
+                # growing) — restart the stability count. New text also means
+                # the screen is alive, so reset the empty-scrape giveup count.
+                self._reply_text_stable_streak = 1
+                self._reply_empty_scrape_streak = 0
+
+            if self._reply_text_stable_streak < STABLE_DUMPS_FOR_DONE:
+                time.sleep(_POLL_SKIP_SLEEP)
+                return (
+                    JSONAction(action_type="wait"),
+                    False,
+                    (
+                        f"text stable {self._reply_text_stable_streak}/"
+                        f"{STABLE_DUMPS_FOR_DONE} @ {elapsed:.1f}s/{max_seconds}s "
+                        f"(+{self._reply_precheck_skips} precheck skips)"
+                    ),
                 )
-            if elapsed >= max_seconds:
-                # Same upgrade as the happy path — VLM truncates at ~500 chars
-                # and on long-running replies that hit the timeout the scrape
-                # almost always has more (and verbatim) content.
-                if self.scrape_enabled:
-                    scraped = _extract_reply_text_from_dump(
-                        self._last_input_text, screen_h
-                    )
-                    if scraped and (not text or len(scraped) > len(text)):
-                        logger.info(
-                            f"reply text upgrade on timeout: "
-                            f"VLM={len(text) if text else 0} chars → "
-                            f"uiautomator scrape={len(scraped)} chars"
-                        )
-                        text = scraped
-                logger.warning(
-                    f"In-app agent reply did not finish within {max_seconds}s "
-                    f"({self._reply_polls} poll(s)); advancing anyway "
-                    f"(last text={text!r})"
+
+            # Text has been byte-identical for STABLE_DUMPS_FOR_DONE dumps →
+            # reply is complete. Scrape the full visible text verbatim.
+            text = None
+            text_source = "scrape"
+            if self.scrape_enabled:
+                text = _extract_reply_text_from_dump(
+                    self._last_input_text, screen_h
                 )
-                self._last_agent_reply = text
-                self._reply_polls = 0
-                self._reply_precheck_skips = 0
-                self._reply_precheck_skips_since_vlm = 0
-                self._reply_dump_fail_streak = 0
-                self._reply_precheck_disabled = False
-                self._reply_last_shot_hash = None
-                self._reply_last_dump_text_hash = None
-                self._reply_stable_streak = 0
-                self._reply_start_ts = None
-                return JSONAction(action_type="wait"), True, "timeout"
-            return (
-                JSONAction(action_type="wait"),
-                False,
-                (
-                    f"poll {self._reply_polls} @ {elapsed:.1f}s/{max_seconds}s "
-                    f"(+{self._reply_precheck_skips} precheck skips)"
-                ),
+            if not text:
+                # Stable screen but the a11y scrape came up empty. Two cases
+                # land here and look identical from uiautomator: (a) the reply
+                # hasn't rendered yet, (b) it lives in a non-a11y WebView/canvas
+                # we can't scrape — and RELAY_SCRAPE=0 (the VLM-only baseline)
+                # reaches here on EVERY reply by construction. Fall back to the
+                # VLM to read the frame verbatim. The text hash is already
+                # stable, so we don't trust the VLM's `done` flag (qwen is
+                # unreliable there — see TODO(reply-done-vlm)); we only use the
+                # text it scrapes off the screen.
+                _vlm_done, vlm_text = self._poll_agent_reply(screenshot)
+                if vlm_text:
+                    text = vlm_text
+                    text_source = "vlm_fallback" if self.scrape_enabled else "vlm"
+            if not text:
+                # Neither the a11y scrape nor the VLM could read anything yet.
+                # Don't report success — keep polling. The reply may still be
+                # appearing (case a); if it truly never becomes readable the
+                # timeout branch above makes the honest empty-handed call once
+                # the ceiling is hit, so an answered task never silently
+                # advances with no captured reply.
+                self._reply_empty_scrape_streak += 1
+                self._reply_text_stable_streak = 0
+                time.sleep(_POLL_SKIP_SLEEP)
+                return (
+                    JSONAction(action_type="wait"),
+                    False,
+                    (
+                        f"text stable but empty scrape+vlm "
+                        f"(round {self._reply_empty_scrape_streak}) @ "
+                        f"{elapsed:.1f}s/{max_seconds}s; waiting out ceiling"
+                    ),
+                )
+
+            logger.info(
+                f"In-app agent reply DONE (text stable {STABLE_DUMPS_FOR_DONE} "
+                f"dumps, source={text_source}) after {self._reply_polls} "
+                f"dump(s) / {self._reply_precheck_skips} precheck skip(s) / "
+                f"{elapsed:.1f}s; text={text!r}"
             )
+            self._last_agent_reply = text
+            self._reply_polls = 0
+            self._reply_precheck_skips = 0
+            self._reply_precheck_skips_since_vlm = 0
+            self._reply_dump_fail_streak = 0
+            self._reply_precheck_disabled = False
+            self._reply_last_shot_hash = None
+            self._reply_last_dump_text_hash = None
+            self._reply_text_stable_streak = 0
+            self._reply_empty_scrape_streak = 0
+            self._reply_start_ts = None
+            if capture_full:
+                self._capture_phase = "scrolling"
+                self._captured_chunks = [text]
+                self._capture_scrolls = 0
+                self._capture_idle = 0
+                swipe_down()
+                return (
+                    JSONAction(action_type="wait"),
+                    False,
+                    "done; entering full-reply capture",
+                )
+            return JSONAction(action_type="wait"), True, f"done; text={text!r}"
 
         if kind == "tap_unless_present":
             # Probe via uiautomator only (cheap + precise); fall through to
@@ -1803,12 +1810,9 @@ class RelayAgent(_MCPAgentBase):
 
         if kind == "handoff":
             self._maybe_persist_reply()
-            # TODO(phase-B): same-session handoff round-trip. Today this emits
-            # a terminal ask_user; under a flow leg, stdin=EOF ends the
-            # subprocess and control returns to the flow (phase A). For phase B
-            # (resume the SAME conversation after the user answers), block here
-            # reading the answer the flow pipes back (see the matching
-            # flow_runner.py TODO) and continue predict() instead of ending.
+            # Today this emits a terminal ask_user. In non-interactive batch runs,
+            # stdin=EOF ends the subprocess after the reply has been persisted.
+            # An interactive caller can answer and continue in the same task.
             reply_note = (
                 f"\n\nAgent reply captured:\n{self._last_agent_reply}"
                 if self._last_agent_reply
@@ -1885,9 +1889,9 @@ class RelayAgent(_MCPAgentBase):
 
     def _maybe_persist_reply(self) -> None:
         """Dump the captured in-app agent reply as JSON to:
-          1. RELAY_REPLY_OUT (if set) — for parent processes like FlowRunner;
-          2. <MW traj dir>/agent_reply.json — always, so the reply lives next
-             to traj.json / screenshots and survives MW's per-run backup of
+          1. RELAY_REPLY_OUT (if set) — for parent batch/NL runners;
+          2. <traj dir>/agent_reply.json — always, so the reply lives next
+             to traj.json / screenshots and survives the per-run backup of
              traj_logs/user_task/. Best-effort; never raises."""
         payload = json.dumps(
             {
@@ -1900,8 +1904,8 @@ class RelayAgent(_MCPAgentBase):
         env_path = os.getenv(_REPLY_OUT_ENV)
         if env_path:
             targets.append(Path(env_path))
-        # MobileWorld dumps the active run under traj_logs/user_task/ (see
-        # CLAUDE.md). Drop the reply there too so it's discoverable by default.
+        # The active run lives under traj_logs/user_task/ (see CLAUDE.md).
+        # Drop the reply there too so it's discoverable by default.
         traj_dir = Path("traj_logs") / "user_task"
         if traj_dir.exists():
             targets.append(traj_dir / "agent_reply.json")
@@ -1936,7 +1940,10 @@ class RelayAgent(_MCPAgentBase):
             model=self.model_name,
             messages=messages,
             temperature=0.0,
-            max_tokens=600,
+            # qwen is a thinking model: a complex reply screen burns the answer
+            # budget on reasoning and returns null content. 600 was too tight
+            # and timed the whole poll loop out; 2000 leaves room to finish.
+            max_tokens=2000,
         )
         if not raw:
             logger.warning("Reply-watch LLM returned empty; treating as 'not done'")

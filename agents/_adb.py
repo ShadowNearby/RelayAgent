@@ -1,9 +1,9 @@
 """Shared ADB helpers — cold-launch, force-stop, base command builder.
 
 Cold-launch policy (see CLAUDE.md / feedback_cold_launch_always.md): every
-app open MUST be preceded by force-stop so MobileWorld's first observation
-is the app's clean home surface — not a stale modal / chat thread / session
-sheet from the previous run.
+app open MUST be preceded by force-stop so the first observation is the
+app's clean home surface — not a stale modal / chat thread / session sheet
+from the previous run.
 
 `RELAY_ANDROID_SERIAL` selects a specific device in multi-device setups
 and is honored by every helper here.
@@ -40,7 +40,7 @@ def screencap(timeout: float = 5.0):
     """Grab a fresh device screenshot as a PIL.Image (or None on failure).
 
     Used when RELAY_SKIP_STEP_SCREENSHOT is on and a step needs vision after
-    all (tap_text / nm_ground_tap VLM fallback): the incoming MW observation
+    all (tap_text / nm_ground_tap VLM fallback): the incoming observation
     may be a reused stale frame, so we capture our own current frame here.
     """
     import io

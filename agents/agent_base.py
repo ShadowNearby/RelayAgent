@@ -1,13 +1,10 @@
 """Agent base classes — OpenAI client + token accounting + lifecycle.
 
-Ported from MobileWorld's `agents/base.py` so RelayAgent no longer subclasses a
-`mobile_world` class. Behaviour is preserved verbatim — the same
-`build_openai_client`, the same `openai_chat_completions_create` (including the
+`BaseAgent` + `MCPAgent`, which RelayAgent subclasses. Provides
+`build_openai_client`, `openai_chat_completions_create` (including the
 claude/gpt/o1/kimi parameter quirks and the max_tokens→max_completion_tokens
-retry), the same running-total token accounting RelayAgent reads via
+retry), and the running-total token accounting RelayAgent reads via
 `self._total_*` and `get_total_token_usage()`.
-
-The only change from the upstream file is the `JSONAction` import (now local).
 """
 from __future__ import annotations
 
@@ -116,17 +113,22 @@ class BaseAgent(ABC):
                 )
 
                 self._log_openai_usage(response)
-                final_content = response.choices[0].message.content.strip()
+                message = response.choices[0].message
+                # content can come back as None (not just ""): qwen and other
+                # thinking models return a null content when the answer budget
+                # is consumed by reasoning. Treat that as empty rather than
+                # crashing on None.strip().
+                final_content = (message.content or "").strip()
+                reasoning = getattr(message, "reasoning_content", None)
                 # for k2.5, we keep its reasoning_content
-                if (
-                    "kimi-k" in model.lower()
-                    and hasattr(response.choices[0].message, "reasoning_content")
-                    and response.choices[0].message.reasoning_content
-                ):
-                    final_content = (
-                        f"<think>{response.choices[0].message.reasoning_content.strip()}"
-                        f"</think>\n{final_content}"
-                    )
+                if "kimi-k" in model.lower() and reasoning:
+                    final_content = f"<think>{reasoning.strip()}</think>\n{final_content}"
+                # qwen is a thinking model: when finish_reason=length the visible
+                # content is null but the actual answer (incl. any fenced JSON)
+                # is in reasoning_content. Fall back to it so callers get
+                # something parseable instead of None.
+                elif "qwen" in model.lower() and not final_content and reasoning:
+                    final_content = reasoning.strip()
                 return final_content
             except Exception as e:
                 error_msg = str(e)
