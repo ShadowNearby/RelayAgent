@@ -257,7 +257,7 @@ class FlowPlanner:
         # Rule 4: a mid-flow handoff_to_user_required leg must be followed by an
         # ask_user step. A handoff leg that is the LAST step is fine as a
         # terminal — its own in-app handoff is the user's final confirmation
-        # (matches the hand-written xhs_to_amap_place flow ending on hail_ride).
+        # (e.g. a plan that ends on hailing a ride).
         cap_meta = self._caps.get(app, {}).get(cap, {}) if app else {}
         if cap_meta.get("handoff_to_user_required") and idx != len(steps) - 1:
             nxt = steps[idx + 1]

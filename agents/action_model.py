@@ -1,13 +1,8 @@
 """Action data model — the wire format predict() returns and the runtime executes.
 
-Ported from MobileWorld's `runtime/utils/models.py` (the `JSONAction` model and
-the action-type string constants) so RelayAgent no longer imports `mobile_world`.
-Kept field-for-field identical — `action.model_dump(exclude_none=True)`,
-`action.action_json`, the validators and `__eq__` — so the agent and the native
-runtime behave exactly as they did on the mw `JSONAction`.
-
-Only the pieces the agent path actually uses are kept; mw's FastAPI request
-models, Docker models and the giant package↔label maps are intentionally dropped.
+The `JSONAction` model and the action-type string constants. The agent and the
+native runtime rely on `action.model_dump(exclude_none=True)`,
+`action.action_json`, the validators and `__eq__`, so those are kept stable.
 """
 from __future__ import annotations
 
@@ -15,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, field_validator
 
-# Action type constants (string values match mw's wire format byte-for-byte).
+# Action type constants (string values are the action wire format).
 ANSWER = "answer"
 CLICK = "click"
 DOUBLE_TAP = "double_tap"

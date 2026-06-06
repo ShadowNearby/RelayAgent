@@ -3,7 +3,7 @@
 Steps are deliberately semantic, not raw JSONActions, because text-based
 selectors need runtime visual grounding from the current screenshot. The
 adapter (`relay_agent.py`) walks this list and turns each step into a
-MobileWorld JSONAction at predict() time.
+`JSONAction` at predict() time.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def _compile_step(raw: dict) -> Step | None:
         return Step(
             "wait_for_reply",
             {"max_seconds": int(w.get("max_seconds", 60))},
-            note="agent reply (VLM-polled)",
+            note="agent reply (text-hash polled)",
         )
     logger.warning(
         f"Unknown step kind in card (no handler matched): {list(raw.keys())!r} "
@@ -111,8 +111,8 @@ def build_plan(
 
     plan: list[Step] = []
 
-    # Caller (e.g. scripts/run_test.py) may already have cold-launched
-    # the app before invoking MobileWorld. In that case we skip the
+    # Caller (e.g. scripts/run_native.py) may already have cold-launched
+    # the app before invoking the agent. In that case we skip the
     # redundant open_app + settle wait at the top of the plan.
     if not skip_open_app:
         plan.append(Step("open_app", {"package": card["app_id"]}, note="cold-launch"))
@@ -185,7 +185,7 @@ def build_plan(
         Step(
             "wait_for_reply",
             wait_params,
-            note="agent reply (VLM-polled)",
+            note="agent reply (text-hash polled)",
         )
     )
 

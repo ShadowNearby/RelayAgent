@@ -42,7 +42,7 @@ def find_traj_files(path: Path) -> list[Path]:
 
 
 def wall_seconds(run_dir: Path) -> float | None:
-    """Read wall_clock.json dropped by run_test.py / flow_runner (RELAY_TIMING=1)."""
+    """Read wall_clock.json dropped by native runners (RELAY_TIMING=1)."""
     cand = run_dir / "wall_clock.json"
     if cand.exists():
         try:
@@ -106,9 +106,9 @@ def aggregate(traj_path: Path) -> dict:
                     out["by_purpose"][purpose]["calls"] += 1
                     out["by_purpose"][purpose]["tokens"] += tot
         else:
-            # Flow sub-runs (mw test via --log-file-root) write only the
-            # aggregate token_usage, not per-call llm_calls. Fall back to it
-            # for totals; per-purpose breakdown is unavailable (left at 0).
+            # Some legacy runs write only aggregate token_usage, not
+            # per-call llm_calls. Fall back to it for totals; per-purpose
+            # breakdown is unavailable (left at 0).
             tu = trial.get("token_usage") or {}
             out["prompt_tokens"] += tu.get("prompt_tokens", 0) or 0
             out["completion_tokens"] += tu.get("completion_tokens", 0) or 0

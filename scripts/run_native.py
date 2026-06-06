@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""Run RelayAgent against a goal WITHOUT MobileWorld's server/runner.
+"""Run RelayAgent against a goal — direct-adb native runtime, no server.
 
-Drop-in alternative to scripts/run_test.py for A/B'ing the execution substrate.
-Same agent (agents/relay_agent.py), same JSONAction, same deferred-launch /
-wall-clock semantics — but the actions predict() returns are executed by direct
-`adb` calls (agents/native_runtime.py) instead of an HTTP POST to mw's uvicorn
-server, and the obs→predict→execute loop runs in-process instead of `mw test`.
+The single-app entry point. Loads agents/relay_agent.py, and the actions
+predict() returns are executed by direct `adb` calls
+(agents/native_runtime.py) in an in-process obs→predict→execute loop.
 
 Usage:
     scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
     scripts/run_native.py com.autonavi.minimap "帮我导航回家" --max-step 40
 
-The task wall-clock the agent writes to traj_logs/user_task/wall_clock.json is
-directly comparable to the mw path's (both anchor at the agent's first predict).
+The agent writes the task wall-clock to traj_logs/user_task/wall_clock.json,
+anchored at its first predict.
 """
 from __future__ import annotations
 
@@ -51,8 +49,8 @@ def load_dotenv(path: Path) -> dict[str, str]:
 
 
 def _rotate_traj_dir() -> None:
-    """Mirror mw's startup rotation: move a prior user_task/ to a timestamped
-    backup so this run's output is always in traj_logs/user_task/ (see CLAUDE.md
+    """Startup rotation: move a prior user_task/ to a timestamped backup so
+    this run's output is always in traj_logs/user_task/ (see CLAUDE.md
     'Trajectory 日志目录'). Then seed an empty traj.json so the agent's
     _append_llm_call has a file to append to."""
     if TRAJ_DIR.exists():
@@ -67,10 +65,9 @@ def _rotate_traj_dir() -> None:
 
 
 def _load_agent_class(path: Path):
-    """Minimal file→agent-class loader (mw registry's logic, without importing
-    its 8 heavy agent implementations). Picks the alphabetically-first BaseAgent
-    subclass — the deliberate alias `_MCPAgentBase` sorts after `RelayAgent` so
-    RelayAgent wins (see relay_agent.py header)."""
+    """Minimal file→agent-class loader. Picks the alphabetically-first
+    BaseAgent subclass — the deliberate alias `_MCPAgentBase` sorts after
+    `RelayAgent` so RelayAgent wins (see relay_agent.py header)."""
     from agents.agent_base import BaseAgent
 
     spec = importlib.util.spec_from_file_location(path.stem, str(path))
@@ -103,10 +100,6 @@ def main() -> int:
                    help="Per-step settle before screenshot (s); else RELAY_STEP_WAIT/0.2")
     p.add_argument("--keep-ime", action="store_true",
                    help="Do not restore the device IME at exit (leave AdbKeyboard active)")
-    # Accepted-and-ignored for drop-in compatibility with callers that used to
-    # forward mw-test flags (the native path has no server and a fixed traj dir).
-    p.add_argument("--aw_host", "--aw-host", dest="aw_host", help=argparse.SUPPRESS)
-    p.add_argument("--log-file-root", dest="log_file_root", help=argparse.SUPPRESS)
     args, unknown = p.parse_known_args()
     if unknown:
         print(f"▶ [native] ignoring unrecognized args: {unknown}", file=sys.stderr)
@@ -123,15 +116,15 @@ def main() -> int:
     if missing:
         sys.exit(f"Missing required config: {', '.join(missing)}. Set in .env or via flags.")
 
-    # Populate env BEFORE the agent module is loaded/constructed. Same contract
-    # as run_test.py: the agent owns the deferred cold-launch and the planner
-    # skips its own open_app. .env is the lowest layer; shell env wins.
+    # Populate env BEFORE the agent module is loaded/constructed: the agent
+    # owns the deferred cold-launch and the planner skips its own open_app.
+    # .env is the lowest layer; shell env wins.
     for k, v in env_vars.items():
         os.environ.setdefault(k, v)
     os.environ["RELAY_TARGET_APP"] = args.app
     os.environ["RELAY_SKIP_OPEN_APP"] = "1"
     os.environ["RELAY_AGENT_LAUNCH"] = "1"
-    os.environ.setdefault("MW_WAIT_SECONDS", "0.2")
+    os.environ.setdefault("RELAY_WAIT_SECONDS", "0.2")
 
     _rotate_traj_dir()
 
@@ -150,7 +143,7 @@ def main() -> int:
 
     print(
         f"▶ [native] RELAY_TARGET_APP={args.app}  goal={args.goal!r}  model={model}  "
-        f"(no mw server; direct adb)",
+        f"(direct adb)",
         file=sys.stderr,
     )
 

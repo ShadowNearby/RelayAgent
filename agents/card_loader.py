@@ -1,6 +1,6 @@
 """Card loading + x_bounds device remapping.
 
-Single reader for the manifest schema — used by the MobileWorld adapter
+Single reader for the manifest schema — used by the RelayAgent adapter
 and any future routing tools.
 """
 
@@ -22,7 +22,7 @@ def load_all_cards(manifests_dir: Path | None = None) -> list[dict[str, Any]]:
     d = manifests_dir or MANIFESTS_DIR
     cards = []
     for path in sorted(d.glob("*.yaml")):
-        # Skip underscore-prefixed names (e.g. _flows/, _draft.yaml) — they
+        # Skip underscore-prefixed names (e.g. _draft.yaml) — they
         # are non-card content stored alongside manifests by convention.
         if path.name.startswith("_"):
             continue

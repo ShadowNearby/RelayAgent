@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
-"""Run a task from a single natural-language sentence.
+"""Route one natural-language request to a single app capability.
 
-Reads every app manifest under `manifests/` and every flow YAML under
-`manifests/_flows/`, summarizes their functional surface, and asks the
-text LLM to pick the best match for the user's sentence:
-
-  - a flow (multi-app cowork) — dispatched via FlowRunner with --nl, OR
-  - a single app + capability — dispatched via `mw test` with the
-    capability pinned through RELAY_FORCE_CAPABILITY.
+Reads every app manifest under `manifests/`, summarizes their functional
+surface, asks the text LLM to pick the best app + capability, then dispatches
+that request through `scripts/run_native.py` with the capability pinned via
+environment variables.
 
 Usage:
     scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
-    scripts/run_nl.py "在上海找三家评价好的小众书店，挑一家打车过去"
+    scripts/run_nl.py "帮我找一台适合学生的平板电脑，预算2000以内"
 
-Any args after a literal `--` are forwarded to the underlying runner
-(FlowRunner forwards them to each `mw test`; the single-app path
-forwards them to `mw test` directly).
+Any args after a literal `--` are forwarded to `run_native.py`.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,18 +31,42 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agents import _recorder  # noqa: E402
-from agents.flow_runner import (  # noqa: E402
-    FlowRunner,
-    _load_dotenv,
-    _parse_fenced_json,
-)
-
 MANIFEST_DIR = REPO_ROOT / "manifests"
-FLOW_DIR = MANIFEST_DIR / "_flows"
 ENV_FILE = REPO_ROOT / ".env"
-# Single-app dispatch goes through the direct-adb native runner (no mw server).
 RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
+
+_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+# --------------------------------------------------------------------------- #
+# small helpers
+# --------------------------------------------------------------------------- #
+
+
+def _load_dotenv(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        out[k.strip()] = v.strip().strip("'\"")
+    return out
+
+
+def _parse_fenced_json(text: str) -> dict[str, Any]:
+    m = _FENCE_RE.search(text or "")
+    payload = m.group(1) if m else text
+    data = json.loads(payload)
+    if not isinstance(data, dict):
+        raise ValueError(f"expected JSON object, got {type(data).__name__}")
+    return data
+
+
+def _clean(s: Any) -> str:
+    return " ".join(str(s or "").split())
 
 
 # --------------------------------------------------------------------------- #
@@ -54,12 +74,8 @@ RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
 # --------------------------------------------------------------------------- #
 
 
-def _clean(s: Any) -> str:
-    return " ".join(str(s or "").split())
-
-
 def build_catalog() -> dict[str, Any]:
-    """Compact JSON-able view of available apps and flows for the router LLM."""
+    """Compact JSON-able view of available apps for the router LLM."""
     apps: list[dict[str, Any]] = []
     for path in sorted(MANIFEST_DIR.glob("*.yaml")):
         try:
@@ -85,29 +101,7 @@ def build_catalog() -> dict[str, Any]:
             "capabilities": caps,
         })
 
-    flows: list[dict[str, Any]] = []
-    for path in sorted(FLOW_DIR.glob("*.yaml")):
-        try:
-            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except yaml.YAMLError as e:
-            logger.warning(f"skip {path.name}: {e}")
-            continue
-        inputs = {}
-        for name, spec in (doc.get("inputs") or {}).items():
-            inputs[name] = {
-                "type": spec.get("type", "string"),
-                "description": _clean(spec.get("description")),
-                "default": spec.get("default"),
-            }
-        flows.append({
-            "flow_id": doc.get("flow_id"),
-            "path": str(path.relative_to(REPO_ROOT)),
-            "description": _clean(doc.get("description")),
-            "apps_required": [a.get("app_id") for a in (doc.get("apps_required") or [])],
-            "inputs": inputs,
-        })
-
-    return {"apps": apps, "flows": flows}
+    return {"apps": apps}
 
 
 # --------------------------------------------------------------------------- #
@@ -115,25 +109,20 @@ def build_catalog() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-_ROUTER_SYSTEM = (
-    "You route a user's natural-language request to ONE of the available "
-    "executors. Two kinds exist:\n"
-    "  - flow: a multi-app cowork pipeline. Pick this when the request "
-    "spans two apps, or when discovery + action belong to different apps.\n"
-    "  - app:  a single app+capability invocation. Pick this for any "
-    "in-app task that a single embedded agent can complete.\n\n"
-    "Return ONE JSON object inside a ```json``` fence with this shape:\n"
-    "  {\"kind\": \"flow\", \"flow_id\": \"<id>\", \"reason\": \"...\"}\n"
-    "  {\"kind\": \"app\", \"app_id\": \"<id>\", \"capability_id\": \"<id>\", "
-    "\"goal\": \"<sentence to give the in-app agent, rewritten if helpful>\", "
-    "\"reason\": \"...\"}\n"
-    "No prose outside the fence. Pick the closest match; do NOT invent ids."
-)
+_ROUTER_SYSTEM = """You route a user's natural-language request to exactly one available mobile app capability.
+
+Pick the closest app and capability from the catalog. Do not invent ids.
+
+Return ONE JSON object inside a ```json``` fence with this shape:
+  {"kind": "app", "app_id": "<id>", "capability_id": "<id>", "goal": "<sentence to give the in-app agent, rewritten if helpful>", "reason": "..."}
+
+No prose outside the fence.
+"""
 
 
 def route(nl: str, catalog: dict[str, Any], llm: OpenAI, model: str) -> dict[str, Any]:
     user = (
-        "Available executors:\n"
+        "Available app capabilities:\n"
         f"{json.dumps(catalog, ensure_ascii=False, indent=2)}\n\n"
         f"User request:\n{nl}\n\n"
         "Return the routing JSON now."
@@ -150,8 +139,8 @@ def route(nl: str, catalog: dict[str, Any], llm: OpenAI, model: str) -> dict[str
     raw = (resp.choices[0].message.content or "").strip()
     logger.debug(f"router raw reply: {raw}")
     data = _parse_fenced_json(raw)
-    if not isinstance(data, dict) or "kind" not in data:
-        raise RuntimeError(f"router returned malformed JSON: {raw}")
+    if data.get("kind") != "app":
+        raise RuntimeError(f"router returned unsupported kind: {data!r}")
     return data
 
 
@@ -160,27 +149,11 @@ def route(nl: str, catalog: dict[str, Any], llm: OpenAI, model: str) -> dict[str
 # --------------------------------------------------------------------------- #
 
 
-def dispatch_flow(decision: dict, nl: str, catalog: dict, extra_mw_args: list[str]) -> int:
-    flow_id = decision.get("flow_id")
-    match = next((f for f in catalog["flows"] if f["flow_id"] == flow_id), None)
-    if not match:
-        raise SystemExit(f"router picked unknown flow_id={flow_id!r}")
-    flow_path = (REPO_ROOT / match["path"]).resolve()
-    logger.info(f"dispatch flow → {flow_path.name}  (reason: {decision.get('reason')})")
-    runner = FlowRunner(
-        flow_path=flow_path,
-        nl_request=nl,
-        extra_mw_args=extra_mw_args,
-    )
-    runner.run()
-    return 0
-
-
 def dispatch_app(
     decision: dict,
     catalog: dict,
     env: dict[str, str],
-    extra_mw_args: list[str],
+    extra_args: list[str],
 ) -> int:
     app_id = decision.get("app_id")
     capability = decision.get("capability_id")
@@ -196,14 +169,10 @@ def dispatch_app(
         raise SystemExit("router did not produce a goal for the app step")
 
     logger.info(
-        f"dispatch app → {app_id}  capability={capability!r}  "
+        f"dispatch app -> {app_id}  capability={capability!r}  "
         f"goal={goal!r}  (reason: {decision.get('reason')})"
     )
 
-    # Cold-launch is deferred to the agent's first predict (RELAY_AGENT_LAUNCH)
-    # so MobileWorld's framework cold-start lands before the launch — outside
-    # both the screen recording and the task wall-clock. RELAY_RECORD_DIR (if
-    # set by main for --record) is inherited via os.environ.
     child_env = {
         **env,
         **os.environ,
@@ -215,10 +184,12 @@ def dispatch_app(
         child_env["RELAY_FORCE_CAPABILITY"] = capability
         child_env["RELAY_INVOCATION_TEXT"] = goal
 
-    # run_native reads LLM_* + RELAY_* from the child env; app is positional.
     cmd = [
-        sys.executable, str(RUN_NATIVE), app_id, goal,
-        *extra_mw_args,
+        sys.executable,
+        str(RUN_NATIVE),
+        app_id,
+        goal,
+        *extra_args,
     ]
     return subprocess.call(cmd, cwd=REPO_ROOT, env=child_env)
 
@@ -246,9 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         env[k] = v
 
     catalog = build_catalog()
-    logger.info(
-        f"catalog: {len(catalog['apps'])} apps, {len(catalog['flows'])} flows"
-    )
+    logger.info(f"catalog: {len(catalog['apps'])} apps")
     llm = OpenAI(base_url=env["LLM_BASE_URL"], api_key=env["LLM_API_KEY"])
     decision = route(args.nl, catalog, llm, env["LLM_MODEL"])
     print(json.dumps(decision, ensure_ascii=False, indent=2))
@@ -256,10 +225,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    # No server: single-app and each flow leg run as direct-adb run_native
-    # subprocesses. Extra args are forwarded to run_native verbatim.
-    kind = decision.get("kind")
-    rec = None
     if args.record is not None:
         from datetime import datetime
         out_dir = (
@@ -267,34 +232,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.record
             else REPO_ROOT / "traj_logs" / "recordings" / datetime.now().strftime("%Y%m%d_%H%M%S")
         )
-        # The video already covers the run, so per-step screenshots are
-        # redundant; auto-enable the deterministic-step screencap skip (child
-        # subprocesses inherit it via os.environ). Honor an explicit override.
         os.environ.setdefault("RELAY_SKIP_STEP_SCREENSHOT", "1")
-        logger.info("recording mode → RELAY_SKIP_STEP_SCREENSHOT=1")
-        if kind == "app":
-            # Single-app run: the agent owns the recorder so it starts at the
-            # deferred app-launch (first predict), AFTER MobileWorld's framework
-            # cold-start — keeping that ~2.7s off the tape. Passed via env.
-            os.environ["RELAY_RECORD_DIR"] = str(out_dir)
-            logger.info(f"screen recording (agent-owned, framework-excluded) → {out_dir}")
-        else:
-            # A flow spans multiple `mw test` subprocesses (one per leg); keep a
-            # single continuous parent-owned recording across all legs.
-            rec = _recorder.start(out_dir)
-            logger.info(f"screen recording (flow, parent-owned) → {out_dir}")
+        os.environ["RELAY_RECORD_DIR"] = str(out_dir)
+        logger.info("recording mode -> RELAY_SKIP_STEP_SCREENSHOT=1")
+        logger.info(f"screen recording (agent-owned, framework-excluded) -> {out_dir}")
 
-    try:
-        if kind == "flow":
-            return dispatch_flow(decision, args.nl, catalog, extra)
-        if kind == "app":
-            return dispatch_app(decision, catalog, env, extra)
-        raise SystemExit(f"router returned unknown kind={kind!r}")
-    finally:
-        if rec is not None:
-            final = rec.stop()
-            if final:
-                logger.info(f"recording saved → {final}")
+    return dispatch_app(decision, catalog, env, extra)
 
 
 if __name__ == "__main__":

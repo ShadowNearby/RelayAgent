@@ -16,12 +16,11 @@ dependencies = [
     "pyyaml>=6.0",
     # Used across agents/ for structured logging.
     "loguru>=0.7",
-    # The LLM client (capability router, grounding, reply-watch, flow extract).
+    # The LLM client (capability router, grounding, reply-watch).
     "openai>=1.0",
     # Screenshot decode/encode for VLM grounding / reply-watch + native capture.
     "pillow>=10.0",
     # agents/action_model.py's JSONAction is a pydantic model. The <2.11 pin is
-    # historical (it was forced by fastmcp via MobileWorld, both now removed);
     # kept conservative so validator behaviour matches the resolved lock.
     "pydantic<2.11",
     "socksio>=1.0.0",

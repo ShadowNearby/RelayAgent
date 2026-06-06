@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Run benchmark/single_app_tasks.yaml with per-task logs.
 
-Each task is dispatched as one MobileWorld `mw test` run pinned to the
+Each task is dispatched as one `run_native.py` run pinned to the
 benchmark's app and capability. Logs are isolated under:
 
     traj_logs/single_app_benchmark_<timestamp>/<NN>_<task-id>/
 
 The runner writes:
-  - user_task/traj.json      MobileWorld trajectory
+  - user_task/traj.json      trajectory
   - user_task/reply.json     RelayAgent captured reply
   - user_task/wall_clock.json
+  - user_task/steps/         per-step screenshots + action + click pos
+                             (RELAY_STEP_LOG=0 to disable; see CLAUDE.md)
   - stdout.log / stderr.log  subprocess output
   - task.json                task metadata
   - run.json                 exit code and timing
@@ -23,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -39,12 +42,24 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from agents.flow_runner import _load_dotenv  # noqa: E402
 
 ENV_FILE = REPO_ROOT / ".env"
-# Each task is one direct-adb run_native.py subprocess (no mw server).
+# Each task is one direct-adb run_native.py subprocess.
 RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
 DEFAULT_TASKS = REPO_ROOT / "benchmark" / "single_app_tasks.yaml"
+
+
+def _load_dotenv(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        out[k.strip()] = v.strip().strip("'\"")
+    return out
 
 
 def _slug(s: str) -> str:
@@ -99,7 +114,7 @@ def _select_tasks(
 
 def _build_cmd(
     task: dict[str, Any],
-    extra_mw_args: list[str],
+    extra_args: list[str],
 ) -> list[str]:
     # run_native reads LLM_* + RELAY_* from the child env; app+goal positional.
     cmd = [
@@ -108,9 +123,9 @@ def _build_cmd(
         task["app"],
         task["instruction"],
     ]
-    if not any(a == "--step_wait_time" or a.startswith("--step_wait_time=") for a in extra_mw_args):
+    if not any(a == "--step_wait_time" or a.startswith("--step_wait_time=") for a in extra_args):
         cmd += ["--step_wait_time", os.getenv("RELAY_STEP_WAIT", "0.2")]
-    cmd += extra_mw_args
+    cmd += extra_args
     return cmd
 
 
@@ -127,7 +142,12 @@ def _task_env(task: dict[str, Any], env: dict[str, str], task_dir: Path) -> dict
         "RELAY_INVOCATION_TEXT": task["instruction"],
         "RELAY_REPLY_OUT": str(user_task_dir / "reply.json"),
         "RELAY_WALL_OUT": str(user_task_dir / "wall_clock.json"),
-        "MW_WAIT_SECONDS": os.getenv("MW_WAIT_SECONDS", "0.2"),
+        # Route per-step logs (screenshots + action + click pos) into this
+        # task's dir; otherwise run_native's StepLogger defaults to the global
+        # traj_logs/user_task/steps and each task's steps get rotated out by the
+        # next task's _rotate_traj_dir. RELAY_STEP_LOG=0 (in env) still disables.
+        "RELAY_STEP_LOG_DIR": str(user_task_dir),
+        "RELAY_WAIT_SECONDS": os.getenv("RELAY_WAIT_SECONDS", "0.2"),
     }
 
 
@@ -136,7 +156,7 @@ def _run_one(
     task: dict[str, Any],
     env: dict[str, str],
     out_root: Path,
-    extra_mw_args: list[str],
+    extra_args: list[str],
     timeout_s: float | None,
 ) -> dict[str, Any]:
     task_dir = out_root / f"{idx:02d}_{_slug(task['id'])}"
@@ -144,7 +164,7 @@ def _run_one(
     _write_json(task_dir / "task.json", task)
 
     child_env = _task_env(task, env, task_dir)
-    cmd = _build_cmd(task, extra_mw_args)
+    cmd = _build_cmd(task, extra_args)
     _write_json(task_dir / "command.json", {"cmd": cmd, "env": {
         "RELAY_TARGET_APP": child_env["RELAY_TARGET_APP"],
         "RELAY_FORCE_CAPABILITY": child_env["RELAY_FORCE_CAPABILITY"],
@@ -172,6 +192,19 @@ def _run_one(
             proc.kill()
             rc = proc.wait()
     elapsed_s = round(time.monotonic() - t0, 1)
+
+    # Per-step logs, reply.json and wall_clock.json are already routed into this
+    # task's user_task/ via the env above, but run_native's agent still writes
+    # traj.json + token logs into the global traj_logs/user_task/ (its hardcoded
+    # _TRAJ_DIR), which the next task's _rotate_traj_dir would rotate away. Merge
+    # that global dir in to honor the user_task/traj.json this script promises.
+    # Best-effort: a logging gap must not drop the task result.
+    global_traj = REPO_ROOT / "traj_logs" / "user_task"
+    if global_traj.is_dir():
+        try:
+            shutil.copytree(global_traj, task_dir / "user_task", dirs_exist_ok=True)
+        except OSError as e:
+            print(f"[{idx:02d}] warn: failed to copy traj into {task_dir}: {e}", flush=True)
 
     run = {
         "id": task["id"],
@@ -214,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-persist-server", action="store_true")
     p.add_argument("--dry-list", action="store_true",
                    help="List selected tasks and exit without running")
-    args, extra_mw_args = p.parse_known_args(argv)
+    args, extra_args = p.parse_known_args(argv)
 
     if not RUN_NATIVE.exists():
         raise SystemExit(f"run_native.py not found at {RUN_NATIVE}")
@@ -259,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     runs: list[dict[str, Any]] = []
     with summary_path.open("a", encoding="utf-8") as summary_fh:
         for idx, task in selected:
-            run = _run_one(idx, task, env, out_root, extra_mw_args, timeout_s)
+            run = _run_one(idx, task, env, out_root, extra_args, timeout_s)
             runs.append(run)
             summary_fh.write(json.dumps(run, ensure_ascii=False) + "\n")
             summary_fh.flush()

@@ -1,6 +1,5 @@
-"""Tiny image helpers. `pil_to_base64` is ported from MobileWorld's
-`agents/utils/helpers.py` so RelayAgent's grounding / reply-watch payloads no
-longer import `mobile_world`."""
+"""Tiny image helpers. `pil_to_base64` builds the grounding / reply-watch
+payloads RelayAgent sends to the VLM."""
 from __future__ import annotations
 
 import base64
