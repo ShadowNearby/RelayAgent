@@ -56,20 +56,6 @@ embedded_agent:
 
   capabilities:
 
-    - id: foundation_llm
-      description: >
-        Foundation LLM capability in WPS AI: general Q&A, rewriting,
-        translation, short summarization, pasted-text transformation, and URL
-        or webpage summarization in the chat surface. Pure chat output; no file
-        is created unless the user routes to a document-generation capability.
-      example_prompts:
-        - "讲讲二战中的中途岛海战"
-        - "帮我把这段话改得更书面一点：……"
-        - "帮我总结这个网页：https://example.com/article"
-      executable: false
-      handoff_to_user_required: false
-      typical_latency_seconds: 10
-
     - id: generate_slides
       description: >
         Slides generation through WPS AI PPT. The quick chip switches the chat
@@ -119,21 +105,6 @@ embedded_agent:
               ms: 2500
         stop_before:
           - "打开文档"
-
-    - id: find_file
-      description: >
-        File selection and document-reading workflow in WPS AI. The 文档阅读
-        chip opens a picker for local/cloud documents and then uses the selected
-        file for summary, Q&A, outline, or translation. The user must select the
-        file manually before the assistant can process it.
-      example_prompts:
-        - "帮我总结这份合同的关键条款"
-        - "把这份 PDF 翻译成英文要点"
-      executable: true
-      handoff_to_user_required: true
-      typical_latency_seconds: 20
-      x_quick_chip:
-        text_or_desc: "文档阅读"
 
 provenance:
   last_verified: "2026-05-25"
