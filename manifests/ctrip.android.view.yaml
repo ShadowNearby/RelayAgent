@@ -7,7 +7,6 @@ locale: ["zh-CN"]
 
 embedded_agent:
   name: "携程问道"
-  type: native_in_app_agent
   description: >
     Ctrip's travel AI assistant, launched from the persistent bottom input
     "Ask AI or hold to talk". Covers flights, hotels, trains, attraction
@@ -23,23 +22,18 @@ embedded_agent:
         # Tap-through to parent clickable region opens half-sheet.
         # Only visible on home tab; if on other tab, router must return home first.
         - tap: { text: "问AI或按住说话" }
-    fallback: []
-    preconditions:
-      - type: login_required
 
   invocation:
     input:
       # Current version no longer exposes the old EditText resource-id.
       # Placeholder TextView text is stable; tap-through per §6.1 triggers parent input focus.
       field: { text: "任何旅游相关问题都可以问我哦" }
-      max_chars: 1000
     submit:
       # Send button is an ImageView with only content-desc="image"; bounds as fallback.
       trigger:
         x_bounds:
           box: [927, 2079, 1011, 2163]
           anchor: bottom_right
-    prompt_template: "{{user_prompt}}"
 
   output:
     method: none
@@ -57,11 +51,23 @@ embedded_agent:
         - "上海迪士尼明天的门票多少钱"
         - "三亚十一期间天气和穿衣建议"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 20
+
+    - id: poi_nearby_search
+      description: >
+        Travel-oriented POI and nearby search through Ctrip's AI assistant. Use
+        for attractions, restaurants, hotels, transportation hubs, family venues,
+        and local travel services. The assistant returns recommendations or
+        travel context and does not book or pay through this capability.
+      example_prompts:
+        - "上海天文馆游客中心附近有什么适合亲子的景点"
+        - "世博源1区附近有哪些适合商务聚餐的餐厅"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 6
 
     - id: book_flight
       description: >
@@ -73,16 +79,10 @@ embedded_agent:
         - "帮我找下周一上海到北京下午的机票"
         - "明天最便宜的虹桥飞成都的航班"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_capture_full_reply:
         max_scrolls: 6
-      failure_modes:
-        - "City/time ambiguous → agent asks for clarification"
 
     - id: book_hotel
       description: >
@@ -94,10 +94,6 @@ embedded_agent:
         - "上海外滩附近 800 以内的酒店，明晚入住"
         - "周末北京三里屯有湾景的酒店"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 20
       x_capture_full_reply:
@@ -113,10 +109,6 @@ embedded_agent:
         - "周五早上 8 点北京到天津的高铁"
         - "明天去苏州最早的车次"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 18
       x_capture_full_reply:
@@ -132,10 +124,6 @@ embedded_agent:
         - "我想十一去三亚玩四天怎么安排"
         - "暑假带孩子去云南怎么玩"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_post_result_flow:
@@ -143,9 +131,6 @@ embedded_agent:
           - tap: { text: "获取专属行程" }
           - wait: { ms: 2000 }
           - wait_for_reply: { max_seconds: 90 }
-      failure_modes:
-        - "Destination/duration ambiguous → agent asks for clarification"
-        - "Same intent across multiple turns may return different SKUs due to follow-up suggestions"
 
 provenance:
   last_verified: "2026-05-19"

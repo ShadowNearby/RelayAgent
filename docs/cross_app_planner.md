@@ -4,13 +4,13 @@
 
 > One NL sentence → LLM **auto-synthesizes** a cross-app plan → validate → persist → preview & confirm → run on a real device.
 >
-> How it relates to the existing entries: `run_nl.py` **routes** a sentence to a single app + capability; `run_plan.py` is for a cross-app goal — it has the model **synthesize** a multi-app plan on the spot, then runs it via `FlowRunner`.
+> How it relates to the existing entries: `run_plan.py` is now the NL entry. Direct app-pinned runs use `run_native.py`.
 
 ---
 
 ## 1. What it solves
 
-`run_nl.py` routes a sentence to **one** app + capability; it cannot decompose a cross-app goal into a multi-app step sequence. Given an instruction that spans several apps, the router falls back to a single app, or picks the wrong one.
+The former single-app NL router could only route a sentence to **one** app + capability; it could not decompose a cross-app goal into a multi-app step sequence. Given an instruction that spans several apps, it fell back to a single app, or picked the wrong one.
 
 `run_plan.py` fills exactly that gap: **given the full app/capability catalog, have the LLM dynamically produce the steps + bind relations**, then hand it to `FlowRunner`. **No new executor — only a new "planning" layer.**
 
@@ -21,7 +21,7 @@
 ```
 one sentence
   │
-  ├─(1) build_catalog()            full app + capability list (reused from run_nl.py)
+  ├─(1) build_catalog()            full app + capability list (agents/card_catalog.py)
   │
   ├─(2) cache lookup               exact string match in manifests/_generated/; skipped by --no-cache
   │        hit ┐
@@ -106,7 +106,7 @@ Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
    - If it is **not** the final step of the whole task → it **must** be immediately followed by an `ask_user` (show the agent's surfaced message via `prompt_header`, collect the user's answer), then another app step that consumes the answer (**re-state the full intent** in that step's prompt, since it runs as a fresh agent session).
    - If it **is** the final step (e.g. hailing the ride at the very end) → it **may** be terminal: its own in-app handoff is the user's final confirmation, so no trailing `ask_user` is needed.
 5. Prefer the user's own wording in prompts; only fill obvious gaps; bake concrete values from the request directly into the prompt.
-6. A single-app request is fine too — emit a 1-step plan (`run_plan` is a superset of `run_nl`).
+6. A single-app request is fine too — emit a 1-step plan.
 7. When no combination of available apps can satisfy the request, return `{"unsatisfiable": true, "reason": "..."}`; the preview stage reports it honestly and does not execute.
 
 ---
@@ -180,8 +180,8 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 **Environment**
 
-- Planning uses `.env`'s `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (= `qwen`), the same endpoint as the `run_nl` router.
-- Execution runs each leg as a direct-adb `run_native` subprocess, consistent with `run_nl`.
+- Planning uses `.env`'s `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (= `qwen`).
+- Execution runs each leg as a direct-adb `run_native` subprocess.
 - Real-device requirements as elsewhere in the project: adb + USB debugging + `com.android.adbkeyboard/.AdbIME`; `RELAY_ANDROID_SERIAL` selects the device.
 
 **Non-interactive behavior of mid-flow `ask_user`**: a flow-level `ask_user` reads the parent process's stdin. With `< /dev/null` (or a piped EOF), a pick step **auto-takes the first candidate** and a freeform step takes the empty string — suitable for `--yes` batch runs. To pick by hand, run interactively in a real terminal.
@@ -249,7 +249,7 @@ This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 **Design decisions (why)**
 
 - **Static one-shot planning** rather than step-by-step / ReAct: reuses the existing `FlowRunner`, minimal change, immediately shippable; the cost is no adaptation to surprising leg output.
-- **A dedicated `run_plan.py`** rather than folding into `run_nl`: zero intrusion on the existing NL routing.
+- **A dedicated `run_plan.py`** as the NL flow entry: single-app requests become 1-step plans, while multi-app requests share the same execution path.
 - **Preview + confirm (default N)**: cross-app carries irreversible side effects (ride-hailing / ordering), so a human must see and approve before execution.
 - **Hard-fail on validation, repair left as TODO**: better to abort than let a bad plan execute silently.
 - **Handoff may be terminal at the end, ask_user forced only mid-flow**: e.g. a plan ending on hailing a ride — the final leg's in-app handoff is itself the terminal confirmation.

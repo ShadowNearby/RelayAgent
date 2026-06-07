@@ -69,7 +69,6 @@
         "resource_id":      { "type": "string" },
         "text":             { "type": "string" },
         "text_contains":    { "type": "string" },
-        "xpath":            { "type": "string" },
         "x_bounds":         { "$ref": "#/definitions/x_bounds" }
       },
       "patternProperties": {
@@ -99,7 +98,7 @@
     },
 
     "step": {
-      "description": "One step of a tap_sequence. Exactly one of `tap`, `tap_label`, `tap_screen_fraction`, `swipe`, or `wait`.",
+      "description": "One step of a tap_sequence. Exactly one of `tap`, `tap_label`, `tap_screen_fraction`, `tap_unless_present`, `swipe`, or `wait`.",
       "type": "object",
       "oneOf": [
         {
@@ -111,18 +110,15 @@
           "required": ["tap_label"],
           "properties": {
             "tap_label": {
+              "description": "Search the visible screen for a label, then tap it. Author SHOULD supply exactly one selector field (single-field convention, SPEC §6.1).",
               "type": "object",
-              "oneOf": [
-                { "required": ["text"],                  "properties": { "text": { "type": "string" } }, "additionalProperties": false },
-                { "required": ["text_contains"],          "properties": { "text_contains": { "type": "string" } }, "additionalProperties": false },
-                { "required": ["text_or_desc"],            "properties": { "text_or_desc": { "type": "string" } }, "additionalProperties": false },
-                { "required": ["text_or_desc_contains"],   "properties": { "text_or_desc_contains": { "type": "string" } }, "additionalProperties": false },
-                { "required": ["accessibility_id"],        "properties": { "accessibility_id": { "type": "string" } }, "additionalProperties": false }
-              ],
+              "minProperties": 1,
               "properties": {
-                "timeout_seconds": { "type": "number", "minimum": 0 },
-                "scroll_attempts": { "type": "integer", "minimum": 0 },
-                "required":        { "type": "boolean" }
+                "text":                  { "type": "string" },
+                "text_contains":         { "type": "string" },
+                "text_or_desc":          { "type": "string" },
+                "text_or_desc_contains": { "type": "string" },
+                "accessibility_id":      { "type": "string" }
               },
               "patternProperties": { "^x_": {} },
               "additionalProperties": false
@@ -138,8 +134,24 @@
               "required": ["x_ratio", "y_ratio"],
               "properties": {
                 "x_ratio": { "type": "number" },
-                "y_ratio": { "type": "number" },
-                "label":   { "type": "string" }
+                "y_ratio": { "type": "number" }
+              },
+              "patternProperties": { "^x_": {} },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": ["tap_unless_present"],
+          "properties": {
+            "tap_unless_present": {
+              "description": "Tap `target` only if `probe` is not currently on screen. Used to make an entry step idempotent across cold/warm starts.",
+              "type": "object",
+              "required": ["probe", "target"],
+              "properties": {
+                "probe":  { "$ref": "#/definitions/selector" },
+                "target": { "$ref": "#/definitions/selector" }
               },
               "patternProperties": { "^x_": {} },
               "additionalProperties": false
@@ -151,14 +163,8 @@
           "required": ["swipe"],
           "properties": {
             "swipe": {
-              "type": "object",
-              "required": ["from", "to"],
-              "properties": {
-                "from":        { "type": "string", "description": "[x,y]" },
-                "to":          { "type": "string", "description": "[x,y]" },
-                "duration_ms": { "type": "integer", "minimum": 0 }
-              },
-              "additionalProperties": false
+              "enum": ["up", "down", "left", "right"],
+              "description": "Scroll direction. action_planner compiles this to a scroll action; NativeEnv reverses up/down (card up == content moves up). See CLAUDE.md."
             }
           },
           "additionalProperties": false
@@ -170,7 +176,7 @@
               "type": "object",
               "oneOf": [
                 { "required": ["ms"],    "properties": { "ms":    { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
-                { "required": ["until"], "properties": { "until": { "$ref": "#/definitions/selector" } }, "additionalProperties": false }
+                { "required": ["until"], "properties": { "until": { "$ref": "#/definitions/selector" }, "timeout_seconds": { "type": "number", "minimum": 0 } }, "additionalProperties": false }
               ]
             }
           },
@@ -179,65 +185,25 @@
       ]
     },
 
-    "precondition": {
-      "type": "object",
-      "required": ["type"],
-      "properties": {
-        "type": { "type": "string", "description": "Free-form precondition tag (login_required, permission, first_run_dialog, etc.)." },
-        "permission": { "type": "string" },
-        "dismiss":    { "$ref": "#/definitions/step" }
-      },
-      "patternProperties": { "^x_": {} },
-      "additionalProperties": false
-    },
-
     "entry": {
       "type": "object",
       "required": ["primary"],
       "properties": {
-        "primary":       { "$ref": "#/definitions/entry_method" },
-        "fallback":      { "type": "array", "items": { "$ref": "#/definitions/entry_method" } },
-        "preconditions": { "type": "array", "items": { "$ref": "#/definitions/precondition" } }
+        "primary": { "$ref": "#/definitions/entry_method" }
       },
       "patternProperties": { "^x_": {} },
       "additionalProperties": false
     },
 
     "entry_method": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": ["method", "uri"],
-          "properties": {
-            "method": { "const": "deep_link" },
-            "uri": { "type": "string", "format": "uri" }
-          },
-          "patternProperties": { "^x_": {} },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["method", "action"],
-          "properties": {
-            "method": { "const": "intent" },
-            "action":    { "type": "string" },
-            "component": { "type": "string" },
-            "extras":    { "type": "object" }
-          },
-          "patternProperties": { "^x_": {} },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["method", "steps"],
-          "properties": {
-            "method": { "const": "tap_sequence" },
-            "steps": { "type": "array", "minItems": 0, "items": { "$ref": "#/definitions/step" } }
-          },
-          "patternProperties": { "^x_": {} },
-          "additionalProperties": false
-        }
-      ]
+      "type": "object",
+      "required": ["method", "steps"],
+      "properties": {
+        "method": { "const": "tap_sequence" },
+        "steps": { "type": "array", "minItems": 0, "items": { "$ref": "#/definitions/step" } }
+      },
+      "patternProperties": { "^x_": {} },
+      "additionalProperties": false
     },
 
     "invocation": {
@@ -248,8 +214,7 @@
           "type": "object",
           "required": ["field"],
           "properties": {
-            "field":     { "$ref": "#/definitions/selector" },
-            "max_chars": { "type": "integer", "minimum": 1 }
+            "field": { "$ref": "#/definitions/selector" }
           },
           "patternProperties": { "^x_": {} },
           "additionalProperties": false
@@ -262,8 +227,7 @@
           },
           "patternProperties": { "^x_": {} },
           "additionalProperties": false
-        },
-        "prompt_template": { "type": "string" }
+        }
       },
       "patternProperties": { "^x_": {} },
       "additionalProperties": false
@@ -273,32 +237,10 @@
       "type": "object",
       "required": ["method"],
       "properties": {
-        "method": { "enum": ["none", "screen_text_extract", "accessibility_tree"] },
-        "completion_signal": {
-          "type": "object",
-          "required": ["type"],
-          "properties": {
-            "type":       { "enum": ["text_match"] },
-            "patterns":   { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-            "timeout_ms": { "type": "integer", "minimum": 0 }
-          },
-          "patternProperties": { "^x_": {} },
-          "additionalProperties": false
-        }
+        "method": { "enum": ["none", "screen_text_extract", "accessibility_tree", "copy_button"] }
       },
       "patternProperties": { "^x_": {} },
       "additionalProperties": false
-    },
-
-    "side_effect": {
-      "enum": [
-        "payment",
-        "external_communication",
-        "data_write",
-        "data_delete",
-        "physical_action",
-        "none"
-      ]
     },
 
     "capability": {
@@ -308,9 +250,6 @@
         "description",
         "example_prompts",
         "executable",
-        "side_effects",
-        "requires_login",
-        "reversible",
         "handoff_to_user_required"
       ],
       "properties": {
@@ -322,34 +261,18 @@
           "items": { "type": "string", "minLength": 1 }
         },
         "executable":               { "type": "boolean" },
-        "side_effects": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/side_effect" },
-          "uniqueItems": true
-        },
-        "requires_login":           { "type": "boolean" },
-        "reversible":               { "type": "boolean" },
         "handoff_to_user_required": { "type": "boolean" },
-        "typical_latency_seconds":  { "type": "number", "minimum": 0 },
-        "failure_modes":            { "type": "array", "items": { "type": "string" } }
+        "typical_latency_seconds":  { "type": "number", "minimum": 0 }
       },
       "patternProperties": { "^x_": {} },
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "description": "If `none` appears in side_effects, it must be the only entry (SPEC §8.2).",
-          "if":   { "properties": { "side_effects": { "type": "array", "contains": { "const": "none" } } } },
-          "then": { "properties": { "side_effects": { "type": "array", "maxItems": 1 } } }
-        }
-      ]
+      "additionalProperties": false
     },
 
     "embedded_agent": {
       "type": "object",
-      "required": ["name", "type", "description", "entry", "invocation", "capabilities"],
+      "required": ["name", "description", "entry", "invocation", "capabilities"],
       "properties": {
         "name":         { "type": "string", "minLength": 1 },
-        "type":         { "enum": ["native_in_app_agent", "chat_widget", "smart_search", "voice_assistant"] },
         "description":  { "type": "string", "minLength": 1 },
         "entry":        { "$ref": "#/definitions/entry" },
         "invocation":   { "$ref": "#/definitions/invocation" },
@@ -400,7 +323,7 @@
       "type": "object",
       "required": ["app_version_min", "network_required"],
       "properties": {
-        "app_version_min": { "type": "string", "minLength": 1 },
+        "app_version_min": { "type": "string", "description": "Minimum supported app version; empty string means unspecified." },
         "app_version_max": { "type": "string" },
         "region": {
           "type": "array",

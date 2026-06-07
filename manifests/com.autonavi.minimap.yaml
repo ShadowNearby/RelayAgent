@@ -7,7 +7,6 @@ locale: ["zh-CN"]
 
 embedded_agent:
   name: "高德 AI 助手"
-  type: native_in_app_agent
   description: >
     Amap's bottom-center "Press to Talk" tab hosts a built-in AI assistant
     supporting text and voice. Excels at nearby POI search, route planning
@@ -35,7 +34,6 @@ embedded_agent:
                 box: [946, 2101, 1009, 2164]
                 anchor: bottom_right
         - wait: { ms: 300 }
-    fallback: []
 
   invocation:
     input:
@@ -49,7 +47,6 @@ embedded_agent:
           box: [68, 2105, 925, 2160]
           anchor: bottom_left
         text: "有什么问题尽管问我"
-      max_chars: 500
     submit:
       # Same ViewGroup: empty → mic icon, has text → send arrow.
       # No id, no content-desc; bounds-only. See OQ-11.
@@ -57,7 +54,6 @@ embedded_agent:
         x_bounds:
           box: [946, 2075, 1009, 2138]
           anchor: bottom_right
-    prompt_template: "{{user_prompt}}"
 
   output:
     method: none
@@ -69,12 +65,9 @@ embedded_agent:
         attractions, and other local places. Returns list/map-marker results
         only; it does not start navigation, order, or purchase.
       example_prompts:
-        - "搜附近24小时便利店"
-        - "附近有什么加油站"
+        - "搜复旦大学邯郸校区正门附近24小时便利店"
+        - "上海世博展览馆北入口附近有什么加油站"
       executable: false
-      side_effects: []
-      requires_login: false
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 5
       x_capture_full_reply:
@@ -87,16 +80,23 @@ embedded_agent:
         Navigate CTA, but scripted flows stop before live turn-by-turn guidance
         so the user can choose mode and confirm.
       example_prompts:
-        - "导航到上海外滩"
-        - "我现在去虹桥机场要多久"
+        - "导航到上海科技馆2号门"
+        - "我现在去上海南站南广场进站口要多久"
       executable: true
-      side_effects: []
-      requires_login: false
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 8
-      failure_modes:
-        - "Destination ambiguous → agent asks for more details"
+
+    - id: live_navigation
+      description: >
+        Turn-by-turn live navigation in Amap. The assistant can prepare the
+        destination and route, but starting live guidance affects real-world
+        movement and should be confirmed by the user.
+      example_prompts:
+        - "开始导航去浦东足球场3号门"
+        - "导航去中山医院门诊楼附近最近的地铁站入口"
+      executable: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 8
 
     - id: hail_ride
       description: >
@@ -104,20 +104,13 @@ embedded_agent:
         origin/destination, car type, estimate, and payment path, with every
         irreversible confirmation left to the user.
       example_prompts:
-        - "叫一辆经济型车去虹桥机场"
-        - "帮我叫个车回家"
+        - "叫一辆经济型车去前滩太古里木区北门"
+        - "帮我叫个车去上海图书馆东馆南门"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 10
       x_capture_full_reply:
         max_scrolls: 3
-      failure_modes:
-        - "Multi-terminal airports → drop-off disambiguation panel"
-        - "Not logged in → redirects to login page"
 
     - id: plan_trip
       description: >
@@ -128,15 +121,10 @@ embedded_agent:
         - "帮我规划三亚 3 日游"
         - "周末上海周边亲子游怎么安排"
       executable: false
-      side_effects: []
-      requires_login: false
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 40
       x_capture_full_reply:
         max_scrolls: 8
-      failure_modes:
-        - "Deep-search mode takes 30–60s; set generous UI timeout"
 
 provenance:
   last_verified: "2026-05-11"
@@ -156,7 +144,7 @@ constraints:
   known_issues:
     - "Entry tab text says 'Press to Talk' (voice-oriented) but also accepts text input."
     - "Input field and send/mic button have no accessibility id or content-desc; selectors rely on hint text and absolute bounds."
-    - "AI tab defaults to voice mode (按住说话) on first install; the keyboard toggle that flips it to text mode is non-idempotent and stateful across restarts. See entry.preconditions.x_text_input_mode_required."
+    - "AI tab defaults to voice mode (按住说话) on first install; the keyboard toggle that flips it to text mode is non-idempotent and stateful across restarts; toggle to text mode manually before scripted runs."
     - "Send button and mic are the same ViewGroup: empty input shows mic, text shows send arrow."
     - "Secondary taps inside agent response cards may not respond to scripted clicks during TTS playback. User manual taps unaffected."
     - "Home screen card 'Call me' is a chat prompt, not actual phone call support — agent refuses dialing requests."

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Auto-synthesize and run a cross-app plan from one natural-language sentence.
+"""Auto-synthesize and run a flow plan from one natural-language sentence.
 
-Unlike `run_nl.py` — which *routes* a sentence to a single app + capability —
-this entry *synthesizes* a brand-new multi-app plan with the LLM (see
+This entry synthesizes a brand-new single- or multi-app plan with the LLM (see
 `agents/flow_planner.py`), then executes it through `FlowRunner`. The generated
 plan uses the step/bind schema `FlowRunner` executes, so no new executor is
 needed.
 
 Pipeline:
-    1. build_catalog()  — every app + capability (reused from run_nl).
+    1. build_catalog()  — every app + capability (shared card_catalog helper).
     2. cache lookup     — exact normalized `source_request` match in
                           manifests/_generated/ (skip with --no-cache).
     3. FlowPlanner.plan — LLM emits a plan; validated locally (unknown ids,
@@ -49,9 +48,11 @@ for _p in (REPO_ROOT, SCRIPTS_DIR):
         sys.path.insert(0, str(_p))
 
 from agents import _recorder  # noqa: E402
+from agents.card_catalog import build_catalog  # noqa: E402
+from agents.capability_matrix_router import load_matrix  # noqa: E402
 from agents.flow_planner import FlowPlanner, PlanValidationError  # noqa: E402
-from agents.flow_runner import FlowRunner, _load_dotenv  # noqa: E402
-from run_nl import build_catalog  # noqa: E402
+from agents.flow_runner import FlowRunner  # noqa: E402
+from agents.runtime_config import ensure_llm_env  # noqa: E402
 
 GENERATED_DIR = REPO_ROOT / "manifests" / "_generated"
 ENV_FILE = REPO_ROOT / ".env"
@@ -187,15 +188,19 @@ def main(argv: list[str] | None = None) -> int:
                         "Optional DIR overrides traj_logs/recordings/<ts>/.")
     args, extra = p.parse_known_args(argv)
 
-    env = _load_dotenv(ENV_FILE)
-    for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
-        v = os.environ.get(k) or env.get(k)
-        if not v:
-            sys.exit(f"Missing required config: {k} (set in .env or shell env)")
-        env[k] = v
+    try:
+        env = ensure_llm_env(ENV_FILE)
+    except RuntimeError as e:
+        sys.exit(str(e))
 
     catalog = build_catalog()
-    logger.info(f"catalog: {len(catalog['apps'])} apps")
+    matrix = load_matrix()
+    logger.info(
+        f"catalog: {len(catalog['apps'])} apps; "
+        f"matrix: {len(matrix['cap_desc'])} capabilities, {len(matrix['app_ids'])} apps"
+    )
+    llm = OpenAI(base_url=env["LLM_BASE_URL"], api_key=env["LLM_API_KEY"])
+    planner = FlowPlanner(catalog, llm, env["LLM_MODEL"], matrix=matrix)
 
     # 1) cache lookup, else 2) synthesize + validate + persist.
     plan: dict[str, Any]
@@ -205,12 +210,25 @@ def main(argv: list[str] | None = None) -> int:
         hit = _cache_lookup(args.nl)
         if hit:
             plan = yaml.safe_load(hit.read_text(encoding="utf-8")) or {}
-            plan_path = hit
+            if plan.get("unsatisfiable"):
+                print(f"\n无法用现有 app 满足这个请求：{plan.get('reason')}")
+                return 1
+            try:
+                plan = planner.resolve_app_routes(plan, args.nl)
+                planner.validate_plan(plan, args.nl)
+            except PlanValidationError as e:
+                logger.error(str(e))
+                print("\n缓存 plan 重新路由后没通过校验，已中止。")
+                print("错误：")
+                for err in e.errors:
+                    print(f"  - {err}")
+                print("\n原始 plan：")
+                print(json.dumps(e.plan, ensure_ascii=False, indent=2))
+                return 1
+            plan_path = _persist(plan, args.nl)
             from_cache = True
             logger.info(f"cache hit → {hit.name}")
     if plan_path is None:
-        llm = OpenAI(base_url=env["LLM_BASE_URL"], api_key=env["LLM_API_KEY"])
-        planner = FlowPlanner(catalog, llm, env["LLM_MODEL"])
         try:
             plan = planner.plan(args.nl)
         except PlanValidationError as e:
@@ -242,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     # forwards `extra` to run_native verbatim).
 
     # Recording spans multiple leg subprocesses (one per leg); keep a
-    # single continuous parent-owned recording (mirrors run_nl's flow branch).
+    # single continuous parent-owned recording across all app legs.
     rec = None
     if args.record is not None:
         out_dir = (

@@ -21,7 +21,7 @@ Decision criterion: does writing the first 5 reference manifests feel like it's 
 
 **Status:** open. **Likely target:** v0.2.
 
-Many apps ship without accessibility ids on AI-related buttons (sometimes deliberately). `tap_sequence` currently allows `text` / `text_contains` / `xpath`, all of which break on dynamic content. Should `entry.fallback` support a vision-based selector (`tap: { match_image: "..." }` or `tap: { match_text_ocr: "..." }`)?
+Many apps ship without accessibility ids on AI-related buttons (sometimes deliberately). `tap_sequence` currently allows `text` / `text_contains`, both of which break on dynamic content. Should the spec support a vision-based selector (`tap: { match_image: "..." }` or `tap: { match_text_ocr: "..." }`), and/or reintroduce ordered `entry.fallback` paths?
 
 - **For:** sometimes the only path that works.
 - **Against:** vision matching is non-deterministic, hard to validate in CI, and cards become unreviewable.
@@ -56,7 +56,7 @@ A is the v0.1 answer. B may matter once OS agents start orchestrating multi-app 
 
 Cross-app aggregation (e.g. "compare prices on JD.com and Taobao") requires reading the in-app agent's response back into the OS router. SPEC §13 explicitly defers this. When we add it, the question is whether to standardize:
 
-- screen-text scraping with `output.completion_signal` (already partially defined),
+- screen-text scraping with an `output`-level completion signal,
 - accessibility-tree extraction,
 - or some richer convention requiring app cooperation.
 
@@ -108,7 +108,7 @@ Some combination of all three. The 90-day stale rule in SPEC §9 is a placeholde
 
 **Status:** open. **Likely target:** v0.2. **Surfaced by:** `com.autonavi.minimap.yaml`.
 
-SPEC §6.1 defines selectors as a single field from `{ accessibility_id, resource_id, text, text_contains, xpath }`. Real apps often expose **only generic ids shared across siblings** — e.g. all five Amap bottom tabs share `resource-id="com.autonavi.minimap:id/tab_name_v2"`, distinguished only by `text`. A single-field selector either misses uniqueness (`resource_id` alone matches 5 nodes) or is fragile (`text` alone breaks when copy changes).
+SPEC §6.1 defines selectors as a single field from `{ accessibility_id, resource_id, text, text_contains }`. Real apps often expose **only generic ids shared across siblings** — e.g. all five Amap bottom tabs share `resource-id="com.autonavi.minimap:id/tab_name_v2"`, distinguished only by `text`. A single-field selector either misses uniqueness (`resource_id` alone matches 5 nodes) or is fragile (`text` alone breaks when copy changes).
 
 Proposal: allow a step's selector to be an AND of multiple keys:
 
@@ -169,7 +169,7 @@ When we attempted a WeChat reference card, `uiautomator dump` returned an empty 
 
 Consequences for the SPEC:
 
-- **Every** v0.1 selector — `accessibility_id`, `resource_id`, `text`, `text_contains`, `xpath` — is unusable, because all five require the a11y tree.
+- **Every** v0.1 selector — `accessibility_id`, `resource_id`, `text`, `text_contains` — is unusable, because all require the a11y tree.
 - The `x_bounds` last-resort (OQ-11) is unusable too at the **authoring** stage: without a tree, the author can't discover the bounds to write down.
 - v0.1 cards for such apps would be effectively ineligible per the CONTRIBUTING quality bar ("verify on a real device, walk every entry path").
 

@@ -7,7 +7,6 @@ locale: ["zh-CN"]
 
 embedded_agent:
   name: "WPS AI"
-  type: native_in_app_agent
   description: >
     WPS Office's built-in AI assistant. Reachable from the home page as a
     purple "WPS AI" shortcut card next to "拍照扫描". Tapping it opens a
@@ -25,24 +24,11 @@ embedded_agent:
             # and is non-clickable; tap on its bounds dispatches to the
             # parent card container.
             text_or_desc: "WPS AI"
-            timeout_seconds: 2
-            scroll_attempts: 0
         - wait:
             # "Hi，..." lives inside the WebView, invisible to uiautomator,
             # so wait by time, not by text. ~1.8s covers the bottom-sheet
             # animation + native chip overlay rendering on a Pixel 9.
             ms: 1800
-    fallback:
-      # If the home shortcut row was customized away, the same surface is
-      # reachable via the "服务" tab in the bottom nav → "WPS AI" card.
-      - tap_label:
-          text_or_desc: "服务"
-          timeout_seconds: 1
-          scroll_attempts: 0
-      - tap_label:
-          text_or_desc: "WPS AI"
-          timeout_seconds: 2
-          scroll_attempts: 1
 
   invocation:
     input:
@@ -55,7 +41,6 @@ embedded_agent:
           # Untyped state, before keyboard pops. Center of the input pill.
           box: [28, 2060, 1050, 2160]
           anchor: center
-      max_chars: 2000
     submit:
       # When the input is empty the right-side icon is the mic; once any
       # text is in the field it morphs into a circular ▶ send button at
@@ -65,7 +50,6 @@ embedded_agent:
         x_bounds:
           box: [926, 2093, 1023, 2190]
           anchor: center
-    prompt_template: "{{user_prompt}}"
 
   output:
     method: none
@@ -83,9 +67,6 @@ embedded_agent:
         - "帮我把这段话改得更书面一点：……"
         - "帮我总结这个网页：https://example.com/article"
       executable: false
-      side_effects: []
-      requires_login: false
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 10
 
@@ -98,21 +79,13 @@ embedded_agent:
         - "帮我做一份关于光合作用的 PPT"
         - "用 AI PPT 做一份产品上线复盘的演示稿"
       executable: true
-      side_effects:
-        - data_write
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 45
-      failure_modes:
-        - "outline confirmation step blocks until user taps 确定"
       x_quick_chip:
         text_or_desc: "AI PPT"
       x_pre_invocation_steps:
         - tap_label:
             text_or_desc: "生成演示文稿"
-            timeout_seconds: 2
-            scroll_attempts: 0
         - wait:
             ms: 1200
 
@@ -126,10 +99,6 @@ embedded_agent:
         - "写一篇 800 字的读后感，主题：《活着》"
         - "根据这些材料整理一份中文总结文档"
       executable: true
-      side_effects:
-        - data_write
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_quick_chip:
@@ -137,8 +106,6 @@ embedded_agent:
       x_pre_invocation_steps:
         - tap_label:
             text_or_desc: "一键快速成文"
-            timeout_seconds: 2
-            scroll_attempts: 0
         - wait:
             ms: 1200
       x_post_result_flow:
@@ -148,8 +115,6 @@ embedded_agent:
         steps:
           - tap_label:
               text_or_desc: "导出为文档"
-              timeout_seconds: 3
-              scroll_attempts: 1
           - wait:
               ms: 2500
         stop_before:
@@ -165,13 +130,8 @@ embedded_agent:
         - "帮我总结这份合同的关键条款"
         - "把这份 PDF 翻译成英文要点"
       executable: true
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 20
-      failure_modes:
-        - "file picker blocks until user selects a file or cancels"
       x_quick_chip:
         text_or_desc: "文档阅读"
 

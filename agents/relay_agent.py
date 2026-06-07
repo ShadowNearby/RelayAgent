@@ -103,7 +103,7 @@ _WALL_OUT_ENV = "RELAY_WALL_OUT"
 # ~0.85s screencap + ~0.2s settle after such a step is dead time. When on, the
 # agent tags those actions with action_json["skip_screenshot"] so NativeEnv
 # reuses the last real frame instead of re-capturing. Auto-enabled by
-# `run_nl.py --record` (the screen video already covers the run). Default off.
+# `run_plan.py --record` (the screen video already covers the run). Default off.
 # See CLAUDE.md "录屏模式跳过每步截图".
 _SKIP_STEP_SCREENSHOT_ENV = "RELAY_SKIP_STEP_SCREENSHOT"
 # Small settle the agent sleeps inside predict after emitting a screencap-skipped

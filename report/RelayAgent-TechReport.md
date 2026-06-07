@@ -436,12 +436,12 @@ failure, and is how the benchmark's non-interactive runs end.
 
 ## 6. Natural-Language Routing
 
-**NL routing** (`scripts/run_nl.py` + `agents/capability_router.py`) builds a
-catalog of all app cards and asks the text LLM to pick the best single app +
-capability before dispatch, with a `--dry-run` mode for routing inspection. The
-router returns a concrete app id, capability id, and rewritten goal; execution is
-then delegated to the native single-app runner with `RELAY_FORCE_CAPABILITY` and
-`RELAY_INVOCATION_TEXT` set so the in-app invocation stays pinned to that choice.
+**NL routing** (`scripts/run_plan.py` + `agents/capability_matrix_router.py`) builds
+a catalog of all app cards, synthesizes a flow, and resolves each app step
+through the matrix-backed router, with a `--dry-run` mode for inspection. Each
+app leg is then delegated to the native single-app runner with
+`RELAY_FORCE_CAPABILITY` and `RELAY_INVOCATION_TEXT` set so the in-app invocation
+stays pinned to that choice.
 
 ---
 
@@ -1011,8 +1011,8 @@ when apps ship endpoints, cards become a thin shim or disappear (SPEC §14).
 
 ## Appendix A. Reproducibility
 
-- **Entry points.** `scripts/run_test.py <pkg> "<goal>"` (single app) and
-  `scripts/run_nl.py "<goal>"` (routed). Both cold-launch the target and set
+- **Entry points.** `scripts/run_native.py <pkg> "<goal>"` (single app) and
+  `scripts/run_plan.py "<goal>"` (routed flow). Both cold-launch the target and set
   `RELAY_SKIP_OPEN_APP=1`.
 - **A/B flags.** `RELAY_PRECHECK=0 RELAY_SCRAPE=0` reproduces the pre-optimization
   baseline; `RELAY_TIMING=1` writes a per-run `wall_clock.json`.
@@ -1124,7 +1124,7 @@ single irreversible payment tap.
 
 Threats-to-validity follow-ups (newly opened, §8.9):
 - [x] **Manifest-isolation ablation** — `RELAY_NO_MANIFEST=1` (`agents/relay_agent.py`); n=3 `test-results/ab/nm/`. → §8.9 item 1 (no-manifest ≈14k, splits 19× into ≈5.5× delegation + ≈3.5× manifest).
-- [x] **Frugal pure-VLM baseline** — `HISTORY_N_IMAGES=1` (`test-results/ab/n3_hist1/`) + **a11y-text-input baseline** (`agents/a11y_agent.py`, `test-results/ab/a11y/`, n=3; driver `test-results/ab/run_a11y.sh`, fresh-start `scripts/fresh_conv.py`). → §8.9 item 2 (a11y-text median 47302 = 11.9× RA, only 1.6× under general_e2e; prompt/completion split + $ restatement in §8.2). *(set-of-marks still untested.)*
+- [x] **Frugal pure-VLM baseline** — `HISTORY_N_IMAGES=1` (`test-results/ab/n3_hist1/`) + **a11y-text-input baseline** (`agents/a11y_agent.py`, `test-results/ab/a11y/`, n=3; driver `test-results/ab/run_a11y.sh`, fresh-start `benchmark/fresh_conv.py`). → §8.9 item 2 (a11y-text median 47302 = 11.9× RA, only 1.6× under general_e2e; prompt/completion split + $ restatement in §8.2). *(set-of-marks still untested.)*
 - [ ] **Reproduce the failure modes** — instrumented runs that trigger premature-exit (seeded stale conversation) and runaway, to put §8.4's sharp variance on tracked data.
 - [ ] **Adversarial handoff tests** — assistant auto-submits in one turn / mis-annotated flag / CTA label ≠ `stop_before`; show the contract holds or where it leaks.
 - [ ] **Catalog-wide a11y hit-rate** — % taps resolved by uiautomator vs VLM-fallback across the 28 capabilities.

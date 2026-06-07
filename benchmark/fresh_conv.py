@@ -5,7 +5,7 @@ re-driving run starts from the same clean input-box state general_e2e faced,
 so the only variable measured is the input modality. NOT part of any agent —
 it is harness-side state setup.
 
-Usage:  uv run python scripts/fresh_conv.py [com.aliyun.tongyi]
+Usage:  uv run python benchmark/fresh_conv.py [com.aliyun.tongyi]
 Assumes the app is already foreground (call after cold_launch).
 """
 

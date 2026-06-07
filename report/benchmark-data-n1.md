@@ -6,7 +6,7 @@
 
 ## 环境
 - 设备：真机 `46180DLAQ004LW`；LLM 网关 SJTU IPADS，model=`qwen`（VL）
-- MobileWorld server :6800；RelayAgent 入口 `run_test.py`
+- MobileWorld server :6800；RelayAgent 入口 `run_native.py`
 - MW 原始 agent：`mw test --agent-type general_e2e`（逐步 VLM，每步带 3 张历史截图）
 - **n=1**（每组单次，抖动未平均）
 
