@@ -246,7 +246,7 @@ class A11yTextAgent(RelayAgent):
             text = str(act.get("text", ""))
             self._history.append(f"{self._nstep}: input {text!r}")
             return thought, JSONAction(
-                action_type="input_text", text=text, clear_text=True
+                action_type="input_text", text=text
             )
 
         if kind == "scroll":

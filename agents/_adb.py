@@ -96,7 +96,7 @@ def _get_screen_size(timeout: float = 5.0) -> tuple[int, int]:
 
 
 def swipe_down(
-    ratio: float = 0.7,
+    ratio: float = 0.5,
     *,
     duration_ms: int = 300,
     timeout: float = 5.0,
@@ -107,7 +107,7 @@ def swipe_down(
     visible portion is the start; subsequent chunks live below.
 
     `ratio` is the vertical travel distance as a fraction of screen height
-    (clamped to [0.1, 0.8]). Overridable per-call by env
+    (clamped to [0.1, 0.5]). Overridable per-call by env
     `RELAY_CAPTURE_SCROLL_RATIO`.
     """
     env = os.getenv("RELAY_CAPTURE_SCROLL_RATIO")

@@ -32,6 +32,23 @@ _TAP_LABEL_KEYS = (
 )
 
 
+def _wait_for_reply_step(max_seconds: int, capture_cfg: Any = None) -> Step:
+    """Build a wait_for_reply Step with optional capture-full config.
+
+    Shared by `_compile_step` (inline card step) and `build_plan` (the
+    post-invocation reply wait) so both paths produce identical semantics —
+    same capture opt-in shape, same default-scrolls handling. `capture_cfg`
+    is truthy to enable the scroll-and-capture loop; a dict with
+    `max_scrolls` overrides the runtime default.
+    """
+    params: dict[str, Any] = {"max_seconds": int(max_seconds)}
+    if capture_cfg:
+        params["capture_full"] = True
+        if isinstance(capture_cfg, dict) and "max_scrolls" in capture_cfg:
+            params["max_capture_scrolls"] = int(capture_cfg["max_scrolls"])
+    return Step("wait_for_reply", params, note="agent reply (text-hash polled)")
+
+
 def _compile_step(raw: dict) -> Step | None:
     """One card step → one logical Step. Returns None on unrecognized step
     (and logs a warning — a silent skip masks card typos)."""
@@ -75,11 +92,10 @@ def _compile_step(raw: dict) -> Step | None:
         )
     if "wait_for_reply" in raw:
         w = raw["wait_for_reply"] or {}
-        return Step(
-            "wait_for_reply",
-            {"max_seconds": int(w.get("max_seconds", 60))},
-            note="agent reply (text-hash polled)",
-        )
+        capture_cfg = w.get("capture_full")
+        if capture_cfg is None:
+            capture_cfg = w.get("x_capture_full_reply")
+        return _wait_for_reply_step(int(w.get("max_seconds", 60)), capture_cfg)
     logger.warning(
         f"Unknown step kind in card (no handler matched): {list(raw.keys())!r} "
         f"— step will be dropped from the plan"
@@ -162,8 +178,9 @@ def build_plan(
     plan.append(submit)
 
     # Wait for the in-app agent to finish responding. We give it a generous
-    # ceiling (3× typical latency, min 30 s) and let the VLM poll decide when
-    # the reply is actually done — and capture the text while we are there.
+    # ceiling (5× typical latency, min 60 s) and let uiautomator text-hash
+    # stability decide when the reply is actually done — and scrape the text
+    # while we are there.
     typical_latency = capability.get("typical_latency_seconds", 10)
     # 5× multiplier + 60 s floor: typical_latency in cards is "first-token"
     # latency, not "complete-reply" latency. A 千问 chat capability declares
@@ -176,18 +193,7 @@ def build_plan(
     # capture loop via `x_capture_full_reply: { max_scrolls: N }` (or just
     # `true` for the default of 6).
     capture_cfg = capability.get("x_capture_full_reply")
-    wait_params: dict[str, Any] = {"max_seconds": max_wait}
-    if capture_cfg:
-        wait_params["capture_full"] = True
-        if isinstance(capture_cfg, dict) and "max_scrolls" in capture_cfg:
-            wait_params["max_capture_scrolls"] = int(capture_cfg["max_scrolls"])
-    plan.append(
-        Step(
-            "wait_for_reply",
-            wait_params,
-            note="agent reply (text-hash polled)",
-        )
-    )
+    plan.append(_wait_for_reply_step(max_wait, capture_cfg))
 
     # If the card declares output.method == copy_button, tap the in-app
     # copy button after the reply lands so the answer ends up on the device
