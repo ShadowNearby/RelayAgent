@@ -4,7 +4,7 @@
 
 > One NL sentence → LLM **auto-synthesizes** a cross-app plan → validate → persist → preview & confirm → run on a real device.
 >
-> How it relates to the existing entries: `run_plan.py` is now the NL entry. Direct app-pinned runs use `run_native.py`.
+> How it relates to the existing entries: `run_plan.py` is now the NL entry. Direct app-pinned runs use `python -m agents.native_runner`.
 
 ---
 
@@ -36,7 +36,7 @@ one sentence
   ├─(5) preview + confirm ←─────────────────────┘
   │        default N; non-interactive stdin (EOF) = don't execute; --yes skips; --dry-run stops here
   │
-  └─(6) FlowRunner.run()           one run_native subprocess per app leg (direct adb)
+  └─(6) FlowRunner.run()           one native runner subprocess per app leg (direct adb)
 ```
 
 Files involved:
@@ -130,7 +130,7 @@ Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 
 "after `handoff_to_user`, be able to switch back to the agent" has two granularities; this version ships A and leaves a seam for B:
 
-- **Phase A (shipped)**: the handoff leg ends → a flow-level `ask_user` collects the user's answer → the next agent leg is a **fresh `run_native` subprocess** (same app or a different one) with the answer + full intent re-stated in the prompt. Reuses the existing `FlowRunner` structure. **Limitation**: a same-app mid-task handoff cold-launches and clears history, losing in-app half-finished state.
+- **Phase A (shipped)**: the handoff leg ends → a flow-level `ask_user` collects the user's answer → the next agent leg is a **fresh native runner subprocess** (same app or a different one) with the answer + full intent re-stated in the prompt. Reuses the existing `FlowRunner` structure. **Limitation**: a same-app mid-task handoff cold-launches and clears history, losing in-app half-finished state.
 - **Phase B (seam only, not wired)**: keep the handoff leg from terminating — replace `stdin=DEVNULL` in `flow_runner._run_app_step` with a flow⇄agent channel; the agent's handoff `ask_user` (inside `relay_agent.py`) no longer ends on EOF but blocks reading the answer the flow pipes back, then resumes `predict()` in the **same conversation**. Both spots carry `# TODO(phase-B):` markers.
 
 > In-app handoff today: when the agent reaches the `handoff` step it first calls `_maybe_persist_reply()` (writes the reply to `RELAY_REPLY_OUT`), then emits `action_type="ask_user"`; in a flow leg stdin is DEVNULL → immediate EOF → the subprocess ends with the reply already persisted.
@@ -164,7 +164,7 @@ uv run python scripts/run_plan.py "..." --no-cache
 uv run python scripts/run_plan.py "..." --record
 uv run python scripts/run_plan.py "..." --record /path/to/dir
 
-# args after `--` are forwarded to each underlying run_native
+# args after `--` are forwarded to each underlying native runner
 uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 ```
 
@@ -176,12 +176,12 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 | `--yes` / `-y` | skip the y/N confirm |
 | `--no-cache` | don't reuse a cached plan in `_generated/`; force regeneration |
 | `--record [DIR]` | adb screen recording; defaults to `traj_logs/recordings/<ts>/` |
-| `-- <args>` | everything after `--` is forwarded to the underlying `run_native` |
+| `-- <args>` | everything after `--` is forwarded to the underlying native runner |
 
 **Environment**
 
 - Planning uses `.env`'s `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (= `qwen`).
-- Execution runs each leg as a direct-adb `run_native` subprocess.
+- Execution runs each leg as a direct-adb native runner subprocess.
 - Real-device requirements as elsewhere in the project: adb + USB debugging + `com.android.adbkeyboard/.AdbIME`; `RELAY_ANDROID_SERIAL` selects the device.
 
 **Non-interactive behavior of mid-flow `ask_user`**: a flow-level `ask_user` reads the parent process's stdin. With `< /dev/null` (or a piped EOF), a pick step **auto-takes the first candidate** and a freeform step takes the empty string — suitable for `--yes` batch runs. To pick by hand, run interactively in a real terminal.

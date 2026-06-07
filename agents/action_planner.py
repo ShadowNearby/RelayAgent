@@ -125,7 +125,7 @@ def build_plan(
 
     plan: list[Step] = []
 
-    # Caller (e.g. scripts/run_native.py) may already have cold-launched
+    # Caller (e.g. agents.native_runner) may already have cold-launched
     # the app before invoking the agent. In that case we skip the
     # redundant open_app + settle wait at the top of the plan.
     if not skip_open_app:
@@ -191,7 +191,19 @@ def build_plan(
     # capture loop via `x_capture_full_reply: { max_scrolls: N }` (or just
     # `true` for the default of 6).
     capture_cfg = capability.get("x_capture_full_reply")
-    plan.append(_wait_for_reply_step(max_wait, capture_cfg))
+    # Some capabilities hand straight off to the user after submit — e.g. a
+    # navigation prompt where the in-app agent just produces a CTA/handoff and
+    # there is no scrapeable text reply worth waiting on. Those declare
+    # `x_skip_wait_for_reply: true`: skip the uiautomator text-hash poll loop
+    # (which would otherwise burn the full timeout ceiling on a non-text CTA),
+    # but still settle briefly so the submit actually registers and the in-app
+    # transition (e.g. launching navigation) starts before we hand off. Override
+    # the settle with `x_skip_wait_settle_ms`.
+    if capability.get("x_skip_wait_for_reply", False):
+        settle_ms = int(capability.get("x_skip_wait_settle_ms") or 1500)
+        plan.append(Step("wait_ms", {"ms": settle_ms}, note="settle before handoff"))
+    else:
+        plan.append(_wait_for_reply_step(max_wait, capture_cfg))
 
     # If the card declares output.method == copy_button, tap the in-app
     # copy button after the reply lands so the answer ends up on the device

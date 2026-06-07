@@ -97,6 +97,9 @@ embedded_agent:
       executable: true
       handoff_to_user_required: true
       typical_latency_seconds: 8
+      # Navigation just yields a CTA/handoff — no text reply to wait on, so go
+      # straight from submit to user handoff.
+      x_skip_wait_for_reply: true
 
     - id: hail_ride
       description: >

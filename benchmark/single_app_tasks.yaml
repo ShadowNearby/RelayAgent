@@ -14,7 +14,7 @@
 # 任务来源：本仓 manifests/*.yaml 中各 App 内置 Agent 声明的 capability（**以 manifest 为准**）。
 #
 # 怎么跑：
-#   单条     uv run python scripts/run_native.py <app> "<instruction>"
+#   单条     uv run python -m agents.native_runner <app> "<instruction>"
 #   只看 NL flow 规划  uv run python scripts/run_plan.py "<instruction>" --dry-run
 #
 # 安全语义（与 manifest 一致）：凡 handoff_required=true 的任务，agent 必须停在

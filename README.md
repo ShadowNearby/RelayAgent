@@ -109,7 +109,7 @@ RelayAgent/
 ├── spec/schema.json           # JSON Schema mirror of SPEC (normative validator)
 ├── manifests/                 # one YAML card per app; 9 Android cards
 ├── agents/                    # relay adapter, planner, capability router, card loader, adb helper
-├── scripts/                   # run_native.py (single app), run_plan.py (NL flow), benchmark runner, metrics
+├── scripts/                   # run_plan.py (NL flow), benchmark runner, metrics
 ├── docs/                      # design docs — capability taxonomy
 ├── report/                    # tech report + frozen benchmark data
 ├── CONTRIBUTING.md
@@ -129,10 +129,10 @@ uv venv --python 3.12
 uv sync --no-install-project
 
 # 2. fill in .env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL), then drive a goal
-uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python -m agents.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-`scripts/run_native.py` loads `.env`, activates the AdbKeyboard IME, cold-launches the target app via `agents/_adb.py` (force-stop + monkey LAUNCHER), sets `RELAY_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, runs the in-process loop over direct adb, and forwards any extra flags (e.g. `--max-step 40`) straight to the agent. Override the LLM config with `--model` / `--base-url` / `--api-key` if not using `.env`.
+`agents.native_runner` loads `.env`, activates the AdbKeyboard IME, cold-launches the target app via `agents/_adb.py` (force-stop + monkey LAUNCHER), sets `RELAY_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, runs the in-process loop over direct adb, and forwards any extra flags (e.g. `--max-step 40`) straight to the agent. Override the LLM config with `--model` / `--base-url` / `--api-key` if not using `.env`.
 
 `--model` is provider-agnostic — point it at any OpenAI-compatible VLM (`qwen/qwen3-vl-235b-a22b`, `anthropic/claude-sonnet-4-5`, `google/gemini-3`, …). Per task, the VLM is used sparingly (this is the source of the §8 cost numbers):
 

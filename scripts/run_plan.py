@@ -15,7 +15,7 @@ Pipeline:
                           failure is a TODO; for now we hard-fail.
     4. persist          — write the plan yaml to manifests/_generated/.
     5. preview + confirm — print the legs; execute only on y (default N).
-    6. FlowRunner.run() — one `run_native` subprocess per app leg (direct adb).
+    6. FlowRunner.run() — one native runner subprocess per app leg (direct adb).
 
 Usage:
     scripts/run_plan.py "在上海找三家评价好的小众书店，挑一家打车过去"
@@ -23,7 +23,7 @@ Usage:
     scripts/run_plan.py "..." --yes         # skip the confirm prompt
     scripts/run_plan.py "..." --no-cache    # ignore any cached plan
     scripts/run_plan.py "..." --record      # screen-record the run
-    scripts/run_plan.py "..." -- --step_wait_time 0.3   # forward to run_native
+    scripts/run_plan.py "..." -- --step_wait_time 0.3   # forward to native runner
 """
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,7 @@ for _p in (REPO_ROOT, SCRIPTS_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+from agents import _adb  # noqa: E402
 from agents import _recorder  # noqa: E402
 from agents.card_catalog import build_catalog  # noqa: E402
 from agents.capability_matrix_router import load_matrix  # noqa: E402
@@ -56,6 +58,7 @@ from agents.runtime_config import ensure_llm_env  # noqa: E402
 
 GENERATED_DIR = REPO_ROOT / "manifests" / "_generated"
 ENV_FILE = REPO_ROOT / ".env"
+RECORD_TAIL_SECONDS = 10.0
 
 
 # --------------------------------------------------------------------------- #
@@ -128,43 +131,76 @@ def _truncate(s: str, n: int = 90) -> str:
 
 def _print_preview(plan: dict, catalog: dict, source: str, plan_path: Path | None) -> None:
     print()
-    print(f"计划来源: {source}")
+    print(f"Plan source: {source}")
     if plan_path:
         try:
-            print(f"plan 文件: {plan_path.relative_to(REPO_ROOT)}")
+            print(f"Plan file: {plan_path.relative_to(REPO_ROOT)}")
         except ValueError:
-            print(f"plan 文件: {plan_path}")
+            print(f"Plan file: {plan_path}")
     if plan.get("description"):
-        print(f"描述: {plan['description']}")
+        print(f"Description: {plan['description']}")
     apps = plan.get("apps_required") or []
     if apps:
-        print("需要的 app:")
+        print("Required apps:")
         for a in apps:
             print(f"  - {_app_name(catalog, a.get('app_id'))} ({a.get('use_capability')})")
-    print("步骤:")
+    print("Steps:")
     for n, s in enumerate(plan["steps"], 1):
         if s.get("type") == "ask_user":
             sel = s.get("select_from")
-            tail = f"从 {sel} 选 1 → " if sel else ""
+            tail = f"choose 1 from {sel} -> " if sel else ""
             print(f"  {n}. [ask_user] {tail}bind {s.get('bind')}")
             if s.get("prompt_header"):
-                print(f"        “{_truncate(s['prompt_header'])}”")
+                print(f"        \"{_truncate(s['prompt_header'])}\"")
         else:
             print(f"  {n}. [agent] {_app_name(catalog, s.get('app'))}/{s.get('capability')}")
-            print(f"        → {_truncate(s.get('prompt', ''))}")
+            print(f"        -> {_truncate(s.get('prompt', ''))}")
             if s.get("extract"):
-                print(f"        ↳ extract → bind {s.get('bind')}")
+                print(f"        -> extract -> bind {s.get('bind')}")
             elif s.get("bind"):
-                print(f"        ↳ bind {s.get('bind')}")
+                print(f"        -> bind {s.get('bind')}")
     print()
+
+
+def _plan_packages(plan: dict) -> list[str]:
+    """Every distinct app package the plan's steps will open, in step order."""
+    pkgs: list[str] = []
+    for step in plan.get("steps", []):
+        pkg = step.get("app")
+        if pkg and pkg not in pkgs:
+            pkgs.append(pkg)
+    return pkgs
+
+
+def _prekill_apps(plan: dict) -> None:
+    """Force-stop every app the plan touches before execution starts.
+
+    Each leg's first predict still cold-launches its own app (force-stop +
+    relaunch), but that only clears the leg's own app at the moment it opens —
+    apps used in later legs (and the one handed off from) keep running in the
+    background with stale state. Killing them all up front gives the whole plan
+    a clean slate. Best-effort: a kill failure must not block the run.
+    Disable with RELAY_PREKILL_APPS=0.
+    """
+    if os.getenv("RELAY_PREKILL_APPS", "1") == "0":
+        return
+    pkgs = _plan_packages(plan)
+    if not pkgs:
+        return
+    logger.info(f"pre-kill background for {len(pkgs)} app(s): {', '.join(pkgs)}")
+    for pkg in pkgs:
+        try:
+            _adb.force_stop(pkg)
+        except Exception as e:  # noqa: BLE001 — best-effort; never block the run
+            logger.warning(f"pre-kill force-stop {pkg} failed: {e}")
 
 
 def _confirm() -> bool:
     """Ask y/N. Default N; a non-interactive stdin (EOF) means do not execute."""
     try:
-        ans = input("执行这个 plan? [y/N] ").strip().lower()
+        ans = input("Execute this plan? [y/N] ").strip().lower()
     except EOFError:
-        print("(非交互输入，默认不执行)")
+        print("(non-interactive input; defaulting to no execution)")
         return False
     return ans in ("y", "yes")
 
@@ -211,18 +247,18 @@ def main(argv: list[str] | None = None) -> int:
         if hit:
             plan = yaml.safe_load(hit.read_text(encoding="utf-8")) or {}
             if plan.get("unsatisfiable"):
-                print(f"\n无法用现有 app 满足这个请求：{plan.get('reason')}")
+                print(f"\nNo available app can satisfy this request: {plan.get('reason')}")
                 return 1
             try:
                 plan = planner.resolve_app_routes(plan, args.nl)
                 planner.validate_plan(plan, args.nl)
             except PlanValidationError as e:
                 logger.error(str(e))
-                print("\n缓存 plan 重新路由后没通过校验，已中止。")
-                print("错误：")
+                print("\nCached plan failed validation after rerouting; aborting.")
+                print("Errors:")
                 for err in e.errors:
                     print(f"  - {err}")
-                print("\n原始 plan：")
+                print("\nRaw plan:")
                 print(json.dumps(e.plan, ensure_ascii=False, indent=2))
                 return 1
             plan_path = _persist(plan, args.nl)
@@ -233,35 +269,40 @@ def main(argv: list[str] | None = None) -> int:
             plan = planner.plan(args.nl)
         except PlanValidationError as e:
             logger.error(str(e))
-            print("\n生成的 plan 没通过校验，已中止（repair 暂未实现，见 flow_planner._repair TODO）。")
-            print("错误：")
+            print("\nGenerated plan failed validation; aborting (repair is not implemented yet; see flow_planner._repair TODO).")
+            print("Errors:")
             for err in e.errors:
                 print(f"  - {err}")
-            print("\n原始 plan：")
+            print("\nRaw plan:")
             print(json.dumps(e.plan, ensure_ascii=False, indent=2))
             return 1
         if plan.get("unsatisfiable"):
-            print(f"\n无法用现有 app 满足这个请求：{plan.get('reason')}")
+            print(f"\nNo available app can satisfy this request: {plan.get('reason')}")
             return 1
         plan_path = _persist(plan, args.nl)
         logger.info(f"plan persisted → {plan_path}")
 
-    source = f"缓存复用 ({plan_path.name})" if from_cache else "新生成"
+    source = f"cache reuse ({plan_path.name})" if from_cache else "newly generated"
     _print_preview(plan, catalog, source, plan_path)
 
     if args.dry_run:
-        print("--dry-run：只规划+预览，不执行。")
+        print("--dry-run: plan and preview only; not executing.")
         return 0
     if not args.yes and not _confirm():
-        print("已取消。")
+        print("Canceled.")
         return 0
 
-    # No server: each leg is a direct-adb run_native subprocess (FlowRunner
-    # forwards `extra` to run_native verbatim).
+    # No server: each leg is a direct-adb native runner subprocess (FlowRunner
+    # forwards `extra` to the runner verbatim).
+
+    # Clean slate: kill the background of every app the plan touches before the
+    # first leg launches (per-leg cold-launch only clears that leg's own app).
+    _prekill_apps(plan)
 
     # Recording spans multiple leg subprocesses (one per leg); keep a
     # single continuous parent-owned recording across all app legs.
     rec = None
+    completed = False
     if args.record is not None:
         out_dir = (
             Path(args.record).expanduser().resolve()
@@ -276,9 +317,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         runner = FlowRunner(flow_path=plan_path, extra_args=extra)
         runner.run()
+        completed = True
         return 0
     finally:
         if rec is not None:
+            if completed:
+                logger.info(f"task complete; keeping recording for {RECORD_TAIL_SECONDS:g}s")
+                time.sleep(RECORD_TAIL_SECONDS)
             final = rec.stop()
             if final:
                 logger.info(f"recording saved → {final}")
