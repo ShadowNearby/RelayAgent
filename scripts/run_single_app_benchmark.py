@@ -42,24 +42,12 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from agents.runtime_config import ensure_llm_env  # noqa: E402
 
 ENV_FILE = REPO_ROOT / ".env"
 # Each task is one direct-adb run_native.py subprocess.
 RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
 DEFAULT_TASKS = REPO_ROOT / "benchmark" / "single_app_tasks.yaml"
-
-
-def _load_dotenv(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    out: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        out[k.strip()] = v.strip().strip("'\"")
-    return out
 
 
 def _slug(s: str) -> str:
@@ -267,12 +255,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{idx:02d} {task['id']} {task['app']}/{task['capability']} :: {task['instruction']}")
         return 0
 
-    env = _load_dotenv(ENV_FILE)
-    for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
-        v = os.environ.get(k) or env.get(k)
-        if not v:
-            raise SystemExit(f"Missing required config: {k} (set in .env or shell env)")
-        env[k] = v
+    try:
+        env = ensure_llm_env(ENV_FILE)
+    except RuntimeError as e:
+        raise SystemExit(str(e)) from e
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_root = (args.out_dir or (REPO_ROOT / "traj_logs" / f"single_app_benchmark_{ts}")).resolve()

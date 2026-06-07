@@ -1,7 +1,7 @@
 """LLM flow synthesizer.
 
 Given the full catalog of apps + their embedded-agent capabilities (the
-same shape `scripts/run_nl.py:build_catalog()` produces) and a user's
+same shape `agents.card_catalog.build_catalog()` produces) and a user's
 natural-language request, ask the text LLM to synthesize a *new* multi-app
 flow plan — the same step/bind schema that `FlowRunner` already executes,
 so no new executor is needed.
@@ -13,10 +13,11 @@ Design (see CLAUDE.md + the `project_cross_app_planner` decision notes):
 - Output reuses the flow yaml shape (`app_step` / `ask_user` / `extract` /
   `bind`); there is no `inputs` block because the request is concrete and
   literal values get baked straight into the step prompts.
-- We validate the plan locally (known ids, no dangling `{var}` reference,
-  handoff legs followed by ask_user, unique binds). On failure we hard-fail
-  with the error list — an LLM repair loop is a deliberate TODO (see
-  `_repair`), not yet wired.
+- App/capability selection is resolved after step synthesis by the shared
+  matrix-backed three-stage router. We then validate the plan locally (known
+  ids, no dangling `{var}` reference, handoff legs followed by ask_user, unique
+  binds). On failure we hard-fail with the error list — an LLM repair loop is a
+  deliberate TODO (see `_repair`), not yet wired.
 - `handoff_to_user_required` capabilities are NEVER terminal: the planner
   must follow them with an `ask_user` step (Phase-A handoff round-trip).
 """
@@ -27,6 +28,8 @@ from typing import Any
 
 from loguru import logger
 from openai import OpenAI
+
+from agents.capability_matrix_router import route as route_app_capability
 
 # `_VAR_RE` (the `{var}` / `{var.field}` matcher) and the fenced-JSON parser
 # are shared with the runner so the planner validates exactly what the runner
@@ -54,7 +57,7 @@ class PlanValidationError(RuntimeError):
 _PLANNER_SYSTEM = """You synthesize a multi-app cowork PLAN from a user's natural-language request.
 
 You are given a catalog of apps. Each app has an embedded AI agent with a list
-of capabilities (id, description, example_prompts, side_effects, executable,
+of capabilities (id, description, example_prompts, executable,
 handoff_to_user_required).
 
 Produce ONE JSON object inside a ```json``` fence — a flow plan shaped like:
@@ -70,8 +73,8 @@ A step is ONE of:
   App step (drives one app's agent for one capability):
     {
       "id": "<unique short id>",
-      "app": "<app_id from the catalog>",
-      "capability": "<capability id that exists on that app>",
+      "app": "<optional/provisional app_id from the catalog>",
+      "capability": "<optional/provisional capability id that exists on that app>",
       "prompt": "<concrete text to give the in-app agent; may reference {var} or {var.field} bound by an EARLIER step>",
       "extract": {                       // OPTIONAL — only when a LATER step consumes structured data from this reply
         "prompt": "<instruction to parse the captured reply into JSON>",
@@ -92,6 +95,9 @@ A step is ONE of:
 
 RULES:
 1. Use ONLY app_id and capability ids that appear in the catalog. Never invent ids.
+   App/capability fields are provisional: after you synthesize the step prompts,
+   a separate matrix-backed router will resolve every app step's final app and
+   capability. Focus on decomposing the task and writing each concrete step prompt.
 2. To pass data between steps, give the upstream app step an `extract` + a `bind`,
    then reference it downstream as {var} or {var.field}. EVERY {var} you reference
    MUST be produced by an EARLIER step's bind.
@@ -115,10 +121,18 @@ No prose outside the fence."""
 
 
 class FlowPlanner:
-    def __init__(self, catalog: dict[str, Any], llm: OpenAI, model: str) -> None:
+    def __init__(
+        self,
+        catalog: dict[str, Any],
+        llm: OpenAI,
+        model: str,
+        *,
+        matrix: dict[str, Any] | None = None,
+    ) -> None:
         self.catalog = catalog
         self._llm = llm
         self._model = model
+        self.matrix = matrix
         # app_id -> {capability_id -> capability dict}, for id validation and
         # the handoff_to_user_required lookup.
         self._caps: dict[str, dict[str, dict]] = {}
@@ -168,13 +182,10 @@ class FlowPlanner:
             logger.info(f"planner: unsatisfiable — {data.get('reason')!r}")
             return data
 
-        errors = self._validate(data)
-        if errors:
-            # TODO(repair): feed `errors` back to the LLM and retry (max ~2
-            # rounds) before giving up. Deferred by design — for now we
-            # hard-fail so a malformed plan never silently executes.
-            self._repair(data, errors)  # no-op stub; see below
-            raise PlanValidationError(nl_request, data, errors)
+        if self.matrix is not None:
+            data = self.resolve_app_routes(data, nl_request)
+
+        self.validate_plan(data, nl_request)
 
         n_legs = sum(1 for s in data["steps"] if not _is_ask_user(s))
         if n_legs >= 4:
@@ -182,6 +193,92 @@ class FlowPlanner:
             logger.warning(f"synthesized plan has {n_legs} app legs — review the preview carefully")
         logger.info(f"planner: {len(data['steps'])} steps ({n_legs} app legs)")
         return data
+
+    def validate_plan(self, plan: dict, nl_request: str) -> None:
+        errors = self._validate(plan)
+        if errors:
+            # TODO(repair): feed `errors` back to the LLM and retry (max ~2
+            # rounds) before giving up. Deferred by design — for now we
+            # hard-fail so a malformed plan never silently executes.
+            self._repair(plan, errors)  # no-op stub; see below
+            raise PlanValidationError(nl_request, plan, errors)
+
+    # --------------------------------------------------------------- routing
+
+    def resolve_app_routes(self, plan: dict, nl_request: str) -> dict:
+        """Fill each app step's app/capability via the shared three-stage router."""
+        if self.matrix is None:
+            return plan
+
+        steps = plan.get("steps")
+        if not isinstance(steps, list):
+            return plan
+
+        errors: list[str] = []
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict) or _is_ask_user(step):
+                continue
+            prompt = step.get("prompt")
+            if not prompt:
+                continue
+
+            request = self._route_request_for_step(step, nl_request)
+            try:
+                decision = route_app_capability(
+                    request,
+                    self.catalog,
+                    self.matrix,
+                    self._llm,
+                    self._model,
+                    preserve_goal=True,
+                )
+            except Exception as e:  # surfaced as a plan validation error below
+                errors.append(f"step {step.get('id') or i!r}: route failed: {e}")
+                continue
+
+            app_id = decision.get("app_id")
+            cap_id = decision.get("capability_id")
+            if app_id:
+                step["app"] = app_id
+            if cap_id:
+                step["capability"] = cap_id
+            logger.info(
+                f"planner route step {step.get('id') or i!r} -> "
+                f"{app_id} / {cap_id} (reason: {decision.get('reason')})"
+            )
+
+        if errors:
+            raise PlanValidationError(nl_request, plan, errors)
+
+        self._refresh_apps_required(plan)
+        return plan
+
+    def _route_request_for_step(self, step: dict, nl_request: str) -> str:
+        parts = [
+            "Route only this planned app step, not the whole flow.",
+            f"Original end-to-end request: {nl_request}",
+            f"Planned app-step prompt: {step.get('prompt', '')}",
+        ]
+        if step.get("app") or step.get("capability"):
+            parts.append(
+                "Planner's provisional hint: "
+                f"app={step.get('app') or ''}, capability={step.get('capability') or ''}"
+            )
+        return "\n".join(parts)
+
+    def _refresh_apps_required(self, plan: dict) -> None:
+        seen: set[tuple[str, str]] = set()
+        apps_required: list[dict[str, str]] = []
+        for step in plan.get("steps", []):
+            if not isinstance(step, dict) or _is_ask_user(step):
+                continue
+            app = step.get("app")
+            cap = step.get("capability")
+            if not app or not cap or (app, cap) in seen:
+                continue
+            seen.add((app, cap))
+            apps_required.append({"app_id": app, "use_capability": cap})
+        plan["apps_required"] = apps_required
 
     # --------------------------------------------------------------- repair
 

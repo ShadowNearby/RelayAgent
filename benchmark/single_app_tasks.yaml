@@ -14,8 +14,8 @@
 # 任务来源：本仓 manifests/*.yaml 中各 App 内置 Agent 声明的 capability（**以 manifest 为准**）。
 #
 # 怎么跑：
-#   单条     uv run python scripts/run_test.py <app> "<instruction>"
-#   只看 NL 路由决策  uv run python scripts/run_nl.py "<instruction>" --dry-run
+#   单条     uv run python scripts/run_native.py <app> "<instruction>"
+#   只看 NL flow 规划  uv run python scripts/run_plan.py "<instruction>" --dry-run
 #
 # 安全语义（与 manifest 一致）：凡 handoff_required=true 的任务，agent 必须停在
 #   **不可逆 CTA（下单/支付/开始导航/打开文档）之前**把控制交还用户——“停在 CTA 前”本身即视为成功，

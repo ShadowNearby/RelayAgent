@@ -35,13 +35,13 @@
 
 ```bash
 # 单条（app_id + 指令）
-uv run python scripts/run_test.py com.xingin.xhs "上海有什么值得一去的小众咖啡馆，推荐5家"
+uv run python scripts/run_native.py com.xingin.xhs "上海有什么值得一去的小众咖啡馆，推荐5家"
 
 # 购物类现走千问（app_id=com.aliyun.tongyi）
-uv run python scripts/run_test.py com.aliyun.tongyi "帮我找一台适合学生用的平板电脑，预算2000以内"
+uv run python scripts/run_native.py com.aliyun.tongyi "帮我找一台适合学生用的平板电脑，预算2000以内"
 
-# 自然语言路由（只看路由决策）
-uv run python scripts/run_nl.py "帮我找一台适合学生用的平板电脑，预算2000以内" --dry-run
+# 自然语言 flow（只看规划和每步路由）
+uv run python scripts/run_plan.py --dry-run "帮我找一台适合学生用的平板电脑，预算2000以内"
 ```
 
 > 注：本任务集一律使用 **manifest-canonical** id；购物能力归到 `com.aliyun.tongyi`，

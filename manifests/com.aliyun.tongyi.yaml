@@ -7,7 +7,6 @@ locale: ["zh-CN"]
 
 embedded_agent:
   name: "千问"
-  type: native_in_app_agent
   description: >
     Alibaba's Tongyi Qianwen App — the entire app is an AI agent surface.
     Built-in orchestration layer routes intents (train/food/ride/hotel/movie/
@@ -19,19 +18,15 @@ embedded_agent:
     primary:
       method: tap_sequence
       steps: []
-    fallback: []
     x_prepare_fresh_conversation:
       description: >
         Start a new conversation before real-device tests to avoid stale context.
       steps:
         - tap_screen_fraction:
-            label: "open_left_menu"
             x_ratio: 0.075
             y_ratio: 0.10
         - tap_label:
             text_or_desc: "新建对话"
-            timeout_seconds: 0.5
-            scroll_attempts: 0
         - wait:
             until: { text: "发消息或按住说话..." }
             timeout_seconds: 0.5
@@ -40,14 +35,12 @@ embedded_agent:
     input:
       # EditText has no resource-id; tap-through on placeholder TextView sibling.
       field: { text: "发消息或按住说话..." }
-      max_chars: 2000
     submit:
       # Same FrameLayout: empty → "+", has text → send arrow. No a11y metadata; bounds-only. See OQ-11.
       trigger:
         x_bounds:
           box: [916, 2094, 1027, 2205]
           anchor: bottom_right
-    prompt_template: "{{user_prompt}}"
 
   output:
     method: none
@@ -63,11 +56,58 @@ embedded_agent:
         - "讲讲二战中的中途岛海战"
         - "帮我把这段话改得更书面一点：……"
       executable: false
-      side_effects: []
-      requires_login: false
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 8
+
+    - id: poi_nearby_search
+      description: >
+        Nearby POI search and local discovery via Tongyi's partner-app
+        orchestration. The assistant can search for nearby places such as
+        restaurants, cafes, convenience stores, attractions, or services, and
+        return recommended options with basic location context. It does not
+        start navigation, place orders, or make reservations automatically.
+      example_prompts:
+        - "帮我找上海图书馆东馆南门附近评分高的咖啡店"
+        - "搜一下前滩太古里石区周边24小时便利店"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 10
+      x_capture_full_reply:
+        max_scrolls: 6
+      x_partner_app: "com.autonavi.minimap"
+      x_partner_auth: "oauth_preauthorized"
+
+    - id: route_planning
+      description: >
+        Route planning via Tongyi's map orchestration, including address parsing,
+        destination disambiguation, route options, distance, ETA, and traffic
+        estimates. It may surface a navigation CTA, but scripted flows stop
+        before live turn-by-turn guidance so the user can confirm.
+      example_prompts:
+        - "从上海儿童医学中心门诊楼到虹桥火车站南进站口怎么走"
+        - "我现在去张江人工智能岛7号楼大概要多久"
+      executable: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 12
+      x_capture_full_reply:
+        max_scrolls: 6
+      x_partner_app: "com.autonavi.minimap"
+      x_partner_auth: "oauth_preauthorized"
+
+    - id: live_navigation
+      description: >
+        Turn-by-turn navigation handoff through Tongyi's Amap integration. The
+        assistant can prepare the destination and route choice, then must hand
+        control back before starting live navigation because driving/walking
+        guidance is an ongoing physical-world action.
+      example_prompts:
+        - "导航去徐家汇地铁站14号口附近最近的24小时便利店"
+        - "帮我开始导航到上海南站南广场进站口"
+      executable: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 10
+      x_partner_app: "com.autonavi.minimap"
+      x_partner_auth: "oauth_preauthorized"
 
     - id: book_train
       description: >
@@ -78,20 +118,30 @@ embedded_agent:
         - "帮我买明天下午两点左右去南京的高铁"
         - "周五早上 8 点上海到杭州的二等座票"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 20
       x_capture_full_reply:
         max_scrolls: 6
-      failure_modes:
-        - "12306 not logged in → stops at login sheet; user must enter credentials"
-        - "Fliggy returns no results → asks for time range clarification"
       x_partner_app: "com.taobao.trip"
       x_partner_service: "12306"
       x_partner_auth: "service_credential"
+
+    - id: book_flight
+      description: >
+        Flight search and booking via Fliggy. The assistant parses route, date,
+        time window, cabin, and price constraints, then returns flight options
+        or a partner booking card. Passenger details, ticketing, and payment
+        require user handoff.
+      example_prompts:
+        - "帮我找下周一上海到北京下午的机票"
+        - "明天最便宜的虹桥飞成都的航班"
+      executable: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 6
+      x_partner_app: "com.taobao.trip"
+      x_partner_auth: "oauth_preauthorized"
 
     - id: order_food
       description: >
@@ -102,16 +152,10 @@ embedded_agent:
       example_prompts:
         - "帮我点三杯蜜雪冰城蜜桃四季春"
         - "晚上点份麻辣烫，30 块以内"
-        - "我想点份附近的外卖"
+        - "我想点份陆家嘴中心L+南门附近的外卖"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 8
-      failure_modes:
-        - "OAuth bind required on first use; flow terminates if user declines"
       x_partner_app: "com.taobao.litetao"
       x_partner_auth: "oauth_bind_required"
       x_post_result_flow:
@@ -121,12 +165,8 @@ embedded_agent:
         steps:
           - tap_label:
               text_or_desc: "选这个"
-              timeout_seconds: 1
-              scroll_attempts: 2
           - tap_label:
               text_or_desc: "选好了"
-              timeout_seconds: 0.3
-              scroll_attempts: 0
           - wait:
               ms: 3000
         stop_before:
@@ -144,16 +184,10 @@ embedded_agent:
         - "推荐几款夏天通勤穿的男士防晒衣"
         - "iPhone 17 和上一代买哪个更划算"
       executable: true
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 12
       x_capture_full_reply:
         max_scrolls: 6
-      failure_modes:
-        - "Too few constraints → follow-up questions (budget, size, brand, use case)"
-        - "Clicking product cards may leave agent chat for product detail page"
       x_partner_app: "com.taobao.taobao"
       x_partner_auth: "oauth_bind_required"
 
@@ -167,15 +201,8 @@ embedded_agent:
         - "帮我买一包猫砂，膨润土的，10公斤左右"
         - "把这款黑色 256G 手机加入购物车"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 15
-      failure_modes:
-        - "Specs, quantity, address, or coupon ambiguous → user must manually select"
-        - "Checkout/payment pages require manual confirmation; scripts must not tap"
       x_partner_app: "com.taobao.taobao"
       x_partner_auth: "oauth_bind_required"
 
@@ -188,15 +215,10 @@ embedded_agent:
         - "我最近买的键盘到哪了"
         - "查一下刚才那单有没有发货"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 10
       x_capture_full_reply:
         max_scrolls: 4
-      failure_modes:
-        - "Multiple matching orders → user must pick the specific one"
       x_partner_app: "com.taobao.taobao"
       x_partner_auth: "oauth_bind_required"
 
@@ -206,18 +228,11 @@ embedded_agent:
         helps confirm origin/destination, car type, estimate, and payment path;
         irreversible ride/payment confirmations require user handoff.
       example_prompts:
-        - "叫一辆经济型车去虹桥机场"
-        - "帮我叫个车回家"
+        - "叫一辆经济型车去上海博物馆东馆北门"
+        - "帮我叫个车去杨浦滨江船厂1862"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 12
-      failure_modes:
-        - "Missing origin/destination → agent asks for clarification"
-        - "Alipay balance insufficient → payment password prompt"
       x_partner_app: "com.autonavi.minimap"
       x_partner_auth: "oauth_preauthorized"
 
@@ -230,16 +245,10 @@ embedded_agent:
         - "帮我在上海订一晚酒店，明天入住"
         - "北京三里屯附近 500 以内的酒店，明晚入住"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 18
       x_capture_full_reply:
         max_scrolls: 6
-      failure_modes:
-        - "No results or sold out → agent asks to expand search criteria"
       x_partner_app: "com.taobao.trip"
       x_partner_auth: "oauth_preauthorized"
 
@@ -252,17 +261,10 @@ embedded_agent:
         - "帮我买今晚上海的电影票"
         - "周六下午看星球大战, 选两张连座"
       executable: true
-      side_effects:
-        - payment
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 15
       x_capture_full_reply:
         max_scrolls: 6
-      failure_modes:
-        - "OAuth bind required on first use; flow terminates if user declines"
-        - "Damai not in static auth management list; partner pool is runtime-expanded"
       x_partner_app: "cn.damai"
       x_partner_auth: "oauth_bind_required"
 

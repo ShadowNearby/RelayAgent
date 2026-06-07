@@ -7,7 +7,6 @@ locale: ["zh-CN"]
 
 embedded_agent:
   name: "Gemini"
-  type: native_in_app_agent
   description: >
     Google's Gemini Android app. Launcher package is
     `com.google.android.apps.bard`, while the visible chat UI is hosted by the
@@ -25,7 +24,6 @@ embedded_agent:
     primary:
       method: tap_sequence
       steps: []
-    fallback: []
     x_prepare_fresh_conversation:
       description: >
         Start a fresh Gemini chat from the header so stale context does not
@@ -34,8 +32,6 @@ embedded_agent:
       steps:
         - tap_label:
             text_or_desc: "发起新对话"
-            timeout_seconds: 1
-            scroll_attempts: 0
         - wait:
             ms: 700
 
@@ -51,14 +47,12 @@ embedded_agent:
         x_bounds:
           box: [242, 2161, 733, 2287]
           anchor: bottom_left
-      max_chars: 4000
     submit:
       # The right-side slot is Gemini Live when empty and becomes send once
       # text is present. After keyboard focus the send button moves upward;
       # prefer a11y grounding over fixed bounds.
       trigger:
         accessibility_id: "发送"
-    prompt_template: "{{user_prompt}}"
 
   output:
     method: none
@@ -85,16 +79,10 @@ embedded_agent:
         - "查询 AAPL 当前股价、股息率和 ESG 概况，并给出来源"
         - "查询今天上海天气，给出一句话结论"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 20
       x_capture_full_reply:
         max_scrolls: 8
-      failure_modes:
-        - "Some rich search/web cards are visible but not reliably captured by uiautomator text dumps"
-        - "For multi-part transformations, ask for explicit numbered outputs or a table to reduce omitted sub-results"
 
     - id: poi_nearby_search
       description: >
@@ -102,18 +90,13 @@ embedded_agent:
         places, addresses, and rough local information, but does not open maps,
         start navigation, or verify live business status.
       example_prompts:
-        - "找上海交通大学闵行校区附近 3 家咖啡店"
-        - "附近有哪些适合带娃的室内场馆"
+        - "找上海音乐厅南门附近 3 家咖啡店"
+        - "世纪公园7号门附近有哪些适合带娃的室内场馆"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
       x_capture_full_reply:
         max_scrolls: 8
-      failure_modes:
-        - "Nearby answers are estimates and should be verified in a map app before travel"
 
     - id: route_planning
       description: >
@@ -121,18 +104,27 @@ embedded_agent:
         address parsing, route options, approximate distance/time/cost, and
         transit/driving comparisons. It does not start live navigation.
       example_prompts:
-        - "从上海交大闵行校区到虹桥火车站怎么走，估算距离时间费用"
-        - "解析地址：上海市闵行区东川路800号"
+        - "从上海大剧院北门到上海南站南广场进站口怎么走，估算距离时间费用"
+        - "解析地址：徐汇滨江西岸智塔A座"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
       x_capture_full_reply:
         max_scrolls: 8
-      failure_modes:
-        - "Route answers are estimates and should be verified in a map app before travel"
+
+    - id: live_navigation
+      description: >
+        Turn-by-turn navigation guidance handoff. Gemini can prepare a route,
+        explain transport options, and tell the user what to open in a map app,
+        but it does not start live navigation inside the tested Gemini surface.
+      example_prompts:
+        - "导航去上海儿童医学中心门诊楼附近最近的地铁站入口"
+        - "帮我开始导航到虹桥火车站南进站口"
+      executable: false
+      handoff_to_user_required: true
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 8
 
     - id: plan_trip
       description: >
@@ -143,9 +135,6 @@ embedded_agent:
         - "给我规划一个上海周末亲子游行程"
         - "帮我安排三天成都旅行，包含景点和餐饮"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
       x_capture_full_reply:
@@ -160,13 +149,8 @@ embedded_agent:
         - "查询明天上海到南京的高铁，列出几个合适时段，不要购票"
         - "查询周五北京到天津的火车选择，不要预订"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
-      failure_modes:
-        - "Availability and prices are time-sensitive and can be stale"
 
     - id: book_flight
       description: >
@@ -177,13 +161,8 @@ embedded_agent:
         - "查询下周一上海到北京的机票，不要预订"
         - "帮我比较明天虹桥到成都的航班时间和大致价格，不要购票"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
-      failure_modes:
-        - "Availability and prices are time-sensitive and can be stale"
 
     - id: book_hotel
       description: >
@@ -194,13 +173,8 @@ embedded_agent:
         - "推荐外滩附近 500 元以内酒店，不要预订"
         - "北京三里屯附近适合商务出差的酒店怎么选"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
-      failure_modes:
-        - "Availability and prices are time-sensitive and can be stale"
 
     - id: book_movie_event
       description: >
@@ -212,13 +186,8 @@ embedded_agent:
         - "查询今晚上海电影院某部电影的排片，不要购票"
         - "周末上海有哪些演出活动值得看，不要购票"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
-      failure_modes:
-        - "Booking, seat selection, ticket purchase, and payment require external ticketing apps"
 
     - id: search_product
       description: >
@@ -229,15 +198,10 @@ embedded_agent:
         - "推荐三款适合学生、预算3000元以内的安卓手机，不要下单"
         - "比较 iPhone 16 和 Pixel 9 的拍照、续航和性价比"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 20
       x_capture_full_reply:
         max_scrolls: 8
-      failure_modes:
-        - "Specific prices/promotions require current ecommerce verification"
 
     - id: order_food
       description: >
@@ -246,16 +210,11 @@ embedded_agent:
         cannot place delivery orders or access payment systems in the tested
         surface.
       example_prompts:
-        - "我想点一杯附近星巴克拿铁，不要下单，说明需要哪些信息"
-        - "附近点外卖怎么选更快，给我一个下单前检查清单"
+        - "我想点一杯上海博物馆东馆北门附近星巴克拿铁，不要下单，说明需要哪些信息"
+        - "张江人工智能岛7号楼附近点外卖怎么选更快，给我一个下单前检查清单"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 18
-      failure_modes:
-        - "User must finish in Starbucks/Meituan/Eleme or similar apps"
 
     - id: hail_ride
       description: >
@@ -263,16 +222,11 @@ embedded_agent:
         required ride details, but do not call ride-hailing APIs or confirm a
         ride. The user must finish in an external ride/map app.
       example_prompts:
-        - "我从上海交大闵行校区打车去虹桥火车站，估算时间和费用，不要叫车"
-        - "打车去机场前需要确认哪些信息"
+        - "我从复旦大学邯郸校区正门打车去虹桥火车站南进站口，估算时间和费用，不要叫车"
+        - "打车去前滩太古里石区前需要确认哪些信息"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 18
-      failure_modes:
-        - "User must finish in Amap/Didi or a similar ride-hailing app"
 
     - id: write_calendar
       description: >
@@ -283,14 +237,20 @@ embedded_agent:
         - "明天上午10点创建一个30分钟日历事件：测试Gemini能力"
         - "下周一下午3点安排一个项目同步会，持续1小时"
       executable: true
-      side_effects:
-        - data_write
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 15
-      failure_modes:
-        - "Availability depends on Google account, Calendar connection, permissions, and region"
+
+    - id: read_calendar
+      description: >
+        Google Calendar read and summarization when the account and connector
+        are authorized. The assistant can answer schedule, availability, and
+        date-range questions without modifying calendar data.
+      example_prompts:
+        - "帮我看一下明天上午有哪些日程"
+        - "总结我这周的会议安排"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 15
 
     - id: set_alarm_reminder
       description: >
@@ -300,14 +260,8 @@ embedded_agent:
         - "今晚9点提醒我喝水"
         - "明早7点设置一个闹钟"
       executable: true
-      side_effects:
-        - data_write
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 12
-      failure_modes:
-        - "Availability depends on Google Tasks/Assistant/Clock integration and device permissions"
 
     - id: read_email
       description: >
@@ -318,16 +272,10 @@ embedded_agent:
         - "搜索我最近一封来自 GitHub 的邮件并做一句话摘要"
         - "找上周关于会议的邮件，总结时间和地点"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
       x_capture_full_reply:
         max_scrolls: 4
-      failure_modes:
-        - "Requires Gmail/Workspace connector authorization"
-        - "No matching messages returns a plain failure summary"
 
     - id: write_email
       description: >
@@ -338,13 +286,8 @@ embedded_agent:
         - "给 test@example.com 写一封邮件，主题测试，正文一句话；不要发送"
         - "帮我草拟一封项目延期说明邮件，不要发送"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 15
-      failure_modes:
-        - "Direct email sending was refused in tested flow"
 
     - id: read_sms
       description: >
@@ -356,14 +299,68 @@ embedded_agent:
         - "读取我最近一条短信的摘要；如果不能访问短信请说明"
         - "总结今天收到的短信通知，不要回复"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 20
-      failure_modes:
-        - "SMS read probe only checked notifications and found no SMS notifications"
-        - "Direct SMS database access is not verified in the tested Gemini surface"
+
+    - id: read_memo
+      description: >
+        Notes or memo read/search behavior through Gemini when connected note
+        sources are available. The assistant can search accessible notes and
+        summarize matches without editing them.
+      example_prompts:
+        - "查一下我最近的项目备忘录里有哪些待办"
+        - "总结标题包含旅行的备忘录"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+
+    - id: write_memo
+      description: >
+        Notes or memo drafting/editing guidance through Gemini. Creating or
+        changing persistent notes writes user data, so the user should review
+        the content before it is saved.
+      example_prompts:
+        - "创建一条备忘录，标题是 RelayAgent 测试"
+        - "帮我写一条明天买咖啡豆的备忘录"
+      executable: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 15
+
+    - id: read_task
+      description: >
+        Task-list read/search behavior through Gemini or connected Google Tasks.
+        The assistant can summarize due tasks, overdue items, and task lists
+        without modifying them.
+      example_prompts:
+        - "看看我今天有哪些待办"
+        - "总结本周到期的任务"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 15
+
+    - id: write_task
+      description: >
+        Task creation or task update behavior through Gemini or connected Google
+        Tasks. This writes user-visible task state and requires explicit user
+        intent in the prompt.
+      example_prompts:
+        - "添加一个明天下午三点提交报告的任务"
+        - "创建待办：周五前整理实验记录"
+      executable: true
+      handoff_to_user_required: false
+      typical_latency_seconds: 15
+
+    - id: operate_system_settings
+      description: >
+        System settings guidance through Gemini. Gemini can explain or prepare
+        settings changes such as Wi-Fi, Bluetooth, brightness, or permissions,
+        but direct device-setting mutation is not verified in the tested surface.
+      example_prompts:
+        - "帮我打开蓝牙设置"
+        - "告诉我怎么关闭自动亮度"
+      executable: false
+      handoff_to_user_required: true
+      typical_latency_seconds: 15
 
     - id: send_sms
       description: >
@@ -374,15 +371,8 @@ embedded_agent:
         - "给这个电话号码发送短信：我晚点到"
         - "给这个号码草拟短信：我十分钟后到；不要直接发送"
       executable: true
-      side_effects:
-        - external_communication
-      requires_login: true
-      reversible: false
       handoff_to_user_required: true
       typical_latency_seconds: 25
-      failure_modes:
-        - "Direct contact lookup probe said Gemini cannot access phone contacts"
-        - "Never auto-tap a final SMS send action; require user handoff"
 
     - id: find_file
       description: >
@@ -394,9 +384,6 @@ embedded_agent:
         - "上传这份 PDF 后，抽取金额、日期、购买方和销售方"
         - "总结这份论文，并提取作者、摘要和主要指标"
       executable: true
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_attachment_entry:
@@ -407,8 +394,6 @@ embedded_agent:
       x_attachment_options_observed:
         - "文件"
         - "云端硬盘"
-      failure_modes:
-        - "Android picker blocks until user selects a file or cancels"
 
     - id: find_gallery_image
       description: >
@@ -420,10 +405,6 @@ embedded_agent:
         - "从相册选一张冰箱照片，识别里面有哪些食材"
         - "打开相册里那张白板照片，帮我读出上面的内容"
       executable: true
-      side_effects:
-        - data_write
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 30
       x_attachment_entry:
@@ -438,9 +419,6 @@ embedded_agent:
       x_tool_menu_entry:
         open_menu: "添加附件"
         text_or_desc: "图片"
-      failure_modes:
-        - "Android picker blocks until user selects an image or cancels"
-        - "Mode-specific image output download/share behavior is not fully scripted"
 
     - id: generate_document
       description: >
@@ -451,17 +429,11 @@ embedded_agent:
         - "生成一份中文项目周报草稿"
         - "用 Canvas 帮我起草一份产品方案"
       executable: true
-      side_effects:
-        - data_write
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_tool_menu_entry:
         open_menu: "添加附件"
         text_or_desc: "Canvas"
-      failure_modes:
-        - "Generic writing prompts may invent concrete project details when the user provides too little context"
 
     - id: generate_slides
       description: >
@@ -472,25 +444,19 @@ embedded_agent:
         - "为人工智能在教育中的应用生成一份5页PPT的标题和每页要点"
         - "用 Canvas 生成一份产品发布演示稿大纲"
       executable: true
-      side_effects:
-        - data_write
-      requires_login: true
-      reversible: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_tool_menu_entry:
         open_menu: "添加附件"
         text_or_desc: "Canvas"
-      failure_modes:
-        - "Plain chat can draft slide outlines; actual PPT/document export via Canvas was not fully verified"
 
 provenance:
   last_verified: "2026-06-06"
   verified_app_version: "1.0.913571982"
-  verified_google_app_version: "17.26.28.sa.arm64"
+  x_verified_google_app_version: "17.26.28.sa.arm64"
   verified_os: "android-16"
   verified_device: "Pixel 9"
-  verification_method: adb_ui_dump_plus_scripted_probe
+  verification_method: scripted
   evidence_url: ""
   x_probe_evidence_dir: "/tmp/gemini_probe_results"
   x_device_metrics:

@@ -109,7 +109,7 @@ RelayAgent/
 ├── spec/schema.json           # JSON Schema mirror of SPEC (normative validator)
 ├── manifests/                 # one YAML card per app; 7 Android cards
 ├── agents/                    # relay adapter, planner, capability router, card loader, adb helper
-├── scripts/                   # run_test.py/run_native.py (single app), run_nl.py (single-app NL routing)
+├── scripts/                   # run_native.py (single app), run_plan.py (NL flow), benchmark runner, metrics
 ├── docs/                      # design docs — capability taxonomy
 ├── report/                    # tech report + frozen benchmark data
 ├── CONTRIBUTING.md
@@ -155,12 +155,12 @@ The adapter honors `handoff_to_user_required`: for any irreversible capability i
 
 ### Natural-language entry point
 
-`scripts/run_nl.py` takes a single NL sentence, builds a catalog of all app cards, and asks the text LLM to pick the best single app + capability before dispatching. Use `--dry-run` to inspect the routing decision without launching anything.
+`scripts/run_plan.py` is the NL entry point. It synthesizes a flow, resolves each app step through the shared matrix-backed router, previews the plan, then executes with `--yes`.
 
 ```bash
-uv run python scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
-uv run python scripts/run_nl.py "帮我找一台适合学生的平板电脑，预算2000以内"
-uv run python scripts/run_nl.py --dry-run "把这段材料整理成一份中文总结文档"
+uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电脑，预算2000以内"
+uv run python scripts/run_plan.py --dry-run "把这段材料整理成一份中文总结文档"
 ```
 
 ## Run tests

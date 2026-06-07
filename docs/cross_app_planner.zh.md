@@ -4,13 +4,13 @@
 
 > 一句自然语言 → LLM **自动合成**一条跨 App 的 plan → 校验 → 落盘 → 预览确认 → 真机执行。
 >
-> 与已有入口的关系：`run_nl.py` 把一句话**路由**到单个 app + capability；`run_plan.py` 面向跨 app 目标——让模型**现场生成**一条多 app plan，再交给 `FlowRunner` 执行。
+> 与已有入口的关系：`run_plan.py` 现在是自然语言入口；指定 App 的直跑用 `run_native.py`。
 
 ---
 
 ## 1. 它解决什么
 
-`run_nl.py` 只能把一句话路由到**单个** app + capability，无法把跨 App 目标拆解成多 app 步骤序列。给一句横跨多个 app 的指令时，router 会回落到单 app 或选错。
+原来的单 App NL router 只能把一句话路由到**单个** app + capability，无法把跨 App 目标拆解成多 app 步骤序列。给一句横跨多个 app 的指令时，它会回落到单 app 或选错。
 
 `run_plan.py` 补上的就是这一层：**给定全量 app/capability 清单，让 LLM 动态产出 steps + bind 关系**，再交给 `FlowRunner` 执行。**不重造执行器，只新增"规划"这一层。**
 
@@ -21,7 +21,7 @@
 ```
 一句话
   │
-  ├─(1) build_catalog()            全量 app + capability（复用自 run_nl.py）
+  ├─(1) build_catalog()            全量 app + capability（agents/card_catalog.py）
   │
   ├─(2) 缓存查找                    manifests/_generated/ 里精确串匹配；--no-cache 跳过
   │        命中 ┐
@@ -106,7 +106,7 @@ steps: [ ... ]
    - 若它**不是**整个任务的最后一步 → **必须**紧跟一个 `ask_user`（用 `prompt_header` 显示 agent 抛出的话、收用户回答），再接一个消费该回答的 app step（在那步 prompt 里**重述完整意图**，因为它是全新 agent 会话）。
    - 若它**是**最后一步（如末尾打车）→ **可以**作终点：它自己的 in-app handoff 就是用户的终态确认，无需再补 `ask_user`。
 5. prompt 尽量用用户原话，只补明显缺口；把请求里的具体值直接烤进 prompt。
-6. 单 app 请求也行——出 1-step plan（`run_plan` 是 `run_nl` 的超集）。
+6. 单 app 请求也行——出 1-step plan。
 7. 现有 app 组合**无法满足**时，返回 `{"unsatisfiable": true, "reason": "..."}`，预览阶段如实告知、不执行。
 
 ---
@@ -180,8 +180,8 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 **环境**
 
-- 规划用 `.env` 的 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（=`qwen`），与 `run_nl` router 同端点。
-- 执行时每个 leg 是一个直 adb 的 `run_native` 子进程，与 `run_nl` 一致。
+- 规划用 `.env` 的 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（=`qwen`）。
+- 执行时每个 leg 是一个直 adb 的 `run_native` 子进程。
 - 真机要求同项目其余部分：adb + USB 调试 + `com.android.adbkeyboard/.AdbIME`，`RELAY_ANDROID_SERIAL` 选设备。
 
 **中途 `ask_user` 的非交互行为**：流程级 `ask_user` 读父进程 stdin。`< /dev/null`（或管道 EOF）时，选单步**自动取第一个候选**、自由输入步取空串——适合 `--yes` 批跑。要人工选就在真终端里交互运行。
@@ -249,7 +249,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 **设计决策记录（为什么这么做）**
 
 - **静态一次性规划**而非逐步/ReAct：复用现有 `FlowRunner`，改动最小、可立即落地；代价是 leg 输出异常不自适应。
-- **独立 `run_plan.py`** 而非并进 `run_nl`：对现有 NL 路由零侵入。
+- **独立 `run_plan.py`** 作为 NL flow 入口：单 App 请求变成 1-step plan，多 App 请求也走同一条执行路径。
 - **预览 + 确认（默认 N）**：跨 App 含不可逆副作用（打车/下单），执行前必须人能看清并放行。
 - **校验失败硬报错、repair 留 TODO**：宁可中止也不让坏 plan 静默执行。
 - **handoff 末尾可作终点、中间才强插 ask_user**：如一条收尾在打车的 plan；末尾 leg 的 in-app handoff 本身即终态确认。

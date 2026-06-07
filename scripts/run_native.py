@@ -34,18 +34,7 @@ AGENT_FILE = Path(os.environ["RELAY_AGENT_FILE"]).resolve() if os.getenv(
 ) else REPO_ROOT / "agents" / "relay_agent.py"
 TRAJ_DIR = REPO_ROOT / "traj_logs" / "user_task"
 
-
-def load_dotenv(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    out: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        out[k.strip()] = v.strip().strip("'\"")
-    return out
+from agents.runtime_config import resolve_llm_config  # noqa: E402
 
 
 def _rotate_traj_dir() -> None:
@@ -107,14 +96,15 @@ def main() -> int:
     if not AGENT_FILE.exists():
         sys.exit(f"agent file missing: {AGENT_FILE}")
 
-    env_vars = load_dotenv(ENV_FILE)
-    base_url = args.base_url or os.getenv("LLM_BASE_URL") or env_vars.get("LLM_BASE_URL")
-    api_key = args.api_key or os.getenv("LLM_API_KEY") or env_vars.get("LLM_API_KEY")
-    model = args.model or os.getenv("LLM_MODEL") or env_vars.get("LLM_MODEL")
-    missing = [n for n, v in [("LLM_BASE_URL", base_url), ("LLM_API_KEY", api_key),
-                              ("LLM_MODEL", model)] if not v]
-    if missing:
-        sys.exit(f"Missing required config: {', '.join(missing)}. Set in .env or via flags.")
+    try:
+        env_vars, base_url, api_key, model = resolve_llm_config(
+            ENV_FILE,
+            model=args.model,
+            base_url=args.base_url,
+            api_key=args.api_key,
+        )
+    except RuntimeError as e:
+        sys.exit(str(e))
 
     # Populate env BEFORE the agent module is loaded/constructed: the agent
     # owns the deferred cold-launch and the planner skips its own open_app.

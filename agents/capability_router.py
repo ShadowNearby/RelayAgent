@@ -22,7 +22,7 @@ _SYSTEM = """You route a user instruction to one in-app AI agent capability.
 You are given:
 - The user's natural-language instruction.
 - One app's capability list (each entry has id, description, example_prompts,
-  side_effects, handoff_to_user_required).
+  handoff_to_user_required).
 
 Pick exactly one capability id that best matches the instruction, and write
 the text the OS-level agent should type into the in-app agent's input box.
@@ -53,7 +53,6 @@ def _capability_digest(card: dict) -> list[dict]:
             "id": cap["id"],
             "description": cap["description"].strip(),
             "example_prompts": cap.get("example_prompts", []),
-            "side_effects": cap.get("side_effects", []),
             "handoff_to_user_required": cap.get("handoff_to_user_required", False),
             "executable": cap.get("executable", True),
         })

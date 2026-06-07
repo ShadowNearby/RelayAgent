@@ -109,7 +109,7 @@ RelayAgent/
 ├── spec/schema.json           # SPEC 的 JSON Schema 镜像（规范性校验器）
 ├── manifests/                 # 每个 App 一张 YAML 卡片；7 张安卓卡片
 ├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、adb 辅助
-├── scripts/                   # run_test.py/run_native.py（单 App）、run_nl.py（单 App NL 路由）
+├── scripts/                   # run_native.py（单 App）、run_plan.py（NL flow）、benchmark runner、metrics
 ├── docs/                      # 设计文档 —— 能力分类法
 ├── report/                    # 技术报告 + 冻结的基准数据
 ├── CONTRIBUTING.md
@@ -154,12 +154,12 @@ uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰�
 
 ### 自然语言入口
 
-`scripts/run_nl.py` 接收一句自然语言，构建一份所有 App 卡片的目录，让文本 LLM 在分发前挑出最合适的单 App + capability。用 `--dry-run` 可只看路由决策、不真正启动。
+推荐用 `scripts/run_plan.py` 作为自然语言入口。它会合成 flow，对每个 app step 用共享的 matrix 三段式路由解析 app + capability，预览后执行；加 `--yes` 可跳过确认。
 
 ```bash
-uv run python scripts/run_nl.py "帮我点三杯蜜雪冰城蜜桃四季春"
-uv run python scripts/run_nl.py "帮我找一台适合学生的平板电脑，预算2000以内"
-uv run python scripts/run_nl.py --dry-run "把这段材料整理成一份中文总结文档"
+uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电脑，预算2000以内"
+uv run python scripts/run_plan.py --dry-run "把这段材料整理成一份中文总结文档"
 ```
 
 ## 运行测试

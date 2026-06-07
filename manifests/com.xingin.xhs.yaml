@@ -7,7 +7,6 @@ locale: ["zh-CN"]
 
 embedded_agent:
   name: "点点"
-  type: smart_search
   description: >
     点点 — Xiaohongshu's in-app AI assistant. RAG-over-UGC conversational
     helper for lifestyle discovery: trip planning, "种草" summarization,
@@ -24,16 +23,6 @@ embedded_agent:
         # at 1080×2424. Tapping it lands DIRECTLY in the 点点 chat — there
         # is no intermediate drawer despite the parent being a DrawerLayout.
         - tap: { accessibility_id: "菜单" }
-    fallback: []
-    preconditions:
-      # App-wide mandatory login; home screen shows login sheet otherwise.
-      - type: login_required
-      # 点点 must already be in text-input mode (EditText visible at the
-      # bottom). The first 点点 session after install opens in push-to-talk
-      # mode ("按住说话") — toggle once manually via the bottom-left icon;
-      # the choice persists across app restarts. The mode toggle is NOT
-      # idempotent, so the card cannot tap it automatically.
-      - type: x_text_input_mode_required
 
   invocation:
     input:
@@ -47,7 +36,6 @@ embedded_agent:
         x_bounds:
           box: [184, 2211, 938, 2279]
           anchor: top_left
-      max_chars: 500
     submit:
       # Green up-arrow send button at bottom-right of the input row.
       # ImageView with no text or content-desc; bounds-only.
@@ -55,12 +43,26 @@ embedded_agent:
         x_bounds:
           box: [975, 2142, 1038, 2205]
           anchor: top_left
-    prompt_template: "{{user_prompt}}"
 
   output:
     method: none
 
   capabilities:
+
+    - id: poi_nearby_search
+      description: >
+        Nearby POI and local-life discovery through Xiaohongshu 点点. Use for
+        cafes, restaurants, attractions, stores, photo spots, parent-child
+        venues, and other lifestyle places represented by UGC note or POI
+        cards. It does not book, order, or start navigation.
+      example_prompts:
+        - "武康大楼正门附近有什么适合拍照的咖啡店"
+        - "周末上海儿童艺术剧场南门附近带娃去哪玩"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 6
 
     - id: search_vertical_content
       description: >
@@ -71,15 +73,12 @@ embedded_agent:
         AI text plus inline POI/note cards (address, hours, photos, mini-map).
         Not for buy / book / order / 下单 intents.
       example_prompts:
-        - "上海有什么小众咖啡馆"
-        - "周末上海带娃去哪玩"
+        - "愚园路历史风貌区入口附近有什么小众咖啡馆"
+        - "周末浦东美术馆东门附近带娃去哪玩"
         - "新手怎么学油画"
         - "帮我规划一个三天的成都行程"
         - "200块以内的春装搭配"
       executable: false
-      side_effects: []
-      requires_login: true
-      reversible: true
       handoff_to_user_required: false
       typical_latency_seconds: 25
       # 点点 replies often stack 3-5 POI cards plus a header summary that
@@ -88,10 +87,6 @@ embedded_agent:
       # and concatenates per-frame text into _last_agent_reply.
       x_capture_full_reply:
         max_scrolls: 6
-      failure_modes:
-        - "Query too specific or non-lifestyle → 点点 may return a generic deflection with no POI cards"
-        - "First-time use may prompt for microphone/camera permission since voice mode is the default surface"
-        - "Cards are algorithm-curated; recommendations can be stale (closed venues, outdated hours)"
 
 provenance:
   last_verified: "2026-05-25"

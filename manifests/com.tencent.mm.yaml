@@ -7,7 +7,6 @@ locale: ["zh-CN"]
 
 embedded_agent:
   name: "微信"
-  type: native_in_app_agent
   description: >
     WeChat's built-in "AI搜索" surface. Entry: home top-right magnifier →
     "AI搜索" link (sibling of the search bar). Backed by Tencent's
@@ -21,18 +20,15 @@ embedded_agent:
         # 1. Tap magnifier (top-right of WeChat home).
         #    Ratios from verified Pixel 9 (1080x2424); icon center ≈ (893, 236).
         - tap_screen_fraction:
-            label: "open_search"
             x_ratio: 0.827
             y_ratio: 0.0975
         - wait: { ms: 700 }
         # 2. Tap "AI搜索" link on the right of the row under the search bar.
         #    Center ≈ (965, 393) on 1080x2424.
         - tap_screen_fraction:
-            label: "open_ai_search"
             x_ratio: 0.894
             y_ratio: 0.162
         - wait: { ms: 800 }
-    fallback: []
 
   invocation:
     input:
@@ -42,7 +38,6 @@ embedded_agent:
         x_bounds:
           box: [80, 420, 1000, 600]
           anchor: center
-      max_chars: 1000
     submit:
       # Green "问 AI" pill on the right side of the input row.
       # Measured by isolating green pixels on a captured screenshot:
@@ -51,7 +46,6 @@ embedded_agent:
         x_bounds:
           box: [770, 816, 1024, 944]
           anchor: center
-    prompt_template: "{{user_prompt}}"
 
   output:
     # After the answer renders, tap WeChat's built-in 复制 button so the
@@ -83,6 +77,21 @@ embedded_agent:
 
   capabilities:
 
+    - id: poi_nearby_search
+      description: >
+        Nearby POI and local information search through WeChat AI 搜索. Use for
+        finding nearby shops, restaurants, services, attractions, or public
+        place information surfaced as search-backed answers. It does not start
+        navigation, book, order, or pay.
+      example_prompts:
+        - "上海自然博物馆南门附近有什么咖啡店"
+        - "搜一下徐家汇地铁站14号口周边24小时便利店"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 40
+      x_capture_full_reply:
+        max_scrolls: 15
+
     - id: search_vertical_content
       description: >
         App-specific vertical content search through WeChat AI 搜索, including
@@ -94,9 +103,6 @@ embedded_agent:
         - "上海交通大学最近有什么新闻"
         - "解释一下量子纠缠"
       executable: false
-      side_effects: []
-      requires_login: false
-      reversible: true
       handoff_to_user_required: false
       # AI 搜索 streams a long, multi-section answer (often 5+ viewports) with
       # citations and follow-ups appended at the bottom. Give the VLM-polled

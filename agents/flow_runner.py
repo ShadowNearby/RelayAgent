@@ -42,34 +42,16 @@ import yaml
 from loguru import logger
 from openai import OpenAI
 
+from agents.runtime_config import ensure_llm_env
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
 # Each app leg is a fresh `run_native.py` subprocess (direct adb).
 RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
 
 
-# --------------------------------------------------------------------------- #
-# small helpers. `cold_launch` is shared via agents/_adb.py; `.env` parsing
-# is intentionally inlined here to keep flow_runner standalone-importable
-# without depending on the `scripts/` directory being on sys.path.
-# --------------------------------------------------------------------------- #
-
-
-def _load_dotenv(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    out: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        out[k.strip()] = v.strip().strip("'\"")
-    return out
-
-
-# cold-launch delegates to agents._adb so all three call sites (run_test.py,
-# flow_runner, relay_agent open_app) share one implementation.
+# cold-launch delegates to agents._adb so run_native/flow_runner/relay_agent
+# open_app share one implementation.
 
 
 # --------------------------------------------------------------------------- #
@@ -110,13 +92,7 @@ class FlowRunner:
         if "steps" not in self.flow:
             raise ValueError(f"Flow {flow_path} has no `steps`")
 
-        env_file = _load_dotenv(ENV_FILE)
-        self.env = {**env_file, **(env_overrides or {})}
-        for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
-            v = os.environ.get(k) or self.env.get(k)
-            if not v:
-                raise RuntimeError(f"Missing required config: {k} (set in .env or env)")
-            self.env[k] = v
+        self.env = ensure_llm_env(ENV_FILE, env_overrides)
 
         self.extra_args = extra_args or []
         self._llm = OpenAI(base_url=self.env["LLM_BASE_URL"], api_key=self.env["LLM_API_KEY"])
