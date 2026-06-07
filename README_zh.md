@@ -109,7 +109,7 @@ RelayAgent/
 ├── spec/schema.json           # SPEC 的 JSON Schema 镜像（规范性校验器）
 ├── manifests/                 # 每个 App 一张 YAML 卡片；9 张安卓卡片
 ├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、adb 辅助
-├── scripts/                   # run_native.py（单 App）、run_plan.py（NL flow）、benchmark runner、metrics
+├── scripts/                   # run_plan.py（NL flow）、benchmark runner、metrics
 ├── docs/                      # 设计文档 —— 能力分类法
 ├── report/                    # 技术报告 + 冻结的基准数据
 ├── CONTRIBUTING.md
@@ -128,10 +128,10 @@ uv venv --python 3.12
 uv sync --no-install-project
 
 # 2. 填好 .env（LLM_BASE_URL / LLM_API_KEY / LLM_MODEL），然后跑一个目标
-uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python -m agents.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-`scripts/run_native.py` 会 load `.env`、激活 AdbKeyboard 输入法、通过 `agents/_adb.py` 冷启动目标 App（force-stop + monkey LAUNCHER）、设置 `RELAY_SKIP_OPEN_APP=1` 让 planner 跳过自己的 `open_app` 步、在进程内直 adb 跑循环，并把额外 flag（如 `--max-step 40`）原样转发给 agent。不走 `.env` 时可用 `--model` / `--base-url` / `--api-key` 覆盖 LLM 配置。
+`agents.native_runner` 会 load `.env`、激活 AdbKeyboard 输入法、通过 `agents/_adb.py` 冷启动目标 App（force-stop + monkey LAUNCHER）、设置 `RELAY_SKIP_OPEN_APP=1` 让 planner 跳过自己的 `open_app` 步、在进程内直 adb 跑循环，并把额外 flag（如 `--max-step 40`）原样转发给 agent。不走 `.env` 时可用 `--model` / `--base-url` / `--api-key` 覆盖 LLM 配置。
 
 `--model` 对各家通用——指向任意 OpenAI 兼容的 VLM 即可（`qwen/qwen3-vl-235b-a22b`、`anthropic/claude-sonnet-4-5`、`google/gemini-3`……）。每个任务里 VLM 用得很省（这正是 §8 成本数字的来源）：
 

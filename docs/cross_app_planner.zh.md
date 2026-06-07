@@ -4,7 +4,7 @@
 
 > 一句自然语言 → LLM **自动合成**一条跨 App 的 plan → 校验 → 落盘 → 预览确认 → 真机执行。
 >
-> 与已有入口的关系：`run_plan.py` 现在是自然语言入口；指定 App 的直跑用 `run_native.py`。
+> 与已有入口的关系：`run_plan.py` 现在是自然语言入口；指定 App 的直跑用 `python -m agents.native_runner`。
 
 ---
 
@@ -36,7 +36,7 @@
   ├─(5) 预览 + 确认 ←───────────────────────────┘
   │        默认 N；非交互 stdin（EOF）= 不执行；--yes 跳过；--dry-run 到此为止
   │
-  └─(6) FlowRunner.run()           每个 app leg 一个 run_native 子进程（直 adb）
+  └─(6) FlowRunner.run()           每个 app leg 一个 native runner 子进程（直 adb）
 ```
 
 涉及的文件：
@@ -130,7 +130,7 @@ steps: [ ... ]
 
 "`handoff_to_user` 后要能 switch 回 agent" 分两个粒度，本版落地 A、给 B 留缝：
 
-- **Phase A（已落地）**：handoff leg 结束 → 流程级 `ask_user` 收用户回答 → 下一个 agent leg 是一个**全新 `run_native` 子进程**（同 app 或换 app），把回答 + 完整意图重述进 prompt。复用现有 FlowRunner 结构。**局限**：同 app 中途 handoff 会冷启动、清历史，丢 in-app 半成品状态。
+- **Phase A（已落地）**：handoff leg 结束 → 流程级 `ask_user` 收用户回答 → 下一个 agent leg 是一个**全新 native runner 子进程**（同 app 或换 app），把回答 + 完整意图重述进 prompt。复用现有 FlowRunner 结构。**局限**：同 app 中途 handoff 会冷启动、清历史，丢 in-app 半成品状态。
 - **Phase B（仅留缝，未接线）**：让 handoff leg **不终止**——把 `flow_runner._run_app_step` 里的 `stdin=DEVNULL` 换成 flow⇄agent 回环通道；agent 的 handoff `ask_user`（`relay_agent.py` 内）不再 EOF 收尾，而是阻塞读 flow 喂回的答案再继续 `predict()`，在**同一会话**里原地续跑。两处都打了 `# TODO(phase-B):` 标记。
 
 > in-app handoff 现状：agent 走到 `handoff` 步时先 `_maybe_persist_reply()`（把回复写 `RELAY_REPLY_OUT`），再发 `action_type="ask_user"`；flow leg 里 stdin 是 DEVNULL → 立刻 EOF → 子进程结束、回复已落盘。
@@ -164,7 +164,7 @@ uv run python scripts/run_plan.py "..." --no-cache
 uv run python scripts/run_plan.py "..." --record
 uv run python scripts/run_plan.py "..." --record /path/to/dir
 
-# `--` 之后的参数透传给底层每个 run_native
+# `--` 之后的参数透传给底层每个 native runner
 uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 ```
 
@@ -176,12 +176,12 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 | `--yes` / `-y` | 跳过 y/N 确认 |
 | `--no-cache` | 不复用 `_generated/` 里的缓存，强制重新生成 |
 | `--record [DIR]` | adb 录屏；缺省落 `traj_logs/recordings/<ts>/` |
-| `-- <args>` | `--` 之后透传给底层 `run_native` |
+| `-- <args>` | `--` 之后透传给底层 native runner |
 
 **环境**
 
 - 规划用 `.env` 的 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（=`qwen`）。
-- 执行时每个 leg 是一个直 adb 的 `run_native` 子进程。
+- 执行时每个 leg 是一个直 adb 的 native runner 子进程。
 - 真机要求同项目其余部分：adb + USB 调试 + `com.android.adbkeyboard/.AdbIME`，`RELAY_ANDROID_SERIAL` 选设备。
 
 **中途 `ask_user` 的非交互行为**：流程级 `ask_user` 读父进程 stdin。`< /dev/null`（或管道 EOF）时，选单步**自动取第一个候选**、自由输入步取空串——适合 `--yes` 批跑。要人工选就在真终端里交互运行。

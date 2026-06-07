@@ -420,6 +420,7 @@ def run_task(goal: str, agent: Any, env: NativeEnv, max_step: int = -1) -> dict:
     obs = Observation(screenshot=env.get_observation()["screenshot"])
     step = 0
     last_action_type = UNKNOWN
+    last_goal_status = None
 
     while True:
         step += 1
@@ -436,6 +437,7 @@ def run_task(goal: str, agent: Any, env: NativeEnv, max_step: int = -1) -> dict:
 
         at = action.action_type
         last_action_type = at
+        last_goal_status = action.goal_status
         logger.info(f"[step {step}] {at} :: {prediction}")
 
         # Log the frame the agent acted on + the action/click position. obs is
@@ -469,4 +471,9 @@ def run_task(goal: str, agent: Any, env: NativeEnv, max_step: int = -1) -> dict:
     agent.done()
     usage = agent.get_total_token_usage()
     logger.info(f"native run_task done: steps={step} last={last_action_type} tokens={usage}")
-    return {"steps": step, "last_action_type": last_action_type, "token_usage": usage}
+    return {
+        "steps": step,
+        "last_action_type": last_action_type,
+        "last_goal_status": last_goal_status,
+        "token_usage": usage,
+    }

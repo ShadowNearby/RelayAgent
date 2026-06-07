@@ -2,13 +2,13 @@
 
 Executes a flow plan (the step/bind schema produced by `FlowPlanner` and
 persisted under `manifests/_generated/` by `scripts/run_plan.py`) as a
-sequence of (a) `run_native` sub-runs pinned to one app + one capability,
+sequence of (a) native runner sub-runs pinned to one app + one capability,
 (b) user-input prompts, and (c) text-LLM extract steps that parse the
 last sub-run's captured reply into structured data.
 
 Design notes (see CLAUDE.md for project context):
 
-- Each app step is a fresh `run_native` subprocess. We DON'T reuse one long-
+- Each app step is a fresh native runner subprocess. We DON'T reuse one long-
   lived RelayAgent across apps because plan cursor / chat history are
   scoped to a single card.
 - The capability router is bypassed via RELAY_FORCE_CAPABILITY +
@@ -42,15 +42,16 @@ import yaml
 from loguru import logger
 from openai import OpenAI
 
+from agents.action_model import ANSWER, ASK_USER, FINISHED
 from agents.runtime_config import ensure_llm_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
-# Each app leg is a fresh `run_native.py` subprocess (direct adb).
-RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
+# Each app leg is a fresh native runner subprocess (direct adb).
+NATIVE_RUNNER_MODULE = "agents.native_runner"
 
 
-# cold-launch delegates to agents._adb so run_native/flow_runner/relay_agent
+# cold-launch delegates to agents._adb so native_runner/flow_runner/relay_agent
 # open_app share one implementation.
 
 
@@ -164,6 +165,7 @@ class FlowRunner:
             mode="w+", suffix=".json", prefix="relay_reply_", delete=False
         ) as fh:
             reply_path = Path(fh.name)
+        summary_path = step_log_root / "user_task" / "summary.json"
         try:
             # Priority: explicit overrides (the per-step RELAY_* keys
             # below) > shell env > .env file. Putting `self.env` (sourced
@@ -179,8 +181,9 @@ class FlowRunner:
                 "RELAY_FORCE_CAPABILITY": capability,
                 "RELAY_INVOCATION_TEXT": prompt,
                 "RELAY_REPLY_OUT": str(reply_path),
+                "RELAY_SUMMARY_OUT": str(summary_path),
                 # Agent writes the framework-excluded wall_clock.json straight
-                # into this leg's dir. run_native still rotates and writes the
+                # into this leg's dir. The native runner still rotates and writes the
                 # global traj_logs/user_task/ (traj.json + token logs + steps/),
                 # which the NEXT leg's startup would rotate away — so after the
                 # sub-run we copy that global dir into this leg's user_task/ to
@@ -189,13 +192,13 @@ class FlowRunner:
                 "RELAY_WALL_OUT": str(step_log_root / "user_task" / "wall_clock.json"),
             }
             (step_log_root / "user_task").mkdir(parents=True, exist_ok=True)
-            # run_native reads LLM_* + RELAY_* from the child env (no flags).
+            # The native runner reads LLM_* + RELAY_* from the child env.
             cmd = [
-                sys.executable, str(RUN_NATIVE), app, prompt,
+                sys.executable, "-m", NATIVE_RUNNER_MODULE, app, prompt,
                 *self.extra_args,
             ]
             logger.info(
-                f"→ run_native for app={app} capability={capability!r} prompt={prompt!r}"
+                f"→ native runner for app={app} capability={capability!r} prompt={prompt!r}"
             )
             # Feed empty stdin so the final ask_user handoff (when present)
             # closes cleanly with EOF rather than blocking the flow.
@@ -218,9 +221,9 @@ class FlowRunner:
             if timing:
                 logger.info(f"leg gross wall_s={round(time.monotonic() - t0, 1)}")
             if rc != 0:
-                logger.warning(f"run_native exited rc={rc}; continuing if reply was captured")
+                logger.warning(f"native runner exited rc={rc}; continuing if reply was captured")
 
-            # Preserve this leg's trajectory before the next leg's run_native
+            # Preserve this leg's trajectory before the next leg's native runner
             # startup rotates the global traj_logs/user_task/ away. Merge the
             # global dir (traj.json, token logs, steps/, agent_reply.json) into
             # this leg's user_task/ without clobbering the agent's wall_clock.json
@@ -241,12 +244,19 @@ class FlowRunner:
             if reply_path.exists() and reply_path.stat().st_size > 0:
                 payload = json.loads(reply_path.read_text(encoding="utf-8"))
                 reply = (payload.get("reply") or "").strip()
-            if not reply:
+            summary = _read_json_file(summary_path)
+            needs_reply = bool(step.get("bind") or step.get("extract"))
+            if not reply and needs_reply:
                 raise RuntimeError(
                     f"Step {step['id']!r}: no reply captured at {reply_path}. "
                     f"Check the sub-run's {step_log_root}/user_task/."
                 )
-            logger.info(f"captured reply ({len(reply)} chars) from {app}")
+            if not needs_reply:
+                _assert_output_free_step_completed(step, summary, rc, summary_path)
+            if reply:
+                logger.info(f"captured reply ({len(reply)} chars) from {app}")
+            else:
+                logger.info(f"no reply captured for output-free step {step['id']!r}")
         finally:
             try:
                 reply_path.unlink()
@@ -345,6 +355,42 @@ def _redact(d: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        if path.exists() and path.stat().st_size > 0:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(f"failed to read native summary {path}: {exc}")
+    return {}
+
+
+def _assert_output_free_step_completed(
+    step: dict,
+    summary: dict[str, Any],
+    rc: int,
+    summary_path: Path,
+) -> None:
+    """No-reply legs still need a positive terminal signal from the child run."""
+    last_action = summary.get("last_action_type")
+    goal_status = summary.get("last_goal_status")
+    ok = (
+        rc == 0
+        and (
+            last_action in {ASK_USER, ANSWER}
+            or (last_action == FINISHED and goal_status == "complete")
+        )
+    )
+    if ok:
+        return
+    raise RuntimeError(
+        f"Step {step['id']!r}: output-free native run did not reach a successful "
+        f"terminal state (rc={rc}, last_action_type={last_action!r}, "
+        f"last_goal_status={goal_status!r}). Check {summary_path.parent}."
+    )
 
 
 def _resolve_choice(raw: str, items: list[Any], label_tpl: str) -> Any:

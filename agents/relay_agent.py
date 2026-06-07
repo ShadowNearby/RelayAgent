@@ -2,7 +2,7 @@
 
 Run with:
 
-    scripts/run_native.py com.aliyun.tongyi "在通义里点一杯蜜雪冰城"
+    python -m agents.native_runner com.aliyun.tongyi "在通义里点一杯蜜雪冰城"
 
 Design:
 - Subclass MCPAgent (agents/agent_base.py) for the provider-agnostic openai
@@ -45,7 +45,7 @@ if str(_REPO_ROOT) not in sys.path:
 from loguru import logger
 
 # Aliased to a leading-underscore name on purpose: the file→agent loader
-# (scripts/run_native.py:_load_agent_class) collects every BaseAgent subclass in
+# (agents.native_runner:_load_agent_class) collects every BaseAgent subclass in
 # this module via inspect.getmembers (alphabetically sorted) and instantiates
 # the first. If the base were exposed as "MCPAgent" it would sort before
 # "RelayAgent" and the loader would try to instantiate the abstract base → "Can't
@@ -65,7 +65,7 @@ from agents.card_loader import load_card_by_app_id
 _TARGET_APP_ENV = "RELAY_TARGET_APP"
 _MANIFESTS_ENV = "RELAY_MANIFESTS"
 _FRESH_CONV_ENV = "RELAY_FRESH_CONV"  # set to "0" to disable
-_SKIP_OPEN_APP_ENV = "RELAY_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
+_SKIP_OPEN_APP_ENV = "RELAY_SKIP_OPEN_APP"  # set to "0" to force a plan-level open_app step
 _REPLY_OUT_ENV = "RELAY_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
 _DISMISS_PERMS_ENV = "RELAY_DISMISS_PERMISSIONS"  # set to "0" to disable system permission popup auto-dismiss
 # A/B benchmark gates (default on; "0" reverts to the pre-optimization path so
@@ -80,13 +80,14 @@ _SCRAPE_ENV = "RELAY_SCRAPE"  # set to "0" to disable uiautomator reply-text scr
 # *delegation* from the value of the authored manifest (see _build_no_manifest_plan).
 _NO_MANIFEST_ENV = "RELAY_NO_MANIFEST"
 
-# Defer the target-app cold-launch to the agent's FIRST predict instead of
-# pre-launching it. Subprocess startup, module import and IME activation all
-# happen before the first predict — so they land BEFORE the app launch, outside
-# both the screen recording and the task wall-clock. Set RELAY_AGENT_LAUNCH=1
-# (the scripts do).
-# Keep RELAY_SKIP_OPEN_APP=1 alongside it: the agent owns the launch, so the
-# planner must still skip its own open_app step. See CLAUDE.md §3.6.
+# Defer the target-app cold-launch to the agent's FIRST predict by default.
+# Subprocess startup, module import and IME activation all happen before the
+# first predict — so they land BEFORE the app launch, outside both the screen
+# recording and the task wall-clock. Set RELAY_AGENT_LAUNCH=0 to fall back to a
+# plan-level open_app step. If RELAY_SKIP_OPEN_APP=0 is set without an explicit
+# RELAY_AGENT_LAUNCH, that also selects the plan-level open_app path. If
+# RELAY_SKIP_OPEN_APP is unset, it follows the launch mode so the default
+# agent-owned launch does not duplicate open_app.
 _AGENT_LAUNCH_ENV = "RELAY_AGENT_LAUNCH"
 # Directory for the screen recording. When set, the agent starts the recorder
 # at the same first-predict moment as the launch (so the framework boot is not
@@ -866,7 +867,17 @@ class RelayAgent(_MCPAgentBase):
         self._capture_scrolls: int = 0
         self._capture_idle: int = 0
         self.fresh_conversation: bool = os.getenv(_FRESH_CONV_ENV, "1") != "0"
-        self.skip_open_app: bool = os.getenv(_SKIP_OPEN_APP_ENV, "0") == "1"
+        agent_launch_env = os.getenv(_AGENT_LAUNCH_ENV)
+        skip_open_app_env = os.getenv(_SKIP_OPEN_APP_ENV)
+        if agent_launch_env is None and skip_open_app_env == "0":
+            self.agent_launch = False
+        else:
+            self.agent_launch = (agent_launch_env if agent_launch_env is not None else "1") != "0"
+        self.skip_open_app: bool = (
+            skip_open_app_env == "1"
+            if skip_open_app_env is not None
+            else self.agent_launch
+        )
         self.dismiss_permissions: bool = os.getenv(_DISMISS_PERMS_ENV, "1") != "0"
         self.precheck_enabled: bool = os.getenv(_PRECHECK_ENV, "1") != "0"
         self.scrape_enabled: bool = os.getenv(_SCRAPE_ENV, "1") != "0"
@@ -878,7 +889,6 @@ class RelayAgent(_MCPAgentBase):
         # the FIRST predict (see _begin_task_once) so subprocess/import/IME
         # startup lands before them and is excluded from both the recording
         # and wall_clock.json. _begin_task_once runs at most once per task.
-        self.agent_launch: bool = os.getenv(_AGENT_LAUNCH_ENV, "0") == "1"
         self.record_dir: str | None = os.getenv(_RECORD_DIR_ENV) or None
         self._task_started: bool = False
         self._task_t0: float | None = None
@@ -1064,7 +1074,7 @@ class RelayAgent(_MCPAgentBase):
         called) is excluded from both the recording and wall_clock.json.
         Idempotent: the body runs once per task.
 
-        atexit (fires when the run_native subprocess exits — on finished, on EOF
+        atexit (fires when the native runner subprocess exits — on finished, on EOF
         after a handoff ask_user, or on error) finalizes the recording and
         writes wall_clock.json (phase="task"). The scripts no longer write
         wall_clock.json themselves; this is the source of truth.

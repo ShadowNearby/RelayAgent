@@ -19,7 +19,7 @@ It subclasses RelayAgent only to inherit the LLM-call logging wrapper
 `scripts/aggregate_metrics.py` reads) and `build_openai_client`. It loads NO
 card and builds NO plan.
 
-Run via:  RELAY_AGENT_FILE=$PWD/agents/a11y_agent.py scripts/run_native.py <pkg> "<goal>"
+Run via:  RELAY_AGENT_FILE=$PWD/agents/a11y_agent.py python -m agents.native_runner <pkg> "<goal>"
 Knobs:    A11Y_MAX_NODES (60) · A11Y_TEXT_TRUNC (50) · A11Y_HISTORY_K (12)
           A11Y_STEP_CAP (50) · A11Y_MAX_DUMP_FAIL (4)
 """

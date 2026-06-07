@@ -1021,7 +1021,7 @@ when apps ship endpoints, cards become a thin shim or disappear (SPEC §14).
 
 ## Appendix A. Reproducibility
 
-- **Entry points.** `scripts/run_native.py <pkg> "<goal>"` (single app) and
+- **Entry points.** `python -m agents.native_runner <pkg> "<goal>"` (single app) and
   `scripts/run_plan.py "<goal>"` (routed flow). Both cold-launch the target and set
   `RELAY_SKIP_OPEN_APP=1`.
 - **A/B flags.** `RELAY_PRECHECK=0 RELAY_SCRAPE=0` reproduces the pre-optimization

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run benchmark/single_app_tasks.yaml with per-task logs.
 
-Each task is dispatched as one `run_native.py` run pinned to the
+Each task is dispatched as one native runner subprocess pinned to the
 benchmark's app and capability. Logs are isolated under:
 
     traj_logs/single_app_benchmark_<timestamp>/<NN>_<task-id>/
@@ -45,8 +45,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 from agents.runtime_config import ensure_llm_env  # noqa: E402
 
 ENV_FILE = REPO_ROOT / ".env"
-# Each task is one direct-adb run_native.py subprocess.
-RUN_NATIVE = REPO_ROOT / "scripts" / "run_native.py"
+# Each task is one direct-adb native runner subprocess.
+NATIVE_RUNNER_MODULE = "agents.native_runner"
 DEFAULT_TASKS = REPO_ROOT / "benchmark" / "single_app_tasks.yaml"
 
 
@@ -104,10 +104,11 @@ def _build_cmd(
     task: dict[str, Any],
     extra_args: list[str],
 ) -> list[str]:
-    # run_native reads LLM_* + RELAY_* from the child env; app+goal positional.
+    # The native runner reads LLM_* + RELAY_* from the child env.
     cmd = [
         sys.executable,
-        str(RUN_NATIVE),
+        "-m",
+        NATIVE_RUNNER_MODULE,
         task["app"],
         task["instruction"],
     ]
@@ -131,7 +132,7 @@ def _task_env(task: dict[str, Any], env: dict[str, str], task_dir: Path) -> dict
         "RELAY_REPLY_OUT": str(user_task_dir / "reply.json"),
         "RELAY_WALL_OUT": str(user_task_dir / "wall_clock.json"),
         # Route per-step logs (screenshots + action + click pos) into this
-        # task's dir; otherwise run_native's StepLogger defaults to the global
+        # task's dir; otherwise StepLogger defaults to the global
         # traj_logs/user_task/steps and each task's steps get rotated out by the
         # next task's _rotate_traj_dir. RELAY_STEP_LOG=0 (in env) still disables.
         "RELAY_STEP_LOG_DIR": str(user_task_dir),
@@ -182,7 +183,7 @@ def _run_one(
     elapsed_s = round(time.monotonic() - t0, 1)
 
     # Per-step logs, reply.json and wall_clock.json are already routed into this
-    # task's user_task/ via the env above, but run_native's agent still writes
+    # task's user_task/ via the env above, but the native runner's agent still writes
     # traj.json + token logs into the global traj_logs/user_task/ (its hardcoded
     # _TRAJ_DIR), which the next task's _rotate_traj_dir would rotate away. Merge
     # that global dir in to honor the user_task/traj.json this script promises.
@@ -236,9 +237,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-list", action="store_true",
                    help="List selected tasks and exit without running")
     args, extra_args = p.parse_known_args(argv)
-
-    if not RUN_NATIVE.exists():
-        raise SystemExit(f"run_native.py not found at {RUN_NATIVE}")
 
     doc, tasks = _load_tasks(args.tasks)
     selected = _select_tasks(

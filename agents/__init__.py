@@ -1,2 +1,1 @@
-"""RelayAgent adapters. The main entry point is `relay_agent.py`,
-loaded by `scripts/run_native.py` (and the flow/benchmark drivers)."""
+"""RelayAgent adapters loaded by the native runner and flow/benchmark drivers."""
