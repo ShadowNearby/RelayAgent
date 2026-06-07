@@ -342,7 +342,7 @@ A card is a per-app YAML manifest (`manifests/*.yaml`) with a JSON-Schema mirror
   `typical_latency_seconds` hint, a `handoff_to_user_required` flag, and
   `x_`-prefixed extensions for non-standard behavior
   (`x_prepare_fresh_conversation`, `x_capture_full_reply`, `x_max_wait_seconds`,
-  `x_bounds`).
+  etc.).
 - **Card class.** Single-bubble (the whole reply renders in one TextView) vs.
   multi-node list (a RecyclerView of cards). This dichotomy drives extraction
   strategy (§5.4).
@@ -534,25 +534,33 @@ result — cost *predictability* — emerges from the repetitions.
 
 The deep token / wall-clock / predictability study (§8.2–8.4) uses the two
 tasks above. Functional **coverage** across the full card catalog is reported
-separately in §8.2.1: each of the 28 capabilities in the 7 cards was driven
+separately in §8.2.1: each capability in the then-current 7-card benchmark
+catalog was driven
 end-to-end at least once and reached its expected terminal state (a completed
 reply for informational capabilities, the correct pre-CTA handoff screen for
 irreversible ones). These are author-run functional passes (n=1 per capability),
 not the instrumented n=3 cost runs.
+
+Since that frozen benchmark round, the public manifest catalog has grown to
+8 cards; Reddit Ask (`com.reddit.frontpage`) is the latest addition, an English
+vertical community-search card whose entry path and `search_vertical_content`
+capability were verified separately on Reddit 2026.22.0 / Android 16.
 
 | App | Package | Capabilities | Card class |
 | --- | --- | --- | --- |
 | Amap | com.autonavi.minimap | POI search, navigation, ride hailing, trip planning | mixed |
 | Tongyi Qwen | com.aliyun.tongyi | chat, train/ride/food/hotel/movie booking, product search/compare/purchase/order tracking | mixed |
 | Ctrip | ctrip.android.view | flights, hotels, trains, attractions, packages | mixed |
+| Gemini | com.google.android.apps.bard | foundation LLM, public-web retrieval, Google-service tasks | mixed |
 | Xiaohongshu | com.xingin.xhs | community Q&A via AI search | multi-node |
 | WeChat | com.tencent.mm | Yuanbao chat, AI search | mixed |
 | WPS Office | cn.wps.moffice_eng | AI doc/PPT/writing | single-bubble |
+| Reddit | com.reddit.frontpage | Reddit Ask vertical community search | multi-node |
 
-#### 8.2.1 Capability coverage (27 capabilities across 6 cards)
+#### 8.2.1 Capability coverage (historical benchmark catalog + added Reddit smoke pass)
 
-Every capability in the catalog was exercised end-to-end and reached its
-expected terminal state. "Handoff" marks capabilities with
+The rows below are the historical benchmark-catalog coverage rows, plus the
+new Reddit smoke pass. "Handoff" marks capabilities with
 `handoff_to_user_required: true` — for these, success means the adapter emitted
 the `ask_user` at the correct pre-CTA screen *without* crossing the irreversible
 action; for the rest, success means the reply was captured and the task ended
@@ -587,10 +595,12 @@ cleanly.
 | WPS Office | quick_writing | ✓ | ✓ |
 | WPS Office | doc_reading | ✓ | ✓ |
 | WPS Office | web_summary | — | ✓ |
+| Reddit | search_vertical_content | — | ✓ |
 
-**Coverage: 27/27 capabilities reached their expected terminal state.** 15 of
-the 27 are `handoff_to_user_required` and every one stopped at the correct
-pre-CTA screen (cf. §8.6).
+**Coverage: the frozen benchmark catalog reached its expected terminal states;
+Reddit's added `search_vertical_content` smoke pass also reached reply capture.**
+The historical handoff capabilities all stopped at the correct pre-CTA screen
+(cf. §8.6).
 
 > † **Taobao risk-control caveat.** The Taobao shopping capabilities are now
 > hosted in the 千问 (Qwen) card and routed through the Taobao backend — the
@@ -1056,7 +1066,7 @@ embedded_agent:
         # use a one-shot conditional tap rather than an unconditional one.
         - tap_unless_present:
             probe:  { text: "有什么问题尽管问我" }
-            target: { x_bounds: { box: [946, 2101, 1009, 2164], anchor: bottom_right } }
+            target: { screen_fraction: { x_ratio: 0.9051, y_ratio: 0.8797 } }
         - wait: { ms: 300 }
     fallback: []
 
@@ -1064,12 +1074,12 @@ embedded_agent:
   invocation:
     input:
       field:                            # EditText has no id/content-desc;
-        x_bounds: { box: [68, 2105, 925, 2160], anchor: bottom_left }
+        screen_fraction: { x_ratio: 0.4597, y_ratio: 0.8797 }
         text: "有什么问题尽管问我"        # hint text works only pre-focus
       max_chars: 500
     submit:
       trigger:                          # same ViewGroup: mic when empty, send-arrow when typed
-        x_bounds: { box: [946, 2075, 1009, 2138], anchor: bottom_right }
+        screen_fraction: { x_ratio: 0.9051, y_ratio: 0.8690 }
     prompt_template: "{{user_prompt}}"
 
   capabilities:
@@ -1115,7 +1125,7 @@ single irreversible payment tap.
 - [x] Run the four configs on two tasks, n=3 (RA/general_e2e). → §8.
 - [x] Fill §8.2 (token), §8.3 (time — re-drive→delegate gradient only; baseline↔opt excluded), §8.4 (predictability), §8.5 (quality).
 - [x] Re-run n=3 post latency-trim + fork robustness patches (2026-06-02); refresh §8.2–8.6, add §8.7 robustness.
-- [x] §8.2 full 7-card / per-capability success-rate table. → §8.2.1 (28/28).
+- [x] §8.2 full historical benchmark-catalog / per-capability success-rate table. → §8.2.1; Reddit smoke pass added later.
 - [x] §8.8 case-study trajectories + demo gif. → §8.8 (T1 + T2 annotated; gifs linked).
 - [x] Verify §2 Related-Work cells against 2026-current product docs. → footnoted; A2A→Linux Foundation, AppFunctions=alpha, A3=benchmark not agent.
 - [x] Appendix B annotated card. → Amap `hail_ride`.
@@ -1127,5 +1137,5 @@ Threats-to-validity follow-ups (newly opened, §8.9):
 - [x] **Frugal pure-VLM baseline** — `HISTORY_N_IMAGES=1` (`test-results/ab/n3_hist1/`) + **a11y-text-input baseline** (`agents/a11y_agent.py`, `test-results/ab/a11y/`, n=3; driver `test-results/ab/run_a11y.sh`, fresh-start `benchmark/fresh_conv.py`). → §8.9 item 2 (a11y-text median 47302 = 11.9× RA, only 1.6× under general_e2e; prompt/completion split + $ restatement in §8.2). *(set-of-marks still untested.)*
 - [ ] **Reproduce the failure modes** — instrumented runs that trigger premature-exit (seeded stale conversation) and runaway, to put §8.4's sharp variance on tracked data.
 - [ ] **Adversarial handoff tests** — assistant auto-submits in one turn / mis-annotated flag / CTA label ≠ `stop_before`; show the contract holds or where it leaks.
-- [ ] **Catalog-wide a11y hit-rate** — % taps resolved by uiautomator vs VLM-fallback across the 28 capabilities.
+- [ ] **Catalog-wide a11y hit-rate** — % taps resolved by uiautomator vs VLM-fallback across the current manifest catalog.
 - [ ] **Widen the cost pool** — add a few more tasks to the n=3 instrumented set so headline numbers rest on more than two tasks.

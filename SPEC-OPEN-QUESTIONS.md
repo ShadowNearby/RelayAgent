@@ -118,21 +118,19 @@ Proposal: allow a step's selector to be an AND of multiple keys:
 
 Decision criterion: does the second reference card hit this again? If yes, ship in v0.2.
 
-## OQ-11 — Bounds / spatial selectors as last resort
+## OQ-11 — Spatial selectors as last resort
 
-**Status:** partially resolved in v0.1. **Likely full target:** v0.2. **Surfaced by:** `com.autonavi.minimap.yaml`, expanded by all four reference cards.
+**Status:** partially resolved in v0.1. **Likely full target:** v0.2. **Surfaced by:** `com.autonavi.minimap.yaml`, expanded by all reference cards.
 
 Some critical elements are completely unidentifiable through the accessibility tree: no resource-id, no content-desc, no text. The Amap send / microphone button is one example — a `ViewGroup` whose only stable property is its on-screen rectangle.
 
-**v0.1 partial fix shipped (see SPEC §6.1 + §9):**
+**v0.1 partial fix shipped (see SPEC §6.1):**
 
-- `x_bounds` is now a structured object: `{ box: [x1,y1,x2,y2], anchor?: <enum> }`.
-- `provenance.x_device_metrics` (resolution + density_dpi) is mandatory whenever any `x_bounds` is used, so routers can perform device-aware remapping.
-- All four reference manifests have been retrofitted.
+- `screen_fraction` is now a first-class selector: `{ x_ratio, y_ratio }`.
+- Reference manifests use screen-relative tap points instead of absolute pixel rectangles.
 
 **Still deferred to v0.2:**
 
-- Promote `x_bounds` to a first-class `bounds` selector (drop the `x_` prefix and "extension key" framing).
 - Relative selectors (`right_of: <other-selector>`, `inside: <other-selector>`) for elements pinned relative to a stable neighbor — much more robust than absolute bounds when the neighbor is identifiable.
 - Optional `dp_offset` / `dp_size` describing a node by its anchor-relative dp position rather than absolute pixels — matches how Android UIs are actually laid out and is robust across both resolution and density.
 - OCR / vision selectors as a final floor for apps that disable the accessibility tree entirely (see OQ-15) — overlaps with OQ-2.
@@ -170,7 +168,7 @@ When we attempted a WeChat reference card, `uiautomator dump` returned an empty 
 Consequences for the SPEC:
 
 - **Every** v0.1 selector — `accessibility_id`, `resource_id`, `text`, `text_contains` — is unusable, because all require the a11y tree.
-- The `x_bounds` last-resort (OQ-11) is unusable too at the **authoring** stage: without a tree, the author can't discover the bounds to write down.
+- `screen_fraction` can still be authored from screenshots, but it remains less robust than semantic or OCR selectors.
 - v0.1 cards for such apps would be effectively ineligible per the CONTRIBUTING quality bar ("verify on a real device, walk every entry path").
 
 Options for v0.2:

@@ -1,0 +1,142 @@
+spec_version: "0.1"
+card_version: "0.1.0"
+app_id: "com.booking"
+app_name: "Booking.com"
+platforms: ["android"]
+locale: ["zh-CN"]
+
+embedded_agent:
+  name: "AI聊天（测试版）"
+  description: >
+    Booking.com's in-app AI travel assistant, reached from the home-page trip
+    planning card. It helps explore travel information: accommodation ideas,
+    activities and experiences, destination recommendations, itinerary drafts,
+    and travel Q&A. It can narrow choices inside Booking.com, but reservation
+    and payment flows require user handoff.
+
+  entry:
+    primary:
+      method: tap_sequence
+      steps:
+        # From the Search/home tab, the AI trip-planning card sits below the
+        # booking search box and promotions. In RelayAgent's current scroll
+        # mapping, `swipe: down` produces a finger-up gesture, revealing content
+        # below the current viewport. Seven such short runtime scrolls expose
+        # the card with its CTA around y~=1866 on the
+        # verified 1080x2424 device.
+        - swipe: down
+        - swipe: down
+        - swipe: down
+        - swipe: down
+        - swipe: down
+        - swipe: down
+        - swipe: down
+        # Button text varies with chat history: "为我安排行程" for first use,
+        # "继续规划" when there is prior context. Use the stable card-button
+        # position after the seven scrolls.
+        - tap:
+            screen_fraction:
+              x_ratio: 0.2204
+              y_ratio: 0.7700
+        - wait: { until: { text: "AI聊天（测试版）" }, timeout_seconds: 8 }
+        # The chat opens with sticky history; the top-right plus starts a
+        # blank conversation before we focus the input.
+        - tap: { accessibility_id: "开始新对话" }
+        - wait: { until: { text: "写消息" }, timeout_seconds: 5 }
+
+  invocation:
+    input:
+      field: { text: "写消息" }
+    submit:
+      trigger: { accessibility_id: "发送消息" }
+
+  output:
+    method: none
+
+  capabilities:
+
+    - id: search_vertical_content
+      description: >
+        Booking.com-specific travel discovery through the AI chat surface. Use
+        for destination ideas, accommodation inspiration, activities,
+        experiences, seasonal travel advice, and travel Q&A. The assistant
+        returns conversational recommendations and may include Booking.com
+        inventory context, but this capability does not reserve or pay.
+      example_prompts:
+        - "适合两人短途城市游的欧洲目的地"
+        - "明年夏天迈阿密有哪些适合放松的海滨住宿区域"
+        - "第一次去纽约住哪里比较方便"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 6
+
+    - id: poi_nearby_search
+      description: >
+        Travel-oriented activity, attraction, and experience discovery through
+        Booking.com's AI assistant. Use for things to do, attractions,
+        experiences, neighborhoods, family activities, and local travel ideas
+        tied to a destination or lodging area. It returns recommendations and
+        context, not turn-by-turn navigation or purchase completion.
+      example_prompts:
+        - "东京银座附近有什么适合雨天的体验活动"
+        - "住在伦敦国王十字附近，晚上可以去哪里逛"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 6
+
+    - id: plan_trip
+      description: >
+        Informational itinerary planning in Booking.com's AI chat. The assistant
+        drafts day-by-day travel plans and can suggest neighborhoods, lodging
+        areas, activities, and experiences. It does not autonomously book
+        hotels or paid activities; any bookable follow-up remains user-operated.
+      example_prompts:
+        - "帮我规划纽约市3天行程"
+        - "带父母去京都玩四天怎么安排住宿和景点"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 8
+
+    - id: book_hotel
+      description: >
+        Accommodation search and booking preparation through Booking.com's AI
+        assistant. The assistant can interpret destination, date, guest, budget,
+        and preference constraints and surface suitable stays or guidance.
+        Selecting rooms, entering guest details, and confirming reservations or
+        payments require user handoff.
+      example_prompts:
+        - "明年夏天迈阿密的海滨酒店"
+        - "下周末上海外滩附近两晚，预算每晚800以内的酒店"
+      executable: true
+      handoff_to_user_required: true
+      typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 6
+
+provenance:
+  last_verified: "2026-06-07"
+  verified_app_version: "66.4"
+  verified_os: "android-16"
+  verified_device: "Pixel 9"
+  verification_method: manual
+  evidence_url: ""
+  x_device_metrics:
+    resolution_px: [1080, 2424]
+    density_dpi: 420
+
+constraints:
+  app_version_min: "66.4"
+  region: ["CN", "US"]
+  network_required: true
+  known_issues:
+    - "Home-page AI card appears below the first-screen search and promotions; entry uses seven calibrated runtime scrolls before tapping the card button."
+    - "AI card CTA text is stateful: first use shows '为我安排行程', existing chat history can show '继续规划'. The card uses a screen-fraction tap at the shared CTA position."
+    - "Chat history is sticky across launches; the entry path always taps the top-right plus button (content-desc='开始新对话') before invocation."
+    - "The assistant is labelled beta in UI ('AI聊天（测试版）') and may make mistakes; use it for exploration and booking preparation, not autonomous paid reservations."
+    - "Input and send affordances expose no resource-id; selectors rely on visible placeholder text '写消息' and content-desc '发送消息'."

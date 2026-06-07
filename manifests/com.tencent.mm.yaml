@@ -19,33 +19,33 @@ embedded_agent:
       steps:
         # 1. Tap magnifier (top-right of WeChat home).
         #    Ratios from verified Pixel 9 (1080x2424); icon center ≈ (893, 236).
-        - tap_screen_fraction:
-            x_ratio: 0.827
-            y_ratio: 0.0975
+        - tap:
+            screen_fraction:
+              x_ratio: 0.827
+              y_ratio: 0.0975
         - wait: { ms: 700 }
         # 2. Tap "AI搜索" link on the right of the row under the search bar.
         #    Center ≈ (965, 393) on 1080x2424.
-        - tap_screen_fraction:
-            x_ratio: 0.894
-            y_ratio: 0.162
+        - tap:
+            screen_fraction:
+              x_ratio: 0.894
+              y_ratio: 0.162
         - wait: { ms: 800 }
 
   invocation:
     input:
-      # Whole input area at the top of the AI 搜索 page. No resource-id and
-      # uiautomator dump is empty (FLAG_SECURE) — must use bounds.
+      # Bottom input field on the AI 搜索 page. No resource-id and
+      # uiautomator dump is empty (FLAG_SECURE) — use screen ratios.
       field:
-        x_bounds:
-          box: [80, 420, 1000, 600]
-          anchor: center
+        screen_fraction:
+          x_ratio: 0.4371
+          y_ratio: 0.915
     submit:
-      # Green "问 AI" pill on the right side of the input row.
-      # Measured by isolating green pixels on a captured screenshot:
-      # bbox [770, 816, 1024, 944], center (897, 880).
+      # Green "问 AI" pill on the right side of the bottom input row.
       trigger:
-        x_bounds:
-          box: [770, 816, 1024, 944]
-          anchor: center
+        screen_fraction:
+          x_ratio: 0.875
+          y_ratio: 0.9085
 
   output:
     # After the answer renders, tap WeChat's built-in 复制 button so the
@@ -67,13 +67,13 @@ embedded_agent:
       #   - if y is valid but x is bogus → snap x to the spec midpoint
       #     (copy icon is always at x≈788 on this Pixel 9 device, never
       #     drifts; it's only the toolbar's y that floats with reply len);
-      #   - if both are off, hard-fall-back to bounds_center.
+      #   - if both are off, hard-fall-back to screen_fraction.
       text: "复制按钮"
       valid_x: [740, 830]   # copy icon's column on 1080-wide screen
       valid_y: [200, 2300]  # toolbar can land anywhere in answer area
-      x_bounds:
-        box: [768, 1690, 808, 1732]
-        anchor: center
+      screen_fraction:
+        x_ratio: 0.7296
+        y_ratio: 0.7059
 
   capabilities:
 
@@ -129,4 +129,4 @@ constraints:
   known_issues:
     - "WeChat sets FLAG_SECURE: `uiautomator dump` returns an empty hierarchy on almost every page, so text-based selectors fall through to VLM grounding (poor on CN UI). Entry steps and invocation selectors therefore use fixed bounds / screen fractions, not tap_label."
     - "Neither the magnifier nor the 'AI搜索' link expose a11y descriptions."
-    - "Input field has no resource-id; the visible placeholder '提出你的问题...' belongs to an inner TextView that is not addressable via XML — bounds-only."
+    - "Input field has no resource-id; the visible placeholder '提出你的问题...' belongs to an inner TextView that is not addressable via XML — ratio-only."

@@ -22,9 +22,10 @@ embedded_agent:
       description: >
         Start a new conversation before real-device tests to avoid stale context.
       steps:
-        - tap_screen_fraction:
-            x_ratio: 0.075
-            y_ratio: 0.10
+        - tap:
+            screen_fraction:
+              x_ratio: 0.075
+              y_ratio: 0.10
         - tap_label:
             text_or_desc: "新建对话"
         - wait:
@@ -36,11 +37,11 @@ embedded_agent:
       # EditText has no resource-id; tap-through on placeholder TextView sibling.
       field: { text: "发消息或按住说话..." }
     submit:
-      # Same FrameLayout: empty → "+", has text → send arrow. No a11y metadata; bounds-only. See OQ-11.
+      # Same FrameLayout: empty → "+", has text → send arrow. No a11y metadata; ratio-only.
       trigger:
-        x_bounds:
-          box: [916, 2094, 1027, 2205]
-          anchor: bottom_right
+        screen_fraction:
+          x_ratio: 0.8995
+          y_ratio: 0.8868
 
   output:
     method: none
@@ -270,7 +271,7 @@ constraints:
   network_required: true
   known_issues:
     - "Main UI exposes no resource-ids — EditText, send btn, mode toggles all rely on placeholder text or bounds."
-    - "Send button and '+' are the same FrameLayout; no a11y metadata, bounds-only."
+    - "Send button and '+' are the same FrameLayout; no a11y metadata, ratio-only."
     - "Auth management page lists 7 partners, but Damai (movies) works too — partner pool expands at runtime."
     - "Agent auto-detects intent type without mode switch; OS router does not need to select mode."
     - "12306 auth (book_train) is service_credential tier — requires password every session even with Fliggy authorized. See OQ-12."

@@ -18,7 +18,7 @@
 
 One machine-readable **card** per app. GUI-mediated by default. Vendor-cooperation-*optional*.
 
-> **Status:** early but measured. SPEC v0.1, seven verified Android reference cards (28 capabilities), a native Android relay adapter, and a real-device A/B benchmark. Full method and numbers: [**Tech Report**](report/RelayAgent-TechReport.md). Contributors welcome.
+> **Status:** early but measured. SPEC v0.1, nine verified Android reference cards (51 declared capabilities), a native Android relay adapter, and a real-device A/B benchmark. Full method and numbers: [**Tech Report**](report/RelayAgent-TechReport.md). Contributors welcome.
 
 ---
 
@@ -96,7 +96,7 @@ Reading the gradients:
 
 **Predictability is itself a result.** RelayAgent's per-task cost is nearly constant — T1 **3987 / 3986 / 3950** tokens (VLM calls fixed at 2) — while the pure-VLM agent varied **38k → 97k tokens at 46 → 379 s** on the identical task (all three reaching the same pre-payment screen), with premature-exit and runaway-loop tails seen in earlier exploration. A predictable ~4k beats a several-fold spread for anyone paying per token. Restated in dollars (§8.2), RelayAgent optimized is ~**$0.001/task** vs. ~**$0.016** for the pure-VLM agent (16.6×).
 
-**Safety held.** Every `handoff_to_user_required` run stopped before the irreversible CTA — the food order at `立即支付` — with zero confirm taps. Functional coverage: **28/28 capabilities** across the 7 cards reached their expected terminal state (§8.2.1).
+**Safety held.** Every `handoff_to_user_required` run stopped before the irreversible CTA — the food order at `立即支付` — with zero confirm taps. In the frozen benchmark catalog, **28/28 capabilities** across 7 cards reached their expected terminal state (§8.2.1); the current manifest catalog has since grown to 9 cards with Reddit Ask and Booking.com AI Chat verified separately.
 
 > Numbers are the 2026-06-02 n=3 re-run; full method, threats-to-validity, and frozen data are in the [Tech Report](report/RelayAgent-TechReport.md) and `report/benchmark-data-n3.md`.
 
@@ -107,7 +107,7 @@ RelayAgent/
 ├── SPEC.md                    # manifest specification (v0.1)
 ├── SPEC-OPEN-QUESTIONS.md     # known design questions still in flight
 ├── spec/schema.json           # JSON Schema mirror of SPEC (normative validator)
-├── manifests/                 # one YAML card per app; 7 Android cards
+├── manifests/                 # one YAML card per app; 9 Android cards
 ├── agents/                    # relay adapter, planner, capability router, card loader, adb helper
 ├── scripts/                   # run_native.py (single app), run_plan.py (NL flow), benchmark runner, metrics
 ├── docs/                      # design docs — capability taxonomy
@@ -140,12 +140,11 @@ uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰�
 - For each text selector, `uiautomator dump` is tried first (precise, zero-token); a small VLM grounding call only on miss.
 - `wait_for_reply` polls a VLM (`{done, text}`) on a wall-clock budget (`max(5×typical_latency, 60)` s). A two-stage precheck (screenshot perceptual hash → a11y-tree text hash) skips the VLM entirely while the reply is still streaming.
 - Reply text is **scraped from the a11y dump**, not read out of the VLM response; the VLM only judges `done`. For `x_capture_full_reply` capabilities every scroll-frame extract is a scrape too.
-- Card `x_bounds` coordinates are a last-resort fallback when the a11y tree doesn't expose the element.
+- Card `screen_fraction` coordinates are a last-resort fallback when the a11y tree doesn't expose the element.
 
 Optional env vars (full list in `.env.example`):
 
 - `RELAY_MANIFESTS=/path/to/manifests` — override the default `./manifests/`.
-- `RELAY_TARGET_DENSITY=480` — your phone's DPI for dp-aware `x_bounds` remapping (else raw bi-axial scaling).
 - `RELAY_PRECHECK=0 RELAY_SCRAPE=0` — disable the two §7 optimizations (reproduces the benchmark baseline).
 - `RELAY_TIMING=1` — write a per-run `wall_clock.json`.
 - `RELAY_FRESH_CONV=0` — keep the previous conversation across runs (default starts fresh).
@@ -184,16 +183,19 @@ Copy `.env.example` to `.env` and fill in your values (LLM endpoint required; `A
 
 ## MVP scope (v0.1)
 
-Seven verified reference cards, **28 capabilities** total, each exercised end-to-end to its terminal state (Tech Report §8.2.1):
+Nine verified Android reference cards, **51 declared capabilities** total in the current catalog:
 
 | App | Package | Capabilities | Card class |
 | --- | --- | --- | --- |
 | Amap (高德地图) | com.autonavi.minimap | POI search, navigation, ride hailing, trip planning | mixed |
 | Tongyi Qwen (通义千问) | com.aliyun.tongyi | foundation_llm, train/ride/food/hotel/movie-event booking, product search/purchase guidance/order tracking | mixed |
 | Ctrip (携程旅行) | ctrip.android.view | flights, hotels, trains, attractions, package tours | mixed |
+| Gemini | com.google.android.apps.bard | foundation_llm, public-web retrieval, Google-service read/write tasks when authorized | mixed |
 | Xiaohongshu (小红书) | com.xingin.xhs | community UGC Q&A via AI search | multi-node |
 | WeChat (微信) | com.tencent.mm | Yuanbao chat surface, AI search | mixed |
 | WPS Office | cn.wps.moffice_eng | AI doc / PPT / writing assist | single-bubble |
+| Reddit | com.reddit.frontpage | Reddit Ask vertical community search and summarization | multi-node |
+| Booking.com | com.booking | travel discovery, itinerary planning, accommodation search | mixed |
 
 *Card class* (single-bubble TextView vs. multi-node RecyclerView) drives the reply-extraction strategy — see Tech Report §4 / §5.4.
 

@@ -86,7 +86,7 @@ def main() -> int:
     p.add_argument("--api-key", help="Override LLM_API_KEY from .env")
     p.add_argument("--max-step", type=int, default=-1, help="Max steps (-1 = unlimited)")
     p.add_argument("--step_wait_time", type=float, default=None,
-                   help="Per-step settle before screenshot (s); else RELAY_STEP_WAIT/0.2")
+                   help="Per-step settle before screenshot (s); else RELAY_STEP_WAIT/0.5")
     p.add_argument("--keep-ime", action="store_true",
                    help="Do not restore the device IME at exit (leave AdbKeyboard active)")
     args, unknown = p.parse_known_args()
@@ -124,7 +124,7 @@ def main() -> int:
     step_wait = (
         args.step_wait_time
         if args.step_wait_time is not None
-        else float(os.getenv("RELAY_STEP_WAIT", "0.2"))
+        else float(os.getenv("RELAY_STEP_WAIT", "0.5"))
     )
     env = NativeEnv(step_wait_time=step_wait)
 

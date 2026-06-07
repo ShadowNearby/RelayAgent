@@ -33,23 +33,23 @@ embedded_agent:
   invocation:
     input:
       # Input is a DOM <input> inside the chat WebView — uiautomator can't
-      # see it. Tap by bounds to focus, then inject text via ADBKeyboard.
+      # see it. Tap by screen ratio to focus, then inject text via ADBKeyboard.
       # Placeholder text "有什么问题随时问我" is visible only as part of the
       # WebView render, not as a separate native node.
       field:
-        x_bounds:
+        screen_fraction:
           # Untyped state, before keyboard pops. Center of the input pill.
-          box: [28, 2060, 1050, 2160]
-          anchor: center
+          x_ratio: 0.4991
+          y_ratio: 0.8705
     submit:
       # When the input is empty the right-side icon is the mic; once any
       # text is in the field it morphs into a circular ▶ send button at
       # the same position. uiautomator reports a non-clickable View, but
-      # raw bounds tap fires it.
+      # raw ratio tap fires it.
       trigger:
-        x_bounds:
-          box: [926, 2093, 1023, 2190]
-          anchor: center
+        screen_fraction:
+          x_ratio: 0.9023
+          y_ratio: 0.8835
 
   output:
     method: none

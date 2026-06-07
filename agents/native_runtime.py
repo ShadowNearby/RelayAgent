@@ -119,7 +119,7 @@ class NativeEnv:
     """The device interface the runner loop uses: get_observation /
     get_screenshot / execute_action, plus an empty `tools`."""
 
-    def __init__(self, step_wait_time: float = 0.2) -> None:
+    def __init__(self, step_wait_time: float = 0.5) -> None:
         self.step_wait_time = step_wait_time
         self.tools: list[dict] = []
         self._last_screenshot: Any = None

@@ -29,11 +29,11 @@ embedded_agent:
       # Placeholder TextView text is stable; tap-through per §6.1 triggers parent input focus.
       field: { text: "任何旅游相关问题都可以问我哦" }
     submit:
-      # Send button is an ImageView with only content-desc="image"; bounds as fallback.
+      # Send button is an ImageView with only content-desc="image"; ratio as fallback.
       trigger:
-        x_bounds:
-          box: [927, 2079, 1011, 2163]
-          anchor: bottom_right
+        screen_fraction:
+          x_ratio: 0.8972
+          y_ratio: 0.8750
 
   output:
     method: none

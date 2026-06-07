@@ -62,9 +62,6 @@ def _compile_step(raw: dict) -> Step | None:
                 return Step("tap_text", {"text": v})
         logger.warning(f"tap_label step has no usable selector: {body!r}")
         return None
-    if "tap_screen_fraction" in raw:
-        f = raw["tap_screen_fraction"]
-        return Step("tap_fraction", {"x_ratio": f["x_ratio"], "y_ratio": f["y_ratio"]})
     if "wait" in raw:
         w = raw["wait"]
         if "ms" in w:
@@ -104,8 +101,9 @@ def _compile_step(raw: dict) -> Step | None:
 
 
 def _compile_selector_tap(sel: dict) -> Step:
-    if "x_bounds" in sel:
-        return Step("tap_bounds", {"bounds": sel["x_bounds"]})
+    if "screen_fraction" in sel:
+        f = sel["screen_fraction"]
+        return Step("tap_fraction", {"x_ratio": f["x_ratio"], "y_ratio": f["y_ratio"]})
     for key in ("text", "text_contains", "accessibility_id", "resource_id"):
         if key in sel:
             return Step("tap_text", {"text": sel[key]})
@@ -199,15 +197,15 @@ def build_plan(
     # copy button after the reply lands so the answer ends up on the device
     # clipboard. Reading it back is out of scope (Binder 1MB cap on rich
     # copies); the persisted text in agent_reply.json still comes from VLM.
-    # Locator: prefer VLM grounding via `text`, fall back to fixed `x_bounds`.
+    # Locator: prefer VLM grounding via `text`, fall back to fixed screen fraction.
     output_cfg = ea.get("output") or {}
     if output_cfg.get("method") == "copy_button":
         cfg = output_cfg.get("x_copy_button") or {}
         payload: dict[str, Any] = {}
         if cfg.get("text"):
             payload["text"] = cfg["text"]
-        if cfg.get("x_bounds"):
-            payload["bounds"] = cfg["x_bounds"]
+        if cfg.get("screen_fraction"):
+            payload["screen_fraction"] = cfg["screen_fraction"]
         if cfg.get("valid_x"):
             payload["valid_x"] = list(cfg["valid_x"])
         if cfg.get("valid_y"):

@@ -30,9 +30,9 @@ embedded_agent:
         - tap_unless_present:
             probe: { text: "有什么问题尽管问我" }
             target:
-              x_bounds:
-                box: [946, 2101, 1009, 2164]
-                anchor: bottom_right
+              screen_fraction:
+                x_ratio: 0.9051
+                y_ratio: 0.8797
         - wait: { ms: 300 }
 
   invocation:
@@ -40,20 +40,20 @@ embedded_agent:
       # EditText has no resource-id or content-desc. When unfocused, both
       # `text` and `hint` carry "有什么问题尽管问我"; once tapped, `text`
       # empties out, so the hint-text selector ONLY works pre-focus.
-      # x_bounds is the robust path; the text selector is kept as a hint
+      # screen_fraction is the robust path; the text selector is kept as a hint
       # for matchers that want a semantic anchor.
       field:
-        x_bounds:
-          box: [68, 2105, 925, 2160]
-          anchor: bottom_left
+        screen_fraction:
+          x_ratio: 0.4597
+          y_ratio: 0.8797
         text: "有什么问题尽管问我"
     submit:
       # Same ViewGroup: empty → mic icon, has text → send arrow.
-      # No id, no content-desc; bounds-only. See OQ-11.
+      # No id, no content-desc; ratio-only.
       trigger:
-        x_bounds:
-          box: [946, 2075, 1009, 2138]
-          anchor: bottom_right
+        screen_fraction:
+          x_ratio: 0.9051
+          y_ratio: 0.8690
 
   output:
     method: none
