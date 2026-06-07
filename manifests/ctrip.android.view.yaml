@@ -40,20 +40,6 @@ embedded_agent:
 
   capabilities:
 
-    - id: foundation_llm
-      description: >
-        Foundation LLM travel assistant for Ctrip: destination Q&A, local
-        information, visa/transport tips, weather-style travel advice, and
-        text/table summaries. No booking or payment is performed through this
-        capability; purchase intents should route to the specific ticketing,
-        hotel, attraction, or itinerary capabilities below.
-      example_prompts:
-        - "上海迪士尼明天的门票多少钱"
-        - "三亚十一期间天气和穿衣建议"
-      executable: false
-      handoff_to_user_required: false
-      typical_latency_seconds: 20
-
     - id: poi_nearby_search
       description: >
         Travel-oriented POI and nearby search through Ctrip's AI assistant. Use

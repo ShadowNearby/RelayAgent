@@ -191,21 +191,6 @@ embedded_agent:
       x_partner_app: "com.taobao.taobao"
       x_partner_auth: "oauth_bind_required"
 
-    - id: purchase_guidance
-      description: >
-        Purchase guidance and pre-checkout preparation for a specific Taobao
-        product: find listing, confirm specs, apply coupons, add to cart, and
-        jump toward checkout. Final order confirmation and payment must remain
-        manual.
-      example_prompts:
-        - "帮我买一包猫砂，膨润土的，10公斤左右"
-        - "把这款黑色 256G 手机加入购物车"
-      executable: true
-      handoff_to_user_required: true
-      typical_latency_seconds: 15
-      x_partner_app: "com.taobao.taobao"
-      x_partner_auth: "oauth_bind_required"
-
     - id: track_order
       description: >
         Order, logistics, after-sales, or refund-status lookup via Taobao. This

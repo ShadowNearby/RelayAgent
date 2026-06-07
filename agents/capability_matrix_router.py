@@ -105,6 +105,51 @@ def _catalog_index(catalog: dict[str, Any]) -> dict[tuple[str, str], dict[str, A
     return idx
 
 
+def _candidate_apps_for_cap(
+    cap_id: str,
+    matrix: dict[str, Any],
+    cat_index: dict[tuple[str, str], dict[str, Any]],
+) -> list[str]:
+    """Return matrix-authorized runnable apps for a capability.
+
+    The matrix is the source of truth for app/capability membership. The
+    manifest catalog is only used as an availability check so stale matrix
+    entries do not produce unrunnable pairs.
+    """
+    out: list[str] = []
+    stale_matrix_apps: list[str] = []
+    for app_id in matrix["cap_to_apps"].get(cap_id, []):
+        if (app_id, cap_id) in cat_index:
+            out.append(app_id)
+        else:
+            stale_matrix_apps.append(app_id)
+    if stale_matrix_apps:
+        logger.warning(
+            f"matrix lists non-catalog apps for {cap_id}: {stale_matrix_apps}"
+        )
+    return out
+
+
+def _option_for_pair(
+    app_id: str,
+    cap_id: str,
+    matrix: dict[str, Any],
+    cat_index: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, Any]:
+    digest = cat_index.get((app_id, cap_id)) or {}
+    return {
+        "app_id": app_id,
+        "capability_id": cap_id,
+        "app_name": digest.get("app_name", app_id),
+        "description": digest.get("description") or matrix["cap_desc"].get(cap_id, ""),
+        "examples": digest.get("examples", []),
+        "executable": digest.get("executable", True),
+        "handoff_to_user_required": digest.get(
+            "handoff_to_user_required", False
+        ),
+    }
+
+
 _STAGE1_SYSTEM = """You match a user's request to candidate mobile-app capabilities.
 
 You are given a menu of vertical capability ids with descriptions. A generic
@@ -179,22 +224,29 @@ def _stage2_rerank(
 ) -> dict[str, Any] | None:
     options: list[dict[str, Any]] = []
     for cap_id in cap_ids:
-        for app_id in matrix["cap_to_apps"].get(cap_id, []):
-            digest = cat_index.get((app_id, cap_id))
-            options.append({
-                "app_id": app_id,
-                "capability_id": cap_id,
-                "app_name": (digest or {}).get("app_name", app_id),
-                "description": (digest or {}).get("description")
-                or matrix["cap_desc"].get(cap_id, ""),
-                "examples": (digest or {}).get("examples", []),
-                "handoff_to_user_required": (digest or {}).get(
-                    "handoff_to_user_required", False
-                ),
-            })
+        for app_id in _candidate_apps_for_cap(
+            cap_id, matrix, cat_index
+        ):
+            options.append(_option_for_pair(app_id, cap_id, matrix, cat_index))
     if not options:
-        logger.info("stage-2 rerank -> no (app, capability) options; skipping")
-        return None
+        raise RuntimeError(
+            "stage-2 early-exit: matched vertical capability ids "
+            f"{cap_ids}, but the matrix authorizes no runnable app/capability "
+            "pairs for them"
+        )
+    if len(options) == 1:
+        only = options[0]
+        logger.info(
+            "stage-2 rerank early-exit -> "
+            f"{only['app_id']} / {only['capability_id']} (single candidate)"
+        )
+        return {
+            "kind": "app",
+            "app_id": only["app_id"],
+            "capability_id": only["capability_id"],
+            "goal": nl,
+            "reason": "Only one runnable app/capability candidate after matrix/catalog reconciliation.",
+        }
 
     user = (
         "Shortlisted (app, capability) options:\n"
@@ -234,10 +286,13 @@ def _stage3_foundation(
     nl: str,
     matrix: dict[str, Any],
     catalog: dict[str, Any],
+    cat_index: dict[tuple[str, str], dict[str, Any]],
     llm: OpenAI,
     model: str,
 ) -> dict[str, Any]:
-    foundation_apps = matrix["cap_to_apps"].get(FOUNDATION_CAP, [])
+    foundation_apps = _candidate_apps_for_cap(
+        FOUNDATION_CAP, matrix, cat_index
+    )
     if not foundation_apps:
         raise SystemExit(
             f"no app offers {FOUNDATION_CAP!r} in the matrix; cannot fall back"
@@ -290,14 +345,23 @@ def route(
 
     cap_ids = _stage1_prefilter(nl, matrix, llm, model)
     if cap_ids:
-        decision = _stage2_rerank(nl, cap_ids, matrix, cat_index, llm, model)
+        decision = _stage2_rerank(
+            nl,
+            cap_ids,
+            matrix,
+            cat_index,
+            llm,
+            model,
+        )
         if decision is not None:
             if preserve_goal:
                 decision["goal"] = nl
             return decision
 
     logger.info("falling back to foundation_llm (stage-3)")
-    decision = _stage3_foundation(nl, matrix, catalog, llm, model)
+    decision = _stage3_foundation(
+        nl, matrix, catalog, cat_index, llm, model
+    )
     if preserve_goal:
         decision["goal"] = nl
     return decision

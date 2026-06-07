@@ -112,20 +112,6 @@ embedded_agent:
       x_capture_full_reply:
         max_scrolls: 3
 
-    - id: plan_trip
-      description: >
-        Travel itinerary planning in Amap with attractions, dining, hotels,
-        routes, and map previews. Informational only; it does not book tickets,
-        hotels, rides, or restaurants.
-      example_prompts:
-        - "帮我规划三亚 3 日游"
-        - "周末上海周边亲子游怎么安排"
-      executable: false
-      handoff_to_user_required: false
-      typical_latency_seconds: 40
-      x_capture_full_reply:
-        max_scrolls: 8
-
 provenance:
   last_verified: "2026-05-11"
   verified_app_version: "16.16.0.2001"
