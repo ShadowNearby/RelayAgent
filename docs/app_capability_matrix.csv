@@ -2,7 +2,7 @@
 1,foundation_llm,"Foundation LLM capability — QA, rewriting, translation, summarization, retrieval, outline generation, extraction, filtering, sorting, comparison, dedup, conflict detection, numeric computation & format conversion, and public-web lookups (GitHub repos/issues, securities/finance, weather)",,✓,,✓,,,
 2,poi_nearby_search,POI / nearby search,,✓,✓,✓,✓,✓,✓
 3,route_planning,Route planning (incl. distance & time estimates),,✓,✓,✓,,,
-4,live_navigation,Turn-by-turn live navigation,,✓,✓,,,,
+4,live_navigation,Turn-by-turn live navigation,,✓,✓,✓,,,
 5,hail_ride,Ride hailing,,✓,✓,,,,
 6,plan_trip,Travel itinerary planning (= POI + route + ticketing + hotel + attractions),,,,,,,✓
 7,book_train,Train tickets — search / book,,✓,,,,,✓
