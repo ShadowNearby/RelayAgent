@@ -15,7 +15,7 @@
 | --- | ----------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | 2   | poi_nearby_search | POI / nearby search                                                         | Find 3 quiet coffee shops near Shanghai Jiao Tong University Minhang Campus, with names and addresses.                  |
 | 3   | route_planning    | Route planning (incl. distance & time estimates)                            | Plan a route from Shanghai Jiao Tong University Minhang Campus to Hongqiao Railway Station, estimate distance and time. |
-| 4   | live_navigation   | Turn-by-turn live navigation                                                | Start turn-by-turn navigation to the Bund in Shanghai.                                                                  |
+| 4   | live_navigation   | Navigation to a specific location                                                | Start navigation to the Bund in Shanghai.                                                                  |
 | 5   | hail_ride         | Ride hailing                                                                | Help hail an economy ride from People Square Shanghai to the east gate of Shanghai Jiao Tong University.                |
 | 6   | plan_trip         | Travel itinerary planning (= POI + route + ticketing + hotel + attractions) | Plan a 3-day Chengdu itinerary with attractions, routes, dining, and hotel-area suggestions.                            |
 

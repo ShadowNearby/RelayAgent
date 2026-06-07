@@ -14,6 +14,8 @@ from typing import Any
 
 from loguru import logger
 
+from agents.locale_policy import first_locale, locale_policy_text
+
 _FORCE_CAP_ENV = "RELAY_FORCE_CAPABILITY"
 _FORCE_INVOCATION_ENV = "RELAY_INVOCATION_TEXT"
 
@@ -27,6 +29,13 @@ You are given:
 Pick exactly one capability id that best matches the instruction, and write
 the text the OS-level agent should type into the in-app agent's input box.
 Use the user's own wording when possible; expand only to fill obvious gaps.
+
+Locale policy for the text typed into the in-app agent:
+- Default to the app's first locale language.
+- If the user's instruction explicitly asks for a different language, honor
+  that explicit instruction.
+- Preserve proper nouns, addresses, product names, code, URLs, emails, ids,
+  and quoted literal text in their original language.
 
 Reply with ONE JSON object inside a ```json``` fence, with exactly these keys:
 {
@@ -90,6 +99,8 @@ def route_capability(
             "instruction": instruction,
             "app_id": card["app_id"],
             "app_name": card["app_name"],
+            "locale": card.get("locale") or [],
+            "locale_policy": locale_policy_text(first_locale(card)),
             "embedded_agent": card["embedded_agent"]["name"],
             "capabilities": _capability_digest(card),
         },
