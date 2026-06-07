@@ -17,6 +17,7 @@ from loguru import logger
 from openai import OpenAI
 
 from agents.card_catalog import clean_text
+from agents.locale_policy import first_locale, locale_policy_text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MATRIX_CSV = REPO_ROOT / "docs" / "app_capability_matrix.csv"
@@ -97,6 +98,7 @@ def _catalog_index(catalog: dict[str, Any]) -> dict[tuple[str, str], dict[str, A
         for cap in app["capabilities"]:
             idx[(app["app_id"], cap["id"])] = {
                 "app_name": app["app_name"],
+                "locale": app.get("locale") or [],
                 "description": cap.get("description", ""),
                 "examples": cap.get("examples", []),
                 "executable": cap.get("executable", True),
@@ -141,6 +143,8 @@ def _option_for_pair(
         "app_id": app_id,
         "capability_id": cap_id,
         "app_name": digest.get("app_name", app_id),
+        "locale": digest.get("locale") or [],
+        "locale_policy": locale_policy_text(first_locale(digest)),
         "description": digest.get("description") or matrix["cap_desc"].get(cap_id, ""),
         "examples": digest.get("examples", []),
         "executable": digest.get("executable", True),
@@ -202,6 +206,13 @@ _STAGE2_SYSTEM = """You route a user's request to exactly ONE app capability.
 You are given a shortlist of (app, capability) options with descriptions and
 example prompts. Pick the single best option and write the goal sentence to
 hand to that app's in-app agent (rewrite the request if it helps).
+
+Locale policy for the goal sentence typed into the in-app agent:
+- Default to the selected app's first locale language.
+- If the user's request or planned prompt explicitly asks for a different
+  language, honor that explicit instruction.
+- Preserve proper nouns, addresses, product names, code, URLs, emails, ids,
+  and quoted literal text in their original language.
 
 Use ONLY an app_id + capability_id pair that appears in the options. If, on
 reflection, none of the options actually fits the request, return
@@ -277,6 +288,13 @@ capability fit.
 Pick the single best app from the options below and write the goal sentence to
 hand to its assistant (rewrite the request if it helps).
 
+Locale policy for the goal sentence typed into the in-app agent:
+- Default to the selected app's first locale language.
+- If the user's request explicitly asks for a different language, honor that
+  explicit instruction.
+- Preserve proper nouns, addresses, product names, code, URLs, emails, ids,
+  and quoted literal text in their original language.
+
 Return ONE JSON object inside a ```json``` fence:
   {"kind": "app", "app_id": "<id>", "capability_id": "foundation_llm", "goal": "<sentence>", "reason": "..."}
 """
@@ -302,6 +320,8 @@ def _stage3_foundation(
         {
             "app_id": app_id,
             "app_name": by_id.get(app_id, {}).get("app_name", app_id),
+            "locale": by_id.get(app_id, {}).get("locale") or [],
+            "locale_policy": locale_policy_text(first_locale(by_id.get(app_id))),
             "agent_name": by_id.get(app_id, {}).get("agent_name"),
             "agent_description": by_id.get(app_id, {}).get("agent_description", ""),
         }

@@ -3,7 +3,7 @@ card_version: "0.2.0"
 app_id: "com.google.android.apps.bard"
 app_name: "Gemini"
 platforms: ["android"]
-locale: ["zh-CN"]
+locale: ["en-US"]
 
 embedded_agent:
   name: "Gemini"
@@ -22,28 +22,21 @@ embedded_agent:
 
   entry:
     primary:
+      # Cold-launch (force-stop + relaunch) already lands on a fresh Gemini
+      # chat with the input field ready, so no tap sequence and no separate
+      # fresh-conversation prep is needed — go straight to input + submit.
       method: tap_sequence
       steps: []
-    x_prepare_fresh_conversation:
-      description: >
-        Start a fresh Gemini chat from the header so stale context does not
-        affect scripted app tests. The button is a Compose node whose
-        content-desc/text is stable in zh-CN.
-      steps:
-        - tap_label:
-            text_or_desc: "发起新对话"
-        - wait:
-            ms: 700
 
   invocation:
     input:
       # Native EditText exposed by GSA:
       # resource-id `assistant_robin_input_collapsed_text_half_sheet`,
-      # hint/text "问问 Gemini". Bounds below are Pixel 9 1080x2424 collapsed
+      # hint/text "Ask Gemini". Bounds below are Pixel 9 1080x2424 collapsed
       # half-sheet bounds before keyboard focus.
       field:
         resource_id: "com.google.android.googlequicksearchbox:id/assistant_robin_input_collapsed_text_half_sheet"
-        text: "问问 Gemini"
+        text: "Ask Gemini"
         screen_fraction:
           x_ratio: 0.4514
           y_ratio: 0.9175
@@ -52,7 +45,7 @@ embedded_agent:
       # text is present. After keyboard focus the send button moves upward;
       # prefer a11y grounding over fixed bounds.
       trigger:
-        accessibility_id: "发送"
+        accessibility_id: "Send"
 
   output:
     method: none
@@ -72,12 +65,12 @@ embedded_agent:
         Pure chat output; source freshness should be verified for high-stakes
         use, and finance results are informational only, not investment advice.
       example_prompts:
-        - "用三句话解释 Transformer 的注意力机制"
-        - "总结这个网页并提取标题、主题和关键实体：https://example.com/article"
-        - "把 1,234.56 美元按 7.1 汇率换算成人民币"
-        - "查询 GitHub 仓库 openai/codex 的主要用途"
-        - "查询 AAPL 当前股价、股息率和 ESG 概况，并给出来源"
-        - "查询今天上海天气，给出一句话结论"
+        - "Explain the Transformer attention mechanism in three sentences."
+        - "Summarize this web page and extract its title, topic, and key entities: https://example.com/article"
+        - "Convert USD 1,234.56 to CNY at an exchange rate of 7.1."
+        - "Look up the main purpose of the GitHub repository openai/codex."
+        - "Look up AAPL's current stock price, dividend yield, and ESG overview, and include sources."
+        - "Check today's weather in Shanghai and give a one-sentence conclusion."
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 20
@@ -90,8 +83,8 @@ embedded_agent:
         places, addresses, and rough local information, but does not open maps,
         start navigation, or verify live business status.
       example_prompts:
-        - "找上海音乐厅南门附近 3 家咖啡店"
-        - "世纪公园7号门附近有哪些适合带娃的室内场馆"
+        - "Find three coffee shops near the south gate of Shanghai Concert Hall."
+        - "What indoor venues near Century Park Gate 7 are good for children?"
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 25
@@ -104,8 +97,8 @@ embedded_agent:
         address parsing, route options, approximate distance/time/cost, and
         transit/driving comparisons. It does not start live navigation.
       example_prompts:
-        - "从上海大剧院北门到上海南站南广场进站口怎么走，估算距离时间费用"
-        - "解析地址：徐汇滨江西岸智塔A座"
+        - "How do I get from the north gate of Shanghai Grand Theatre to the south square entrance of Shanghai South Railway Station? Estimate distance, time, and cost."
+        - "Parse this address: AI Tower, Tower A, West Bund, Xuhui Riverside."
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 25
@@ -114,17 +107,16 @@ embedded_agent:
 
     - id: live_navigation
       description: >
-        Turn-by-turn navigation guidance handoff. Gemini can prepare a route,
-        explain transport options, and tell the user what to open in a map app,
-        but it does not start live navigation inside the tested Gemini surface.
+        Gemini will open Google Map to Navigate to the place.
       example_prompts:
-        - "导航去上海儿童医学中心门诊楼附近最近的地铁站入口"
-        - "帮我开始导航到虹桥火车站南进站口"
+        - "Navigate to the nearest metro entrance near the outpatient building of Shanghai Children's Medical Center."
+        - "Help me start navigation to the south entrance of Hongqiao Railway Station."
       executable: false
       handoff_to_user_required: true
       typical_latency_seconds: 20
-      x_capture_full_reply:
-        max_scrolls: 8
+      # Navigation just yields a CTA/handoff — no text reply to wait on, so go
+      # straight from submit to user handoff.
+      x_skip_wait_for_reply: true
 
     - id: write_calendar
       description: >
@@ -132,8 +124,8 @@ embedded_agent:
         authorized. This is a real side-effect capability and should require
         explicit user intent before creating or modifying calendar data.
       example_prompts:
-        - "明天上午10点创建一个30分钟日历事件：测试Gemini能力"
-        - "下周一下午3点安排一个项目同步会，持续1小时"
+        - "Create a 30-minute calendar event tomorrow at 10 AM titled Gemini capability test."
+        - "Schedule a one-hour project sync next Monday at 3 PM."
       executable: true
       handoff_to_user_required: false
       typical_latency_seconds: 15
@@ -144,8 +136,8 @@ embedded_agent:
         are authorized. The assistant can answer schedule, availability, and
         date-range questions without modifying calendar data.
       example_prompts:
-        - "帮我看一下明天上午有哪些日程"
-        - "总结我这周的会议安排"
+        - "Show me what events I have tomorrow morning."
+        - "Summarize my meetings for this week."
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 15
@@ -155,8 +147,8 @@ embedded_agent:
         Reminder, Google Tasks reminder, or alarm setting when authorized. This
         writes user-visible reminder/alarm state and requires explicit intent.
       example_prompts:
-        - "今晚9点提醒我喝水"
-        - "明早7点设置一个闹钟"
+        - "Remind me to drink water at 9 PM tonight."
+        - "Set an alarm for 7 AM tomorrow morning."
       executable: true
       handoff_to_user_required: false
       typical_latency_seconds: 12
@@ -167,8 +159,8 @@ embedded_agent:
         authorized. The assistant can search accessible messages and summarize
         matches; no outbound message is sent.
       example_prompts:
-        - "搜索我最近一封来自 GitHub 的邮件并做一句话摘要"
-        - "找上周关于会议的邮件，总结时间和地点"
+        - "Find my most recent email from GitHub and summarize it in one sentence."
+        - "Find last week's emails about meetings and summarize the time and location."
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 25
@@ -181,8 +173,8 @@ embedded_agent:
         sending was refused in the tested app surface, so the user must copy or
         send manually in an email client.
       example_prompts:
-        - "给 test@example.com 写一封邮件，主题测试，正文一句话；不要发送"
-        - "帮我草拟一封项目延期说明邮件，不要发送"
+        - "Draft an email to test@example.com with subject Test and a one-sentence body; do not send it."
+        - "Draft an email explaining a project delay; do not send it."
       executable: false
       handoff_to_user_required: true
       typical_latency_seconds: 15
@@ -194,8 +186,8 @@ embedded_agent:
         access was not verified. Read-only; do not send or draft a reply through
         this capability.
       example_prompts:
-        - "读取我最近一条短信的摘要；如果不能访问短信请说明"
-        - "总结今天收到的短信通知，不要回复"
+        - "Summarize my most recent SMS message; say so if SMS cannot be accessed."
+        - "Summarize the SMS notifications I received today without replying."
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 20
@@ -206,8 +198,8 @@ embedded_agent:
         sources are available. The assistant can search accessible notes and
         summarize matches without editing them.
       example_prompts:
-        - "查一下我最近的项目备忘录里有哪些待办"
-        - "总结标题包含旅行的备忘录"
+        - "Check my recent project notes for action items."
+        - "Summarize notes whose title contains travel."
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 20
@@ -218,8 +210,8 @@ embedded_agent:
         changing persistent notes writes user data, so the user should review
         the content before it is saved.
       example_prompts:
-        - "创建一条备忘录，标题是 RelayAgent 测试"
-        - "帮我写一条明天买咖啡豆的备忘录"
+        - "Create a note titled RelayAgent test."
+        - "Write a note reminding me to buy coffee beans tomorrow."
       executable: true
       handoff_to_user_required: false
       typical_latency_seconds: 15
@@ -230,8 +222,8 @@ embedded_agent:
         The assistant can summarize due tasks, overdue items, and task lists
         without modifying them.
       example_prompts:
-        - "看看我今天有哪些待办"
-        - "总结本周到期的任务"
+        - "Show me my tasks for today."
+        - "Summarize tasks due this week."
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 15
@@ -242,8 +234,8 @@ embedded_agent:
         Tasks. This writes user-visible task state and requires explicit user
         intent in the prompt.
       example_prompts:
-        - "添加一个明天下午三点提交报告的任务"
-        - "创建待办：周五前整理实验记录"
+        - "Add a task to submit the report tomorrow at 3 PM."
+        - "Create a task: organize experiment notes by Friday."
       executable: true
       handoff_to_user_required: false
       typical_latency_seconds: 15
@@ -254,8 +246,8 @@ embedded_agent:
         settings changes such as Wi-Fi, Bluetooth, brightness, or permissions,
         but direct device-setting mutation is not verified in the tested surface.
       example_prompts:
-        - "帮我打开蓝牙设置"
-        - "告诉我怎么关闭自动亮度"
+        - "Help me open Bluetooth settings."
+        - "Tell me how to turn off auto brightness."
       executable: false
       handoff_to_user_required: true
       typical_latency_seconds: 15
@@ -266,8 +258,8 @@ embedded_agent:
         potentially irreversible, so never automate a final SMS send action
         without explicit user approval and a visible system confirmation.
       example_prompts:
-        - "给这个电话号码发送短信：我晚点到"
-        - "给这个号码草拟短信：我十分钟后到；不要直接发送"
+        - "Send this phone number a text message: I will arrive later."
+        - "Draft a text to this number: I will arrive in ten minutes; do not send it directly."
       executable: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
@@ -279,23 +271,23 @@ embedded_agent:
         selects a photo from the gallery and asks about its contents
         (screenshot/photo Q&A, object identification, extraction).
       example_prompts:
-        - "从相册选一张冰箱照片，识别里面有哪些食材"
-        - "打开相册里那张白板照片，帮我读出上面的内容"
+        - "Choose a refrigerator photo from the gallery and identify the ingredients inside."
+        - "Open the whiteboard photo in the gallery and read the content on it."
       executable: true
       handoff_to_user_required: true
       typical_latency_seconds: 30
       x_attachment_entry:
-        text_or_desc: "添加附件"
+        text_or_desc: "Add attachment"
         screen_fraction:
           x_ratio: 0.1463
           y_ratio: 0.9175
       x_attachment_options_observed:
-        - "相册"
-        - "相机"
-        - "图片"
+        - "Gallery"
+        - "Camera"
+        - "Images"
       x_tool_menu_entry:
-        open_menu: "添加附件"
-        text_or_desc: "图片"
+        open_menu: "Add attachment"
+        text_or_desc: "Images"
 
     - id: generate_document
       description: >
@@ -303,13 +295,13 @@ embedded_agent:
         product plans, code/text drafts, tables, and structured prose. Export or
         editor behavior is user-handoff until separately scripted.
       example_prompts:
-        - "生成一份中文项目周报草稿"
-        - "用 Canvas 帮我起草一份产品方案"
+        - "Generate a draft weekly project report in English."
+        - "Use Canvas to draft a product proposal."
       executable: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_tool_menu_entry:
-        open_menu: "添加附件"
+        open_menu: "Add attachment"
         text_or_desc: "Canvas"
 
     - id: generate_slides
@@ -318,13 +310,13 @@ embedded_agent:
         Canvas. Plain chat can draft slide outlines; actual PPT export/opening
         remains user-handoff until separately scripted.
       example_prompts:
-        - "为人工智能在教育中的应用生成一份5页PPT的标题和每页要点"
-        - "用 Canvas 生成一份产品发布演示稿大纲"
+        - "Generate titles and key points for a five-page presentation about AI in education."
+        - "Use Canvas to generate an outline for a product launch presentation."
       executable: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
       x_tool_menu_entry:
-        open_menu: "添加附件"
+        open_menu: "Add attachment"
         text_or_desc: "Canvas"
 
 provenance:
@@ -346,10 +338,10 @@ constraints:
   network_required: true
   known_issues:
     - "Launcher package is `com.google.android.apps.bard`, but the visible UI package in uiautomator is `com.google.android.googlequicksearchbox`; selectors should not assume package equality."
-    - "The chat input is a native EditText with hint/text `问问 Gemini`, while much of the toolbar is Compose with sparse accessibility metadata."
-    - "The fresh-chat button is `发起新对话`; it should be tapped before probes to avoid stale context."
-    - "The rightmost input button changes role: empty input opens Gemini Live; after text entry the same slot becomes send (`content-desc=发送`). Its visible center moved to about (923, 2110) after keyboard focus on Pixel 9; use a11y/text grounding instead of fixed bottom bounds."
-    - "The attachment button exposes content-desc `添加附件`; observed options include 相册, 相机, 文件, 云端硬盘, 图片, 音乐, Canvas, Deep Research, 学习辅导, and Labs personalization."
+    - "The chat input is a native EditText with hint/text `Ask Gemini`, while much of the toolbar is Compose with sparse accessibility metadata."
+    - "Cold-launch (force-stop + relaunch) already opens a fresh Gemini chat with the input field ready, so no `New chat` tap or other entry step is needed before typing."
+    - "The rightmost input button changes role: empty input opens Gemini Live; after text entry the same slot becomes send (`content-desc=Send`). Its visible center moved to about (923, 2110) after keyboard focus on Pixel 9; use a11y/text grounding instead of fixed bottom bounds."
+    - "The attachment button exposes content-desc `Add attachment`; observed options include Gallery, Camera, Files, Drive, Images, Music, Canvas, Deep Research, Learning Coach, and Labs personalization."
     - "Mode chips shift the input sheet upward; after entering a mode, button coordinates differ from the normal collapsed chat sheet."
     - "Some Gemini rich cards or WebView-heavy answers are visible on screen but uiautomator text capture may return only the generic disclaimer or status-bar time. This affected weather, stock, and one PPT-outline probe."
     - "Feature availability depends heavily on Google account, Gemini plan, connected-app settings, country/region, permissions, and workspace policies. Gmail/Calendar/Tasks capabilities are not guaranteed for every account."

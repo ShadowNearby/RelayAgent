@@ -24,12 +24,20 @@ Design (see CLAUDE.md + the `project_cross_app_planner` decision notes):
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from loguru import logger
 from openai import OpenAI
 
 from agents.capability_matrix_router import route as route_app_capability
+from agents.locale_policy import (
+    appears_compatible_with_locale,
+    first_locale,
+    has_explicit_language_instruction,
+    language_label,
+    locale_policy_text,
+)
 
 # `_VAR_RE` (the `{var}` / `{var.field}` matcher) and the fenced-JSON parser
 # are shared with the runner so the planner validates exactly what the runner
@@ -57,8 +65,8 @@ class PlanValidationError(RuntimeError):
 _PLANNER_SYSTEM = """You synthesize a multi-app cowork PLAN from a user's natural-language request.
 
 You are given a catalog of apps. Each app has an embedded AI agent with a list
-of capabilities (id, description, example_prompts, executable,
-handoff_to_user_required).
+of supported locales plus a list of capabilities (id, description, example_prompts, executable,
+handoff_to_user_required, x_skip_wait_for_reply).
 
 Produce ONE JSON object inside a ```json``` fence — a flow plan shaped like:
 
@@ -111,13 +119,38 @@ RULES:
    session. If such a capability IS the final action (e.g. hailing the ride at
    the very end), it MAY be the last step: its own in-app handoff is the user's
    final confirmation, so no trailing ask_user is needed.
+   If a capability has "x_skip_wait_for_reply": true, that app step does NOT
+   capture a text reply. Do not add `bind` or `extract` for it unless another
+   step can get the needed data from the user through an ask_user step.
 5. Prefer the user's own wording in prompts; expand only to fill obvious gaps.
    Bake concrete values from the request directly into the prompts.
+   For each app-step `prompt`, default to that app's first `locale` language.
+   If the user's request or the prompt explicitly asks for a different language,
+   honor that explicit instruction. Preserve proper nouns, addresses, product
+   names, code, URLs, emails, ids, and quoted literal text in their original
+   language.
 6. A single-app request is fine — emit a one-step plan.
 7. If NO combination of the available apps/capabilities can satisfy the request,
    return instead: {"unsatisfiable": true, "reason": "<short explanation>"}.
 
 No prose outside the fence."""
+
+
+_LOCALIZE_PROMPT_SYSTEM = """You rewrite one mobile in-app agent prompt to match an app locale.
+
+Rules:
+- If the original user request or current prompt explicitly asks for a language,
+  return the current prompt unchanged.
+- Otherwise rewrite only the natural-language instruction text into the target
+  locale's language.
+- Preserve placeholders like {var} and {var.field} byte-for-byte.
+- Preserve proper nouns, addresses, product names, code, URLs, emails, ids, and
+  quoted literal text in their original language.
+- Do not add new requirements or remove existing requirements.
+
+Return ONE JSON object inside a ```json``` fence:
+{"prompt": "<final prompt>", "changed": true, "reason": "<short reason>"}
+"""
 
 
 class FlowPlanner:
@@ -133,6 +166,9 @@ class FlowPlanner:
         self._llm = llm
         self._model = model
         self.matrix = matrix
+        self._apps_by_id = {
+            app.get("app_id"): app for app in catalog.get("apps", []) if app.get("app_id")
+        }
         # app_id -> {capability_id -> capability dict}, for id validation and
         # the handoff_to_user_required lookup.
         self._caps: dict[str, dict[str, dict]] = {}
@@ -154,8 +190,6 @@ class FlowPlanner:
         request unsatisfiable with the available apps. Raises
         PlanValidationError if the synthesized plan does not validate.
         """
-        import json
-
         user = (
             "Available apps catalog:\n"
             f"{json.dumps(self.catalog, ensure_ascii=False, indent=2)}\n\n"
@@ -242,6 +276,10 @@ class FlowPlanner:
                 step["app"] = app_id
             if cap_id:
                 step["capability"] = cap_id
+            if app_id:
+                step["prompt"] = self._maybe_localize_prompt(
+                    step["prompt"], app_id, nl_request
+                )
             logger.info(
                 f"planner route step {step.get('id') or i!r} -> "
                 f"{app_id} / {cap_id} (reason: {decision.get('reason')})"
@@ -250,8 +288,103 @@ class FlowPlanner:
         if errors:
             raise PlanValidationError(nl_request, plan, errors)
 
+        self._drop_unused_no_reply_binds(plan)
         self._refresh_apps_required(plan)
         return plan
+
+    def _drop_unused_no_reply_binds(self, plan: dict) -> None:
+        """Remove stale binds from steps that cannot capture text replies.
+
+        A cached or LLM-synthesized terminal handoff sometimes includes a
+        decorative `bind` even though the action plan skips wait_for_reply. If
+        nothing downstream references that value, dropping it lets the runner
+        treat the leg as a pure handoff. If it is referenced, validation below
+        keeps the plan from executing with missing data.
+        """
+        steps = plan.get("steps")
+        if not isinstance(steps, list):
+            return
+
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict) or _is_ask_user(step):
+                continue
+            bind = step.get("bind")
+            if not bind:
+                continue
+            cap_meta = self._caps.get(step.get("app"), {}).get(step.get("capability"), {})
+            if not cap_meta.get("x_skip_wait_for_reply"):
+                continue
+            if _bind_referenced_later(bind, steps, idx + 1):
+                continue
+            step.pop("bind", None)
+            step.pop("extract", None)
+            logger.info(
+                f"planner dropped unused bind {bind!r} from no-reply step "
+                f"{step.get('id')!r}"
+            )
+
+    def _maybe_localize_prompt(
+        self,
+        prompt: str,
+        app_id: str,
+        nl_request: str,
+    ) -> str:
+        app = self._apps_by_id.get(app_id) or {}
+        locale = first_locale(app)
+        if not locale:
+            return prompt
+        if has_explicit_language_instruction(prompt) or has_explicit_language_instruction(nl_request):
+            return prompt
+        if appears_compatible_with_locale(prompt, locale):
+            return prompt
+
+        orig_vars = set(_VAR_RE.findall(prompt or ""))
+        user = json.dumps(
+            {
+                "target_app": {
+                    "app_id": app_id,
+                    "app_name": app.get("app_name"),
+                    "locale": app.get("locale") or [],
+                },
+                "target_language": language_label(locale),
+                "locale_policy": locale_policy_text(locale),
+                "original_user_request": nl_request,
+                "current_prompt": prompt,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        try:
+            resp = self._llm.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": _LOCALIZE_PROMPT_SYSTEM},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.0,
+                max_tokens=1024,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            data = _parse_fenced_json(raw)
+            rewritten = str(data.get("prompt") or "").strip()
+        except Exception as e:
+            logger.warning(f"prompt locale rewrite failed for {app_id}: {e}")
+            return prompt
+
+        if not rewritten:
+            return prompt
+        new_vars = set(_VAR_RE.findall(rewritten))
+        if new_vars != orig_vars:
+            logger.warning(
+                f"prompt locale rewrite for {app_id} changed placeholders "
+                f"{sorted(orig_vars)} -> {sorted(new_vars)}; keeping original"
+            )
+            return prompt
+        logger.info(
+            f"localized step prompt for {app_id} to {locale}: "
+            f"{prompt!r} -> {rewritten!r}"
+        )
+        return rewritten
 
     def _route_request_for_step(self, step: dict, nl_request: str) -> str:
         parts = [
@@ -363,6 +496,11 @@ class FlowPlanner:
                     f"step {sid!r}: capability {cap!r} is handoff_to_user_required and is "
                     f"not the final step — it must be followed by an ask_user step"
                 )
+        if cap_meta.get("x_skip_wait_for_reply") and (step.get("bind") or step.get("extract")):
+            errors.append(
+                f"step {sid!r}: capability {cap!r} skips reply capture, so it cannot use "
+                "`bind` or `extract`; collect needed data with ask_user instead"
+            )
 
     def _validate_ask_user(
         self, step: dict, sid: str, produced: set[str], errors: list[str],
@@ -388,3 +526,20 @@ def _is_ask_user(step: dict) -> bool:
 def _var_roots(template: str) -> set[str]:
     """Root variable names referenced by `{var}` / `{var.field}` in a template."""
     return {m.group(1).split(".")[0] for m in _VAR_RE.finditer(template or "")}
+
+
+def _bind_referenced_later(bind: str, steps: list, start_idx: int) -> bool:
+    for step in steps[start_idx:]:
+        if not isinstance(step, dict):
+            continue
+        if _is_ask_user(step):
+            if step.get("select_from") == bind:
+                return True
+            fields = [step.get("prompt_header", "")]
+        else:
+            fields = [step.get("prompt", "")]
+            if isinstance(step.get("extract"), dict):
+                fields.append(step["extract"].get("prompt", ""))
+        if any(bind in _var_roots(str(field or "")) for field in fields):
+            return True
+    return False

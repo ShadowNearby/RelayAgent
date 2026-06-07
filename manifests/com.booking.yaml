@@ -3,10 +3,10 @@ card_version: "0.1.0"
 app_id: "com.booking"
 app_name: "Booking.com"
 platforms: ["android"]
-locale: ["zh-CN"]
+locale: ["en-US"]
 
 embedded_agent:
-  name: "AI聊天（测试版）"
+  name: "AI Chat (Beta)"
   description: >
     Booking.com's in-app AI travel assistant, reached from the home-page trip
     planning card. It helps explore travel information: accommodation ideas,
@@ -31,24 +31,25 @@ embedded_agent:
         - swipe: down
         - swipe: down
         - swipe: down
-        # Button text varies with chat history: "为我安排行程" for first use,
-        # "继续规划" when there is prior context. Use the stable card-button
+        # Button text varies with chat history: "Plan a trip for me" for first
+        # use, "Continue planning" when there is prior context. Use the stable
+        # card-button
         # position after the seven scrolls.
         - tap:
             screen_fraction:
               x_ratio: 0.2204
               y_ratio: 0.7700
-        - wait: { until: { text: "AI聊天（测试版）" }, timeout_seconds: 8 }
+        - wait: { until: { text: "AI Chat (Beta)" }, timeout_seconds: 8 }
         # The chat opens with sticky history; the top-right plus starts a
         # blank conversation before we focus the input.
-        - tap: { accessibility_id: "开始新对话" }
-        - wait: { until: { text: "写消息" }, timeout_seconds: 5 }
+        - tap: { accessibility_id: "Start new conversation" }
+        - wait: { until: { text: "Write a message" }, timeout_seconds: 5 }
 
   invocation:
     input:
-      field: { text: "写消息" }
+      field: { text: "Write a message" }
     submit:
-      trigger: { accessibility_id: "发送消息" }
+      trigger: { accessibility_id: "Send message" }
 
   output:
     method: none
@@ -63,9 +64,9 @@ embedded_agent:
         returns conversational recommendations and may include Booking.com
         inventory context, but this capability does not reserve or pay.
       example_prompts:
-        - "适合两人短途城市游的欧洲目的地"
-        - "明年夏天迈阿密有哪些适合放松的海滨住宿区域"
-        - "第一次去纽约住哪里比较方便"
+        - "European destinations for a short city break for two people."
+        - "Which beachfront accommodation areas in Miami are good for relaxing next summer?"
+        - "Where is a convenient area to stay for a first trip to New York?"
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 20
@@ -80,8 +81,8 @@ embedded_agent:
         tied to a destination or lodging area. It returns recommendations and
         context, not turn-by-turn navigation or purchase completion.
       example_prompts:
-        - "东京银座附近有什么适合雨天的体验活动"
-        - "住在伦敦国王十字附近，晚上可以去哪里逛"
+        - "What rainy-day experiences are available near Ginza in Tokyo?"
+        - "If I am staying near King's Cross in London, where can I go in the evening?"
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 20
@@ -95,8 +96,8 @@ embedded_agent:
         areas, activities, and experiences. It does not autonomously book
         hotels or paid activities; any bookable follow-up remains user-operated.
       example_prompts:
-        - "帮我规划纽约市3天行程"
-        - "带父母去京都玩四天怎么安排住宿和景点"
+        - "Plan a three-day itinerary for New York City."
+        - "How should I arrange lodging and sightseeing for a four-day Kyoto trip with my parents?"
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 25
@@ -111,8 +112,8 @@ embedded_agent:
         Selecting rooms, entering guest details, and confirming reservations or
         payments require user handoff.
       example_prompts:
-        - "明年夏天迈阿密的海滨酒店"
-        - "下周末上海外滩附近两晚，预算每晚800以内的酒店"
+        - "Beachfront hotels in Miami next summer."
+        - "Hotels near the Bund in Shanghai for two nights next weekend, with a budget under 800 CNY per night."
       executable: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
@@ -136,7 +137,7 @@ constraints:
   network_required: true
   known_issues:
     - "Home-page AI card appears below the first-screen search and promotions; entry uses seven calibrated runtime scrolls before tapping the card button."
-    - "AI card CTA text is stateful: first use shows '为我安排行程', existing chat history can show '继续规划'. The card uses a screen-fraction tap at the shared CTA position."
-    - "Chat history is sticky across launches; the entry path always taps the top-right plus button (content-desc='开始新对话') before invocation."
-    - "The assistant is labelled beta in UI ('AI聊天（测试版）') and may make mistakes; use it for exploration and booking preparation, not autonomous paid reservations."
-    - "Input and send affordances expose no resource-id; selectors rely on visible placeholder text '写消息' and content-desc '发送消息'."
+    - "AI card CTA text is stateful: first use shows 'Plan a trip for me', existing chat history can show 'Continue planning'. The card uses a screen-fraction tap at the shared CTA position."
+    - "Chat history is sticky across launches; the entry path always taps the top-right plus button (content-desc='Start new conversation') before invocation."
+    - "The assistant is labelled beta in UI ('AI Chat (Beta)') and may make mistakes; use it for exploration and booking preparation, not autonomous paid reservations."
+    - "Input and send affordances expose no resource-id; selectors rely on visible placeholder text 'Write a message' and content-desc 'Send message'."

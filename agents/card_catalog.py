@@ -39,10 +39,12 @@ def build_catalog(manifest_dir: Path = MANIFEST_DIR) -> dict[str, Any]:
                 "examples": c.get("example_prompts") or [],
                 "executable": c.get("executable", True),
                 "handoff_to_user_required": c.get("handoff_to_user_required", False),
+                "x_skip_wait_for_reply": c.get("x_skip_wait_for_reply", False),
             })
         apps.append({
             "app_id": doc.get("app_id"),
             "app_name": doc.get("app_name"),
+            "locale": doc.get("locale") or [],
             "agent_name": agent.get("name"),
             "agent_description": clean_text(agent.get("description")),
             "capabilities": caps,
