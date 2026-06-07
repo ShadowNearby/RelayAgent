@@ -27,22 +27,22 @@ embedded_agent:
   invocation:
     input:
       # EditText resource-id obfuscated to "0_resource_name_obfuscated"
-      # (shared across elements per §6.1). Bounds-only selector at this
+      # (shared across elements per §6.1). Ratio-only selector at this
       # resolution. Hint text "给点点发消息..." not used as anchor.
       # NOTE: these are the pre-focus (natural) bounds. Once focused, the
       # ADB Keyboard banner pushes the EditText up to ~[42,2022,1080,2090],
       # but the focus tap fires BEFORE that shift, so target natural pos.
       field:
-        x_bounds:
-          box: [184, 2211, 938, 2279]
-          anchor: top_left
+        screen_fraction:
+          x_ratio: 0.5194
+          y_ratio: 0.9262
     submit:
       # Green up-arrow send button at bottom-right of the input row.
-      # ImageView with no text or content-desc; bounds-only.
+      # ImageView with no text or content-desc; ratio-only.
       trigger:
-        x_bounds:
-          box: [975, 2142, 1038, 2205]
-          anchor: top_left
+        screen_fraction:
+          x_ratio: 0.9319
+          y_ratio: 0.8967
 
   output:
     method: none
@@ -106,6 +106,6 @@ constraints:
   known_issues:
     - "Conversation is sticky across closes: tapping 菜单 again restores prior chat instead of starting fresh. No in-UI 'new chat' button; force-stop or scroll-up to reset is the only reliable way."
     - "Default input surface on first run is push-to-talk (按住说话). Bottom-left ImageView toggles voice↔text but is NOT idempotent — preference persists across app restarts, so the card requires text mode as a precondition rather than tapping the toggle."
-    - "EditText and send button have obfuscated resource-id '0_resource_name_obfuscated' and no text/content-desc; both selectors are bounds-only and resolution-sensitive (calibrated for 1080×2424)."
+    - "EditText and send button have obfuscated resource-id '0_resource_name_obfuscated' and no text/content-desc; both selectors are ratio-only and resolution-sensitive (calibrated for 1080×2424)."
     - "Top-right '...' opens 设置/历史对话/关于点点 — settings, not a new-chat action."
     - "Drawer (left edge swipe) and 点点 chat share the same trigger element; the 'menu' icon opens 点点 directly, NOT the user-profile drawer."

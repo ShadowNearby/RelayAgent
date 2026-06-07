@@ -38,8 +38,8 @@ Reviewers will look for:
 - [ ] `handoff_to_user_required: true` for any capability with `payment`, `data_delete`, or `external_communication` in `side_effects`.
 - [ ] `entry.primary` prefers `deep_link` or `intent` over `tap_sequence` when one exists.
 - [ ] Selectors prefer `accessibility_id` / `resource_id` over `text` / `xpath`.
-- [ ] If **any** `x_bounds` selector is used, `provenance.x_device_metrics` is present with `resolution_px` and `density_dpi` of the verified device. (Use `adb shell wm size` and `adb shell wm density` to get the values.)
-- [ ] `x_bounds` uses the structured form `{ box: [x1,y1,x2,y2], anchor?: ... }` — bare strings like `"[x1,y1][x2,y2]"` are rejected by the schema.
+- [ ] If an element is not exposed through accessibility, use `screen_fraction: { x_ratio, y_ratio }` measured from a real-device screenshot.
+- [ ] `screen_fraction` values are in `[0, 1]` and point at the visible center of the target affordance.
 - [ ] `provenance.last_verified` is within 30 days.
 - [ ] `known_issues` calls out anything that bit you during verification.
 

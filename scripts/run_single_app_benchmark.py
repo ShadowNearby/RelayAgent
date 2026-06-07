@@ -112,7 +112,7 @@ def _build_cmd(
         task["instruction"],
     ]
     if not any(a == "--step_wait_time" or a.startswith("--step_wait_time=") for a in extra_args):
-        cmd += ["--step_wait_time", os.getenv("RELAY_STEP_WAIT", "0.2")]
+        cmd += ["--step_wait_time", os.getenv("RELAY_STEP_WAIT", "0.5")]
     cmd += extra_args
     return cmd
 

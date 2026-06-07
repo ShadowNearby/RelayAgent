@@ -97,7 +97,7 @@ Super-apps generally do not expose a public scheme or intent that reaches an int
 - **`tap_sequence`** — ordered list of `steps`, each one of:
   - `tap: { accessibility_id | resource_id | text | text_contains }`
   - `tap_label: { text | text_contains | text_or_desc | text_or_desc_contains | accessibility_id }` — searches the visible screen for a label, scrolling to find it, then taps.
-  - `tap_screen_fraction: { x_ratio, y_ratio }` — taps at a fractional screen position.
+  - `tap: { screen_fraction: { x_ratio, y_ratio } }` — taps at a fractional screen position.
   - `tap_unless_present: { probe: <selector>, target: <selector> }` — taps `target` only when `probe` is absent; makes an entry step idempotent across cold/warm starts.
   - `swipe: up | down | left | right` — scroll direction; compiled to a scroll action.
   - `wait: { ms }` or `wait: { until: <selector>, timeout_seconds? }`
@@ -106,22 +106,18 @@ Selectors MUST prefer, in order: `accessibility_id` > `resource_id` > `text` > `
 
 In v0.1 a selector is a **single field**. Real apps often share one `resource_id` across sibling nodes (e.g. all bottom tabs in a tab bar), forcing authors to fall back to `text`. Composite selectors (`{ resource_id, text }`) are tracked in OQ-10.
 
-**Bounds as a last-resort selector (`x_bounds`).** When an element has neither a usable `resource_id`, `accessibility_id`, nor stable `text`, the author MAY fall back to absolute-bounds:
+**Screen fraction as a last-resort selector (`screen_fraction`).** When an element has neither a usable `resource_id`, `accessibility_id`, nor stable `text`, the author MAY fall back to a screen-relative tap point:
 
 ```yaml
 trigger:
-  x_bounds:
-    box: [x1, y1, x2, y2]          # required, integer pixels on the verified device
-    anchor: bottom_right            # optional: top_left | top_right | bottom_left | bottom_right | center | none
+  screen_fraction:
+    x_ratio: 0.9051
+    y_ratio: 0.8690
 ```
 
-`box` is the pixel rectangle of the target node as observed on the verified device. `anchor`, when present, is the author's claim about how the element is pinned in the layout — used by routers to choose a remapping strategy across devices. Omit `anchor` when uncertain; routers will fall back to linear bi-axial scaling.
+Ratios are measured against the visible screenshot width and height. They should point at the visible center of the target affordance on the verified device.
 
-Whenever **any** `x_bounds` appears in a card, the `provenance` block MUST include `x_device_metrics` recording the resolution and density the box was measured against (see §9). Routers without device-metrics-aware remapping logic SHOULD refuse `x_bounds`-only cards on a device whose resolution differs from the recorded reference.
-
-Full promotion of `x_bounds` to a first-class `bounds` selector with richer anchor / dp / OCR options is deferred to v0.2 (OQ-11).
-
-**Tap-through on non-clickable anchors.** Selecting a non-clickable node (e.g. a TextView label, a placeholder hint) is explicitly permitted. Routers perform the tap at the selected node's bounds; touch dispatch propagates the event to the nearest clickable ancestor. Card authors SHOULD prefer the most stable visible text anchor over `x_bounds` whenever the parent clickable region intercepts the touch.
+**Tap-through on non-clickable anchors.** Selecting a non-clickable node (e.g. a TextView label, a placeholder hint) is explicitly permitted. Routers perform the tap at the selected node's center or declared screen fraction; touch dispatch propagates the event to the nearest clickable ancestor. Card authors SHOULD prefer the most stable visible text anchor over `screen_fraction` whenever the parent clickable region intercepts the touch.
 
 ## 7. `invocation` block
 
@@ -134,11 +130,11 @@ invocation:
     field: { text: "Ask me anything..." }
   submit:
     # Same ViewGroup acts as mic (empty input) or send (non-empty input).
-    # No id / no content-desc — absolute bounds recorded as last resort.
+    # No id / no content-desc — screen fraction recorded as last resort.
     trigger:
-      x_bounds:
-        box: [946, 2075, 1009, 2138]
-        anchor: bottom_right
+      screen_fraction:
+        x_ratio: 0.9051
+        y_ratio: 0.8690
 ```
 
 The OS agent SHOULD pass the **user's original phrasing** to the embedded agent whenever possible. Rewriting the user's prompt before handoff defeats the design — the in-app agent is presumed better at interpreting requests in its own domain.
@@ -199,14 +195,12 @@ provenance:
   verified_device: "Pixel 8"         # optional
   verification_method: manual        # required: manual | scripted | community_reported
   evidence_url: ""                   # optional, link to script / video / screenshots
-  x_device_metrics:                  # required when card uses any `x_bounds` selector
+  x_device_metrics:                  # optional, records the verified screenshot/device metrics
     resolution_px: [1080, 2424]
     density_dpi: 420
 ```
 
 A card is considered **stale** by tooling if `last_verified` is more than 90 days old, or if `verified_app_version` is more than two minor versions behind the current store version. Stale cards MUST still be served by the registry, marked as stale, and SHOULD NOT be used by routers without an explicit override.
-
-`x_device_metrics` is mandatory when any `x_bounds` selector is present, so routers can remap pixel coordinates onto the target device. v0.1 ships this under the `x_` prefix; v0.2 will promote it (OQ-11).
 
 ## 10. `constraints` block
 
@@ -254,7 +248,7 @@ A **conforming router** MUST:
 SPEC §1 (Conformance) reserves the `x_` prefix for vendor/implementation
 extensions that conforming SDKs MAY ignore. The reference adapter
 (`agents/relay_agent.py`) + planner (`agents/action_planner.py`) consume
-the following extensions in the seven shipped reference cards. They are
+the following extensions in the eight shipped reference cards. They are
 **not normative** — a v0.1-conforming router is free to ignore any of them
 — but card authors targeting our adapter rely on them. Promotion to first-
 class fields is tracked in `SPEC-OPEN-QUESTIONS.md`.
@@ -291,16 +285,11 @@ class fields is tracked in `SPEC-OPEN-QUESTIONS.md`.
   prior conversation context. Can be disabled per-run via the
   `RELAY_FRESH_CONV=0` env var.
 - **`output.method: copy_button`** (extends §7.1 enum) +
-  **`output.x_copy_button: { text?, x_bounds?, valid_x?, valid_y? }`** —
+  **`output.x_copy_button: { text?, screen_fraction?, valid_x?, valid_y? }`** —
   after the reply lands, tap the in-app 复制 button so the answer ends up
   on the device clipboard. Locator priority: VLM grounding via `text`,
-  then `x_bounds` center, with `valid_x` / `valid_y` ranges as a sanity
+  then `screen_fraction`, with `valid_x` / `valid_y` ranges as a sanity
   filter against VLM mis-grounding.
-
-### Provenance (already in §9 as `x_device_metrics`)
-
-`provenance.x_device_metrics: { resolution_px: [w, h], density_dpi: N }`
-is mandatory whenever any `x_bounds` selector is used; see §9.
 
 ## 14. Relationship to A2A and MCP
 

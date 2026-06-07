@@ -21,7 +21,7 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 ```
 
 - `scripts/run_test.py` / `scripts/run_nl.py` 已删除；新代码直接用 `run_native.py`（指定 app）或 `run_plan.py --yes` / `run_plan.py --dry-run`（NL flow）。
-- 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.2）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
+- 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.5）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
 
 需要 adb + 真机 USB 调试。**`run_native` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
 
@@ -41,7 +41,7 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 | 旋钮 | 默认 | 作用范围 |
 | --- | --- | --- |
-| `--step_wait_time` / `RELAY_STEP_WAIT` | 0.2 | 每步 observe 前 settle |
+| `--step_wait_time` / `RELAY_STEP_WAIT` | 0.5 | 每步 observe 前 settle |
 | `RELAY_WAIT_SECONDS` | 0.2 | `wait` action 的 sleep（`NativeEnv` 本地读）|
 | `RELAY_POLL_SKIP_SLEEP` | 0.3 | wait_for_reply skip 拍 |
 | `RELAY_STEP_LOG` | 1（开） | 每步落截图 + action + 点击位置（见下「Step 日志」）。**性能测试设 0 关掉**——它每步写 PNG，tap/swipe 还要重编码一张标注帧，是真实单步开销 |
@@ -72,7 +72,11 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 **Scroll 幅度** `swipe_down(ratio=0.5)`（clamp `[0.1, 0.5]`），`RELAY_CAPTURE_SCROLL_RATIO` 覆写（同样被 clamp 到 ≤0.5）。大→省 VLM 但 seam 丢词；小→重叠多更稳。chunks 按捕获顺序拼接。
 
-**卡片 `swipe` → scroll 动作（含方向反转）**：卡片里的 `swipe: <direction>` 经 `action_planner` 编成逻辑 `swipe` step，`_materialize` 发成 `scroll` 动作，于是 `NativeEnv._dispatch` 对 up/down 做反转。即卡片写 `swipe: up` 实际手势是 down 方向（scroll up = 内容上移 = 视觉向上滚）；写卡片时按 scroll 语义思考。
+**卡片 `swipe` → scroll 动作（含方向反转）**：manifest 里的 `swipe: <direction>` 按 **scroll/内容移动方向** 写，不按手指滑动方向写。它经 `action_planner` 编成逻辑 `swipe` step，`_materialize` 发成 `scroll` 动作，于是 `NativeEnv._dispatch` 对 up/down 做反转后再落到底层 adb 手势：
+
+- `swipe: up` → `scroll(direction="up")` → 内容上移/视觉向上滚 → 底层实际手势是 **手指向下滑**。
+- `swipe: down` → `scroll(direction="down")` → 内容下移/视觉向下滚 → 底层实际手势是 **手指向上滑**。
+- `left`/`right` 目前不反转。写卡片时统一按 scroll 语义思考。
 
 ### `predict` 多次返回同一步
 

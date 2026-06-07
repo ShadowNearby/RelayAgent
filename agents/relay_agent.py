@@ -9,7 +9,7 @@ Design:
   client, token accounting, and the model_name plumbing.
 - One LLM call per task picks a capability + invocation text from the card.
 - The rest of the turns walk a deterministic plan: open_app, taps using
-  card x_bounds, input_text, submit, optional post-result flow.
+  card screen fractions, input_text, submit, optional post-result flow.
 - Text-based selectors (input field focus, post-result labels) try
   `uiautomator dump` first (precise, free, robust to redraws); only fall
   back to a small VLM grounding call if the text is not in the a11y tree.
@@ -60,11 +60,10 @@ from agents._adb import cold_launch as _cold_launch
 from agents._adb import screencap as _adb_screencap
 from agents.action_planner import Step, build_plan
 from agents.capability_router import route_capability
-from agents.card_loader import bounds_center, load_card_by_app_id
+from agents.card_loader import load_card_by_app_id
 
 _TARGET_APP_ENV = "RELAY_TARGET_APP"
 _MANIFESTS_ENV = "RELAY_MANIFESTS"
-_DENSITY_ENV = "RELAY_TARGET_DENSITY"
 _FRESH_CONV_ENV = "RELAY_FRESH_CONV"  # set to "0" to disable
 _SKIP_OPEN_APP_ENV = "RELAY_SKIP_OPEN_APP"  # set to "1" if caller pre-launched the app
 _REPLY_OUT_ENV = "RELAY_REPLY_OUT"  # path; if set, captured reply is dumped as JSON at handoff/done
@@ -820,7 +819,7 @@ def _llm_purpose_from_messages(messages: list[dict]) -> str:
 
 class RelayAgent(_MCPAgentBase):
     """Card-driven agent. The model only picks capabilities and grounds text
-    selectors; tap coordinates come from the card's `x_bounds`."""
+    selectors; deterministic tap coordinates come from screen fractions."""
 
     def __init__(
         self,
@@ -842,10 +841,6 @@ class RelayAgent(_MCPAgentBase):
             if os.getenv(_MANIFESTS_ENV)
             else None
         )
-        self.target_density: int | None = (
-            int(os.environ[_DENSITY_ENV]) if os.getenv(_DENSITY_ENV) else None
-        )
-
         self.card: dict | None = None
         self.plan: list[Step] = []
         self.cursor: int = 0
@@ -1254,12 +1249,6 @@ class RelayAgent(_MCPAgentBase):
                 or pkg
             )
             return JSONAction(action_type="open_app", app_name=launcher_label), True, ""
-
-        if kind == "tap_bounds":
-            x, y = bounds_center(
-                p["bounds"], self.card, (screen_w, screen_h), self.target_density
-            )
-            return JSONAction(action_type="click", x=x, y=y), True, ""
 
         if kind == "tap_fraction":
             return JSONAction(
@@ -1686,19 +1675,20 @@ class RelayAgent(_MCPAgentBase):
                 return JSONAction(action_type="wait"), True, (
                     f"probe {probe_text!r} present; skipping conditional tap"
                 )
-            # Probe missing → tap target. Only x_bounds supported here to
-            # keep the conditional-tap semantics deterministic.
-            if "x_bounds" not in target:
+            # Probe missing → tap target. Keep this deterministic by using a
+            # manifest-provided point, not VLM grounding.
+            if "screen_fraction" in target:
+                f = target["screen_fraction"]
+                x = int(f["x_ratio"] * screen_w)
+                y = int(f["y_ratio"] * screen_h)
+            else:
                 logger.warning(
                     f"tap_unless_present: unsupported target {target!r}; "
-                    "only x_bounds is implemented. Skipping."
+                    "screen_fraction is required. Skipping."
                 )
                 return JSONAction(action_type="wait"), True, "unsupported target"
-            x, y = bounds_center(
-                target["x_bounds"], self.card, (screen_w, screen_h), self.target_density
-            )
             return JSONAction(action_type="click", x=x, y=y), True, (
-                f"probe {probe_text!r} absent; tapping target bounds"
+                f"probe {probe_text!r} absent; tapping target"
             )
 
         if kind == "swipe":
@@ -1716,13 +1706,13 @@ class RelayAgent(_MCPAgentBase):
             #      copy icon is in a fixed COLUMN on this device — only the
             #      toolbar's y drifts with reply length — so a wildly off x
             #      is almost always a model miss. Snap x to the spec center
-            #      (bounds midpoint) when VLM y is valid but x isn't.
-            #   3. Hard fallback: bounds_center.
+            #      (screen-fraction point) when VLM y is valid but x isn't.
+            #   3. Hard fallback: screen-fraction point.
             spec_x = spec_y = None
-            if p.get("bounds"):
-                spec_x, spec_y = bounds_center(
-                    p["bounds"], self.card, (screen_w, screen_h), self.target_density
-                )
+            if p.get("screen_fraction"):
+                f = p["screen_fraction"]
+                spec_x = int(f["x_ratio"] * screen_w)
+                spec_y = int(f["y_ratio"] * screen_h)
             vx = vy = None
             if p.get("text"):
                 try:
@@ -1752,10 +1742,10 @@ class RelayAgent(_MCPAgentBase):
             elif spec_x is not None and spec_y is not None:
                 x, y = spec_x, spec_y
                 logger.warning(
-                    f"copy_reply: VLM unusable (vx={vx}, vy={vy}); using bounds "
-                    f"center ({spec_x},{spec_y})"
+                    f"copy_reply: VLM unusable (vx={vx}, vy={vy}); using spec "
+                    f"point ({spec_x},{spec_y})"
                 )
-                note = f"bounds-center ({spec_x},{spec_y})"
+                note = f"spec-point ({spec_x},{spec_y})"
             else:
                 logger.warning("copy_reply: no usable locator; skipping tap")
                 return JSONAction(action_type="wait"), True, "no copy locator"

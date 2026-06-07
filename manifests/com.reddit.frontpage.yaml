@@ -1,0 +1,98 @@
+spec_version: "0.1"
+card_version: "0.1.0"
+app_id: "com.reddit.frontpage"
+app_name: "Reddit"
+platforms: ["android"]
+locale: ["en-US"]
+
+embedded_agent:
+  name: "Reddit Ask"
+  description: >
+    Reddit's in-app Ask / AI search surface. Entry path: home top search bar
+    ("Find anything") -> right-side "Ask" affordance -> "Ask a question"
+    input. The assistant retrieves and summarizes Reddit discussions, posts,
+    subreddit signals, and community-sourced opinions. It is best treated as
+    vertical information retrieval over Reddit UGC, not a general device
+    operator and not a transaction surface.
+
+  entry:
+    primary:
+      method: tap_sequence
+      steps:
+        # Home top search bar. Verified resource-id on Reddit 2026.22.0:
+        # main_top_app_bar_search, bounds [158,179][922,305] on 1080x2424.
+        - tap:
+            resource_id: "main_top_app_bar_search"
+        - wait:
+            until: { text: "Search Reddit" }
+            timeout_seconds: 2
+        # Right-side Ask button inside the search field. The visible label is
+        # "Ask"; the outer stable resource-id is trailing_ask_button.
+        - tap:
+            resource_id: "trailing_ask_button"
+        - wait:
+            ms: 1200
+
+  invocation:
+    input:
+      # Empty Ask page exposes the field visually as "Ask a question", but
+      # uiautomator sometimes fails to reach idle on this screen. Ratio is the
+      # center of the input pill on Pixel-class 1080x2424.
+      field:
+        screen_fraction:
+          x_ratio: 0.5000
+          y_ratio: 0.2890
+    submit:
+      # Send arrow after AdbKeyboard text injection. Reddit expands the input
+      # pill for typical multi-word prompts; verified center ≈ (999,563) after
+      # entering "What are Redditors saying about beginner cooking tips?".
+      trigger:
+        screen_fraction:
+          x_ratio: 0.9250
+          y_ratio: 0.2323
+
+  output:
+    method: none
+
+  capabilities:
+
+    - id: search_vertical_content
+      description: >
+        Reddit Ask vertical content retrieval and summarization. Use for
+        community-opinion search, practical advice, product or media
+        recommendations, subreddit-sourced pros/cons, trend summaries, and
+        "what are people saying on Reddit" questions. Answers synthesize Reddit
+        posts/comments and may include subreddit chips, quoted snippets, and
+        follow-up prompts. It does not post, vote, comment, message users,
+        purchase items, book services, or perform account-changing actions.
+      example_prompts:
+        - "What are Redditors saying about the best budget espresso grinders?"
+        - "Summarize common advice from Reddit for visiting Japan in July"
+        - "Find Reddit opinions on whether 4K 350 FPS is worth it for gaming"
+        - "What are common beginner cooking tips from Reddit?"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 8
+
+provenance:
+  last_verified: "2026-06-07"
+  verified_app_version: "2026.22.0"
+  verified_os: "android-16"
+  verified_device: "Pixel-class 1080x2424"
+  verification_method: scripted
+  evidence_url: ""
+  x_device_metrics:
+    resolution_px: [1080, 2424]
+    density_dpi: 420
+
+constraints:
+  app_version_min: "2026.22.0"
+  network_required: true
+  known_issues:
+    - "The empty Ask page sometimes makes `uiautomator dump` fail with `could not get idle state`; the initial input field is therefore ratio-calibrated for 1080x2424."
+    - "The send button exposes `answers_send_prompt_button` / content-desc `Submit question`, but uiautomator can time out on the pre-submit Ask page and current VLM grounding mis-parses `point_2d`; submit is therefore ratio-calibrated after text entry."
+    - "After a conversation starts, the follow-up field becomes resource-id `answers_input_field`; this card targets starting a new Ask query from the home search path."
+    - "Manual ADB `input text` percent-escapes spaces in this app; RelayAgent's AdbKeyboard text injection should be used for real runs."
+    - "Replies can span multiple viewports and are a stack of TextViews, so `x_capture_full_reply` is enabled."

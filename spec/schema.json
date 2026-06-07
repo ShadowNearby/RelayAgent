@@ -61,7 +61,7 @@
   "definitions": {
 
     "selector": {
-      "description": "Reaches a single UI node. v0.1 selectors are single-field except for the x_-prefixed last-resort fields. See SPEC §6.1 and SPEC-OPEN-QUESTIONS OQ-10/11.",
+      "description": "Reaches a single UI node. v0.1 selectors are single-field. See SPEC §6.1 and SPEC-OPEN-QUESTIONS OQ-10/11.",
       "type": "object",
       "minProperties": 1,
       "properties": {
@@ -69,36 +69,22 @@
         "resource_id":      { "type": "string" },
         "text":             { "type": "string" },
         "text_contains":    { "type": "string" },
-        "x_bounds":         { "$ref": "#/definitions/x_bounds" }
-      },
-      "patternProperties": {
-        "^x_": {}
-      },
-      "additionalProperties": false
-    },
-
-    "x_bounds": {
-      "description": "Last-resort selector by absolute pixel rectangle on the verified device. Requires provenance.x_device_metrics. See SPEC §6.1.",
-      "type": "object",
-      "required": ["box"],
-      "properties": {
-        "box": {
-          "type": "array",
-          "minItems": 4,
-          "maxItems": 4,
-          "items": { "type": "integer", "minimum": 0 },
-          "description": "[x1, y1, x2, y2] in pixels on the verified device."
-        },
-        "anchor": {
-          "enum": ["top_left", "top_right", "bottom_left", "bottom_right", "center", "none"],
-          "description": "Author claim about layout pinning; routers use this to pick a remapping strategy."
+        "screen_fraction": {
+          "description": "Last-resort selector by screen-relative tap point.",
+          "type": "object",
+          "required": ["x_ratio", "y_ratio"],
+          "properties": {
+            "x_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y_ratio": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
     },
 
     "step": {
-      "description": "One step of a tap_sequence. Exactly one of `tap`, `tap_label`, `tap_screen_fraction`, `tap_unless_present`, `swipe`, or `wait`.",
+      "description": "One step of a tap_sequence. Exactly one of `tap`, `tap_label`, `tap_unless_present`, `swipe`, or `wait`.",
       "type": "object",
       "oneOf": [
         {
@@ -119,22 +105,6 @@
                 "text_or_desc":          { "type": "string" },
                 "text_or_desc_contains": { "type": "string" },
                 "accessibility_id":      { "type": "string" }
-              },
-              "patternProperties": { "^x_": {} },
-              "additionalProperties": false
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "required": ["tap_screen_fraction"],
-          "properties": {
-            "tap_screen_fraction": {
-              "type": "object",
-              "required": ["x_ratio", "y_ratio"],
-              "properties": {
-                "x_ratio": { "type": "number" },
-                "y_ratio": { "type": "number" }
               },
               "patternProperties": { "^x_": {} },
               "additionalProperties": false
@@ -304,7 +274,7 @@
     },
 
     "x_device_metrics": {
-      "description": "Screen metrics of the verified device. Required (validators warn) when any x_bounds selector appears in the card.",
+      "description": "Screen metrics of the verified device.",
       "type": "object",
       "required": ["resolution_px", "density_dpi"],
       "properties": {

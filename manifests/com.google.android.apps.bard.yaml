@@ -44,9 +44,9 @@ embedded_agent:
       field:
         resource_id: "com.google.android.googlequicksearchbox:id/assistant_robin_input_collapsed_text_half_sheet"
         text: "问问 Gemini"
-        x_bounds:
-          box: [242, 2161, 733, 2287]
-          anchor: bottom_left
+        screen_fraction:
+          x_ratio: 0.4514
+          y_ratio: 0.9175
     submit:
       # The right-side slot is Gemini Live when empty and becomes send once
       # text is present. After keyboard focus the send button moves upward;
@@ -286,9 +286,9 @@ embedded_agent:
       typical_latency_seconds: 30
       x_attachment_entry:
         text_or_desc: "添加附件"
-        x_bounds:
-          box: [95, 2161, 221, 2287]
-          anchor: bottom_left
+        screen_fraction:
+          x_ratio: 0.1463
+          y_ratio: 0.9175
       x_attachment_options_observed:
         - "相册"
         - "相机"

@@ -18,7 +18,7 @@
 
 每个 App 一张机器可读的**卡片（card）**。默认走 GUI 中介，厂商配合**可选不强制**。
 
-> **状态：** 早期，但已有实测。SPEC v0.1、7 张已验证的安卓参考卡片（28 个能力）、一个原生 Android 中继适配器，以及一组真机 A/B 基准测试。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
+> **状态：** 早期，但已有实测。SPEC v0.1、9 张已验证的安卓参考卡片（51 个声明能力）、一个原生 Android 中继适配器，以及一组真机 A/B 基准测试。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
 
 ---
 
@@ -96,7 +96,7 @@ OS 级智能体
 
 **「可预测性」本身就是一个结果。** RelayAgent 每个任务的成本几乎恒定——T1 为 **3987 / 3986 / 3950** token（VLM 调用固定为 2 次）——而纯 VLM 智能体在同一个任务上波动于 **38k → 97k token、46 → 379 秒**（三次都到了同一个支付前页面），早期探索中还出现过过早退出和失控空转的长尾。对按 token 付费的人来说，一个可预测的 ~4k 胜过几倍的方差。换算成钱（§8.2），RelayAgent optimized 约 **$0.001/任务**，纯 VLM 约 **$0.016**（16.6×）。
 
-**安全保障守住了。** 每一次 `handoff_to_user_required` 运行都停在了不可逆 CTA 之前——下单停在 `立即支付`——零次确认点击。功能覆盖：7 张卡片的 **28/28 个能力**都到达了预期终态（§8.2.1）。
+**安全保障守住了。** 每一次 `handoff_to_user_required` 运行都停在了不可逆 CTA 之前——下单停在 `立即支付`——零次确认点击。冻结的 benchmark 目录中，7 张卡片的 **28/28 个能力**都到达了预期终态（§8.2.1）；当前 manifest 目录已扩展到 9 张卡片，Reddit Ask 和 Booking.com AI 聊天已单独真机验证。
 
 > 上述数字为 2026-06-02 的 n=3 复跑结果；完整方法、有效性威胁与冻结数据见[技术报告](report/RelayAgent-TechReport.md)及 `report/benchmark-data-n3.md`。
 
@@ -107,7 +107,7 @@ RelayAgent/
 ├── SPEC.md                    # manifest 规范 (v0.1)
 ├── SPEC-OPEN-QUESTIONS.md     # 仍在讨论的设计问题
 ├── spec/schema.json           # SPEC 的 JSON Schema 镜像（规范性校验器）
-├── manifests/                 # 每个 App 一张 YAML 卡片；7 张安卓卡片
+├── manifests/                 # 每个 App 一张 YAML 卡片；9 张安卓卡片
 ├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、adb 辅助
 ├── scripts/                   # run_native.py（单 App）、run_plan.py（NL flow）、benchmark runner、metrics
 ├── docs/                      # 设计文档 —— 能力分类法
@@ -139,12 +139,11 @@ uv run python scripts/run_native.py com.aliyun.tongyi "帮我点三杯蜜雪冰�
 - 每个文本选择器先试 `uiautomator dump`（精确、零 token）；只有 miss 时才发一次小的 VLM grounding 调用。
 - `wait_for_reply` 在墙钟预算（`max(5×typical_latency, 60)` 秒）内轮询 VLM（`{done, text}`）。一个两阶段预检（截图感知哈希 → 无障碍树文本哈希）会在回复还在流式输出时直接跳过 VLM。
 - 回复文本**从无障碍 dump 抓取**，而不是从 VLM 回复里读；VLM 只判 `done`。对 `x_capture_full_reply` 能力，每一帧滚动抓取也是 scrape。
-- 卡片里的 `x_bounds` 坐标只在无障碍树暴露不出元素时作为最后兜底。
+- 卡片里的 `screen_fraction` 坐标只在无障碍树暴露不出元素时作为最后兜底。
 
 可选环境变量（完整列表见 `.env.example`）：
 
 - `RELAY_MANIFESTS=/path/to/manifests` —— 覆盖默认的 `./manifests/`。
-- `RELAY_TARGET_DENSITY=480` —— 你手机的 DPI，用于 dp 感知的 `x_bounds` 重映射（否则退回原始双轴缩放）。
 - `RELAY_PRECHECK=0 RELAY_SCRAPE=0` —— 关闭 §7 两项优化（复现基准 baseline）。
 - `RELAY_TIMING=1` —— 写出每次运行的 `wall_clock.json`。
 - `RELAY_FRESH_CONV=0` —— 跨 run 保留上一轮对话（默认每次开新对话）。
@@ -183,16 +182,19 @@ python -m unittest tests.test_manifest_real_adb -v
 
 ## MVP 范围（v0.1）
 
-7 张已验证的参考卡片，共 **28 个能力**，每个都被端到端跑到终态（技术报告 §8.2.1）：
+当前目录有 9 张已验证的安卓参考卡片，共 **51 个声明能力**：
 
 | App | 包名 | 能力 | 卡片类型 |
 | --- | --- | --- | --- |
 | 高德地图 (Amap) | com.autonavi.minimap | POI 搜索、导航、打车、行程规划 | mixed |
 | 通义千问 (Tongyi Qwen) | com.aliyun.tongyi | foundation_llm、火车/打车/外卖/酒店/电影活动预订、商品搜索/购买引导/订单追踪 | mixed |
 | 携程旅行 (Ctrip) | ctrip.android.view | 机票、酒店、火车、景点、跟团游 | mixed |
+| Gemini | com.google.android.apps.bard | foundation_llm、公共 Web 检索、授权后的 Google 服务读写任务 | mixed |
 | 小红书 (Xiaohongshu) | com.xingin.xhs | 通过 AI 搜索做社区 UGC 问答 | multi-node |
 | 微信 (WeChat) | com.tencent.mm | 元宝聊天界面、AI 搜索 | mixed |
 | WPS Office | cn.wps.moffice_eng | AI 文档 / PPT / 写作辅助 | single-bubble |
+| Reddit | com.reddit.frontpage | Reddit Ask 垂类社区检索与总结 | multi-node |
+| Booking.com | com.booking | 旅行信息探索、行程规划、住宿搜索 | mixed |
 
 *卡片类型*（单气泡 TextView vs 多节点 RecyclerView）决定回复抽取策略——见技术报告 §4 / §5.4。
 
