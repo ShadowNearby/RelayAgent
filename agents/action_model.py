@@ -71,7 +71,6 @@ class JSONAction(BaseModel):
     goal_status: str | None = None
     app_name: str | None = None
     keycode: str | None = None
-    clear_text: bool | None = None
     start_x: int | None = None
     start_y: int | None = None
     end_x: int | None = None

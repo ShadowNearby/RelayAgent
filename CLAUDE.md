@@ -57,9 +57,9 @@ uv run python scripts/run_nl.py "帮我找一台适合学生的平板电脑，�
 3. **Grounding 输出形态宽**：`_extract_xy()` 容忍 `{x,y}`/`{point:[x,y]}`/`[{x:[x,y]}]`/`{bbox:...}`/纯数字。坐标 `>999` 当像素，否则归一乘 `screen/999`。
 4. **冷启动 / deferred-launch**：脚本设 `RELAY_SKIP_OPEN_APP=1` + `RELAY_AGENT_LAUNCH=1`。agent 第一帧 `predict` 调 `_begin_task_once()`：记 `t0` → 起录屏（若 `RELAY_RECORD_DIR`）→ `cold_launch()`（`agents/_adb.py`：force-stop + monkey LAUNCHER + settle 1.0s）。deferred-launch 把启动放到 agent 首帧（native 无框架冷启动，但 IME 激活 / 子进程启动等仍在 t0 前），落在 wall_s 外。atexit 写 `wall_clock.json`（`{wall_s, phase:"task"}`）到 `RELAY_WALL_OUT` 或 `traj_logs/user_task/`。**agent 是 wall_s 唯一写者。** settle 1.0s 清品牌 splash。
 5. **fresh conversation**：`build_plan(fresh_conversation=True)` 在 open_app 后插清历史步。`RELAY_FRESH_CONV=0` 关。
-6. **`wait_for_reply` VLM 轮询**：系统 prompt `_REPLY_WATCH_SYSTEM`，VLM 回 `{done, text}`。`done=True && text==None` 视为不可信继续 poll。超时按墙钟 `max_seconds = x_max_wait_seconds or max(5×typical_latency, 60)`。text 注入 handoff 的 `ask_user`。
-7. **两段式 precheck 省 VLM**：Stage 1(~25ms) 截图区域 hash（裁顶 8% 状态栏、底 18% 输入区），变了=streaming 跳过。Stage 2(~2.5s，仅屏稳定才跑) uiautomator 文本 hash，连续两拍相等才调 VLM 判 done。熔断：连续 ≥2 次 dump 失败关本次 dump。看门狗：连续 ≥5 次 skip 强跑一次 VLM。
-8. **回复文本优先 scrape，VLM 只判 done。** `_extract_reply_text_from_dump`：dump → 按用户气泡 y 切割（`self._last_input_text` 定位）→ 过滤 chrome（`_REPLY_CHROME_LABELS` + streaming markers）→ 丢短 chip（有长节点时剔 <`MIN_CHIP_LEN`(25)）。scraped 比 VLM 长就 upgrade。`capture_full` scroll 阶段同样 scrape，失败才回落。
+6. **`wait_for_reply` 文本-hash 判 done**：done 判定纯靠 uiautomator 文本 hash 稳定性（连续 3 拍 byte-identical），**不调 VLM 判 done**（见代码 `TODO(reply-done-vlm)`：qwen 当 judge 不可靠，对稳定回复反复返回 done=false 吊到超时）。VLM 仅在 scrape 落空时兜底**读回复文本**（prompt `_REPLY_WATCH_SYSTEM` 仍带 done 半段，但两个调用点都丢弃 `done`，属待清理的死意图）。超时按墙钟 `max_seconds = x_max_wait_seconds or max(5×typical_latency, 60)`。text 注入 handoff 的 `ask_user`。
+7. **两段式 precheck 省 dump**：Stage 1(~25ms) 截图区域 hash（裁顶 8% 状态栏、底 18% 输入区），变了=streaming 跳过。Stage 2(~2.5s，仅屏稳定才跑) uiautomator 文本 hash，连续 `STABLE_DUMPS_FOR_DONE`(=3) 拍相等才判 done（**不调 VLM**）。熔断：连续 ≥`MAX_DUMP_FAILS`(2) 次 dump 失败关本次 dump。看门狗：连续 ≥`MAX_SKIPS_BEFORE_FORCE`(5) 次 skip 强跑一次文本 dump。
+8. **回复文本优先 scrape，VLM 只兜底读文本（不判 done）。** `_extract_reply_text_from_dump`：dump → 按用户气泡 y 切割（`self._last_input_text` 定位）→ 过滤 chrome（`_REPLY_CHROME_LABELS` + streaming markers）→ 丢短 chip（有长节点时剔 <`MIN_CHIP_LEN`(25)）。scrape 落空（如 WebView/canvas 不入 a11y 树，或 `RELAY_SCRAPE=0` 基线）才回落 VLM 读帧。`capture_full` scroll 阶段同样 scrape，失败才回落。
 9. **权限弹窗自动 dismiss**：`predict` 入口 `_maybe_dismiss_permission_popup`。先 `dumpsys window` 拿前台包，不在 `_PERMISSION_PACKAGES` 白名单即 fast-exit。命中才 dump，按 `_ALLOW_LABELS`（始终允许>允许>Always allow>...）点 Allow，**永不 Deny**。每 task 上限 8 次。`RELAY_DISMISS_PERMISSIONS=0` 关。
 
 ### `x_capture_full_reply` 开不开？
@@ -67,10 +67,12 @@ uv run python scripts/run_nl.py "帮我找一台适合学生的平板电脑，�
 口诀：**single TextView ⇒ 不开；RecyclerView 多节点 ⇒ 开**。判断：触发回复后 `adb shell uiautomator dump`，1 个长 TextView(>200字)→single-bubble；多个中等节点按卡片排→multi-node。
 
 - **不开**（single-bubble：千问/WPS/携程 QA）：整段在一个 TextView，scrape 一次拿全；要全文调大 `max_seconds`。
-- **开**（multi-node 卡片：order_food、高德 find_nearby、淘宝搜索、携程 search_*、微信 ai_search、XHS QA）：offscreen 卡片被回收须滚动。`max_scrolls`：短 4 / 标准 6 / 多日 8 / 深搜 15。
-- **Skip**（短 CTA：高德 navigate_to、淘宝 buy_product、WPS ai_ppt、携程 plan_trip）。
+- **开**（multi-node 卡片：order_food、高德 find_nearby、携程 search_*、微信 ai_search、XHS QA）：offscreen 卡片被回收须滚动。`max_scrolls`：短 4 / 标准 6 / 多日 8 / 深搜 15。
+- **Skip**（短 CTA：高德 navigate_to、WPS ai_ppt、携程 plan_trip）。
 
-**Scroll 幅度** `swipe_down(ratio=0.7)`，`RELAY_CAPTURE_SCROLL_RATIO` 覆写。大→省 VLM 但 seam 丢词；小→重叠多更稳。chunks 按捕获顺序拼接。
+**Scroll 幅度** `swipe_down(ratio=0.5)`（clamp `[0.1, 0.5]`），`RELAY_CAPTURE_SCROLL_RATIO` 覆写（同样被 clamp 到 ≤0.5）。大→省 VLM 但 seam 丢词；小→重叠多更稳。chunks 按捕获顺序拼接。
+
+**卡片 `swipe` → scroll 动作（含方向反转）**：卡片里的 `swipe: <direction>` 经 `action_planner` 编成逻辑 `swipe` step，`_materialize` 发成 `scroll` 动作，于是 `NativeEnv._dispatch` 对 up/down 做反转。即卡片写 `swipe: up` 实际手势是 down 方向（scroll up = 内容上移 = 视觉向上滚）；写卡片时按 scroll 语义思考。
 
 ### `predict` 多次返回同一步
 

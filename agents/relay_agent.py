@@ -13,8 +13,11 @@ Design:
 - Text-based selectors (input field focus, post-result labels) try
   `uiautomator dump` first (precise, free, robust to redraws); only fall
   back to a small VLM grounding call if the text is not in the a11y tree.
-- `wait_for_reply` polls a VLM (`{done, text}`) on a WALL-CLOCK budget
-  (`max(3×typical_latency, 30)` seconds), not a poll-count budget.
+- `wait_for_reply` decides the reply is done purely from uiautomator
+  text-hash stability (no VLM `done` judgement — see TODO(reply-done-vlm)),
+  on a WALL-CLOCK budget (`max(5×typical_latency, 60)` seconds), not a
+  poll-count budget. The reply text is scraped from the a11y tree; a VLM
+  only reads the frame verbatim when the scrape comes up empty.
 - Honors `handoff_to_user_required`: emits ask_user before the irreversible CTA.
 """
 
@@ -1290,7 +1293,7 @@ class RelayAgent(_MCPAgentBase):
             # wait_for_reply can use it to locate the user's own bubble in
             # the message list (everything visually BELOW is the reply).
             self._last_input_text = p["text"]
-            return JSONAction(action_type="input_text", text=p["text"], clear_text=True), True, ""
+            return JSONAction(action_type="input_text", text=p["text"]), True, ""
 
         if kind == "nm_ground_tap":
             # Manifest-free affordance: VLM-ground a semantic description (no
