@@ -55,7 +55,7 @@ embedded_agent:
         data transformation. Pure chat output with no partner-app handoff.
       example_prompts:
         - "讲讲二战中的中途岛海战"
-        - "帮我把这段话改得更书面一点：……"
+        - "明天香港的天气怎么样"
       executable: false
       handoff_to_user_required: false
       typical_latency_seconds: 8
@@ -67,6 +67,15 @@ embedded_agent:
         restaurants, cafes, convenience stores, attractions, or services, and
         return recommended options with basic location context. It does not
         start navigation, place orders, or make reservations automatically.
+      # 固定提交模板——规划 LLM 只抽 {poi}/{place}（限定词并入 poi），措辞固定。
+      prompt_template: "查找[{place}附近的]{poi}"
+      prompt_slots:
+        - name: poi
+          desc: "目标地点类型,含限定词,如'评分高的咖啡店'/'24小时便利店'"
+          required: true
+        - name: place
+          desc: "参照位置,如'上海图书馆东馆南门';未指明则留空"
+          required: false
       example_prompts:
         - "帮我找上海图书馆东馆南门附近评分高的咖啡店"
         - "搜一下前滩太古里石区周边24小时便利店"
@@ -101,12 +110,22 @@ embedded_agent:
         assistant can prepare the destination and route choice, then must hand
         control back before starting live navigation because driving/walking
         guidance is an ongoing physical-world action.
+      # 固定提交模板（zh-CN）——规划 LLM 只抽 {place}；
+      # 用「导航去…」稳定触发千问→高德的导航流程，而非返回路线描述。
+      prompt_template: "导航去{place}"
+      prompt_slots:
+        - name: place
+          desc: "目的地名称或地址"
+          required: true
       example_prompts:
         - "导航去徐家汇地铁站14号口附近最近的24小时便利店"
         - "帮我开始导航到上海南站南广场进站口"
       executable: true
       handoff_to_user_required: true
       typical_latency_seconds: 10
+      # Navigation just yields a CTA/handoff — no text reply to wait on, so go
+      # straight from submit to user handoff.
+      x_skip_wait_for_reply: true
       x_partner_app: "com.autonavi.minimap"
       x_partner_auth: "oauth_preauthorized"
 
@@ -115,6 +134,21 @@ embedded_agent:
         Train-ticket search and booking via Fliggy/12306. The assistant lists
         train cards with number, time, price, and seat availability; ticketing,
         credentials, passenger details, and payment require user handoff.
+      # 固定提交模板——规划 LLM 只抽槽位(偏好并入 {preference}),措辞固定以触发火车票流程。
+      prompt_template: "帮我订{time}从{origin}到{destination}的[{preference}]火车票"
+      prompt_slots:
+        - name: time
+          desc: "出发时间,如'明天下午两点左右'/'周五早上8点'"
+          required: true
+        - name: origin
+          desc: "出发城市或车站"
+          required: true
+        - name: destination
+          desc: "到达城市或车站"
+          required: true
+        - name: preference
+          desc: "座位或价格偏好,如'二等座'/'最便宜的';未指明则留空"
+          required: false
       example_prompts:
         - "帮我买明天下午两点左右去南京的高铁"
         - "周五早上 8 点上海到杭州的二等座票"
@@ -133,6 +167,21 @@ embedded_agent:
         time window, cabin, and price constraints, then returns flight options
         or a partner booking card. Passenger details, ticketing, and payment
         require user handoff.
+      # 固定提交模板——规划 LLM 只抽槽位(偏好并入 {preference}),措辞固定以触发机票流程。
+      prompt_template: "帮我订{time}从{origin}到{destination}的[{preference}]机票"
+      prompt_slots:
+        - name: time
+          desc: "出发时间,如'下周一下午'/'明天'"
+          required: true
+        - name: origin
+          desc: "出发城市或机场"
+          required: true
+        - name: destination
+          desc: "到达城市或机场"
+          required: true
+        - name: preference
+          desc: "舱位或价格偏好,如'经济舱'/'最便宜的';未指明则留空"
+          required: false
       example_prompts:
         - "帮我找下周一上海到北京下午的机票"
         - "明天最便宜的虹桥飞成都的航班"
@@ -213,6 +262,15 @@ embedded_agent:
         Ride hailing via Amap's aggregator from within Tongyi. The assistant
         helps confirm origin/destination, car type, estimate, and payment path;
         irreversible ride/payment confirmations require user handoff.
+      # 固定提交模板——规划 LLM 只抽 {place}/{car_type},措辞固定以稳定触发打车流程。
+      prompt_template: "叫一辆[{car_type}]车去{place}"
+      prompt_slots:
+        - name: place
+          desc: "目的地名称或地址"
+          required: true
+        - name: car_type
+          desc: "车型,如经济型/舒适型;未指明则留空"
+          required: false
       example_prompts:
         - "叫一辆经济型车去上海博物馆东馆北门"
         - "帮我叫个车去杨浦滨江船厂1862"

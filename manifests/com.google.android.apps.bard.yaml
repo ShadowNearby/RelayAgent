@@ -66,7 +66,6 @@ embedded_agent:
         use, and finance results are informational only, not investment advice.
       example_prompts:
         - "Explain the Transformer attention mechanism in three sentences."
-        - "Summarize this web page and extract its title, topic, and key entities: https://example.com/article"
         - "Convert USD 1,234.56 to CNY at an exchange rate of 7.1."
         - "Look up the main purpose of the GitHub repository openai/codex."
         - "Look up AAPL's current stock price, dividend yield, and ESG overview, and include sources."
@@ -82,6 +81,17 @@ embedded_agent:
         POI and nearby-place lookup through Gemini/search. Returns candidate
         places, addresses, and rough local information, but does not open maps,
         start navigation, or verify live business status.
+      # Fixed submit template — planner extracts {poi}/{place} only (qualifiers
+      # fold into {poi}); wording stays fixed. {place} is optional: the
+      # `[ near {place}]` segment drops entirely when no place is given.
+      prompt_template: "Find {poi}[ near {place}]"
+      prompt_slots:
+        - name: poi
+          desc: "target place type incl. qualifiers, e.g. 'highly rated coffee shops'"
+          required: true
+        - name: place
+          desc: "reference location, e.g. 'the south gate of Shanghai Concert Hall'; leave empty if unspecified"
+          required: false
       example_prompts:
         - "Find three coffee shops near the south gate of Shanghai Concert Hall."
         - "What indoor venues near Century Park Gate 7 are good for children?"
@@ -108,6 +118,19 @@ embedded_agent:
     - id: live_navigation
       description: >
         Gemini will open Google Map to Navigate to the place.
+      # Fixed submit template — the planner LLM only extracts {place} (+ optional
+      # {mode}); the wording stays "Navigate to ..." so Gemini reliably triggers
+      # the maps navigation CTA instead of a route-description answer. The
+      # `[ by {mode}]` segment is dropped entirely when no travel mode is given,
+      # so the default stays byte-identical to "Navigate to {place}.".
+      prompt_template: "Navigate to {place}[ by {mode}]."
+      prompt_slots:
+        - name: place
+          desc: "destination name or address"
+          required: true
+        - name: mode
+          desc: "travel mode if the user specified one (e.g. driving, walking, transit, cycling); omit otherwise"
+          required: false
       example_prompts:
         - "Navigate to the nearest metro entrance near the outpatient building of Shanghai Children's Medical Center."
         - "Help me start navigation to the south entrance of Hongqiao Railway Station."
@@ -123,6 +146,16 @@ embedded_agent:
         Google Calendar event creation when the account and connector are
         authorized. This is a real side-effect capability and should require
         explicit user intent before creating or modifying calendar data.
+      # Fixed submit template — the planner LLM only extracts the slots; wording
+      # stays imperative so Gemini triggers calendar event creation.
+      prompt_template: 'Create a calendar event titled "{title}" at {time}.'
+      prompt_slots:
+        - name: title
+          desc: "event title"
+          required: true
+        - name: time
+          desc: "event date and time, e.g. 'tomorrow at 10 AM'"
+          required: true
       example_prompts:
         - "Create a 30-minute calendar event tomorrow at 10 AM titled Gemini capability test."
         - "Schedule a one-hour project sync next Monday at 3 PM."
@@ -146,6 +179,16 @@ embedded_agent:
       description: >
         Reminder, Google Tasks reminder, or alarm setting when authorized. This
         writes user-visible reminder/alarm state and requires explicit intent.
+      # Fixed submit template — planner extracts {time}/{content} only; wording
+      # stays fixed so Gemini sets a reminder/alarm rather than answering about it.
+      prompt_template: "Set a reminder for {time}[: {content}]."
+      prompt_slots:
+        - name: time
+          desc: "when it should fire, e.g. '7 AM tomorrow'"
+          required: true
+        - name: content
+          desc: "what to be reminded of; leave empty for a plain alarm"
+          required: false
       example_prompts:
         - "Remind me to drink water at 9 PM tonight."
         - "Set an alarm for 7 AM tomorrow morning."
@@ -172,6 +215,23 @@ embedded_agent:
         Email drafting in Gemini, including recipient, subject, and body. Direct
         sending was refused in the tested app surface, so the user must copy or
         send manually in an email client.
+      # Fixed submit template — planner extracts the slots only; wording stays
+      # fixed and ends with an explicit "do not send" to keep drafting safe.
+      # {cc} is optional: its `[ CC: {cc}.]` segment drops entirely when absent.
+      prompt_template: 'Draft an email to {recipient} with subject "{subject}" and body: {body}.[ CC: {cc}.] Do not send it.'
+      prompt_slots:
+        - name: recipient
+          desc: "recipient address or name"
+          required: true
+        - name: subject
+          desc: "email subject line"
+          required: true
+        - name: body
+          desc: "email body text"
+          required: true
+        - name: cc
+          desc: "carbon-copy recipients; leave empty if none"
+          required: false
       example_prompts:
         - "Draft an email to test@example.com with subject Test and a one-sentence body; do not send it."
         - "Draft an email explaining a project delay; do not send it."
@@ -209,6 +269,13 @@ embedded_agent:
         Notes or memo drafting/editing guidance through Gemini. Creating or
         changing persistent notes writes user data, so the user should review
         the content before it is saved.
+      # Fixed submit template — planner extracts {content} only; wording stays
+      # fixed so Gemini creates a note instead of answering about notes.
+      prompt_template: "Create a note: {content}."
+      prompt_slots:
+        - name: content
+          desc: "the note title or body to save"
+          required: true
       example_prompts:
         - "Create a note titled RelayAgent test."
         - "Write a note reminding me to buy coffee beans tomorrow."
@@ -233,6 +300,13 @@ embedded_agent:
         Task creation or task update behavior through Gemini or connected Google
         Tasks. This writes user-visible task state and requires explicit user
         intent in the prompt.
+      # Fixed submit template — planner extracts {content} only; wording stays
+      # fixed so Gemini creates a task instead of answering about tasks.
+      prompt_template: "Create a task: {content}."
+      prompt_slots:
+        - name: content
+          desc: "the task description, including any due time"
+          required: true
       example_prompts:
         - "Add a task to submit the report tomorrow at 3 PM."
         - "Create a task: organize experiment notes by Friday."
@@ -257,6 +331,16 @@ embedded_agent:
         SMS send or SMS-draft behavior in Gemini. Sending is unverified and
         potentially irreversible, so never automate a final SMS send action
         without explicit user approval and a visible system confirmation.
+      # Fixed submit template — planner extracts recipient/message only; the
+      # final send confirmation is still left to the user via handoff.
+      prompt_template: 'Send a text message to {contact}: "{message}"'
+      prompt_slots:
+        - name: contact
+          desc: "recipient name or phone number"
+          required: true
+        - name: message
+          desc: "the message body"
+          required: true
       example_prompts:
         - "Send this phone number a text message: I will arrive later."
         - "Draft a text to this number: I will arrive in ten minutes; do not send it directly."
@@ -288,21 +372,6 @@ embedded_agent:
       x_tool_menu_entry:
         open_menu: "Add attachment"
         text_or_desc: "Images"
-
-    - id: generate_document
-      description: >
-        Long-form document drafting through Gemini chat or Canvas: reports,
-        product plans, code/text drafts, tables, and structured prose. Export or
-        editor behavior is user-handoff until separately scripted.
-      example_prompts:
-        - "Generate a draft weekly project report in English."
-        - "Use Canvas to draft a product proposal."
-      executable: true
-      handoff_to_user_required: true
-      typical_latency_seconds: 25
-      x_tool_menu_entry:
-        open_menu: "Add attachment"
-        text_or_desc: "Canvas"
 
     - id: generate_slides
       description: >

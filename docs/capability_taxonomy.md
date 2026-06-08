@@ -5,7 +5,7 @@
 
 | #   | ID             | Capability                                                                                                                                                                                                                                                       | Test example                                                                |
 | --- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| 1   | foundation_llm | Foundation LLM capability — QA, rewriting, translation, summarization, retrieval, outline generation, extraction, filtering, sorting, comparison, dedup, conflict detection, numeric computation & format conversion, and public-web lookups (GitHub repos/issues, securities/finance, weather) | Summarize this meeting note into 3 key points and extract action items: ... |
+| 1   | foundation_llm | Foundation LLM capability — QA, rewriting, translation, summarization, retrieval, outline generation, extraction, filtering, sorting, comparison, dedup, conflict detection, numeric computation & format conversion, and public-web lookups (GitHub repos/issues, securities/finance, weather) | What will the weather be like in Hong Kong tomorrow? |
 
 
 ## Maps & travel
@@ -13,10 +13,10 @@
 
 | #   | ID                | Capability                                                                  | Test example                                                                                                            |
 | --- | ----------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| 2   | poi_nearby_search | POI / nearby search                                                         | Find 3 quiet coffee shops near Shanghai Jiao Tong University Minhang Campus, with names and addresses.                  |
-| 3   | route_planning    | Route planning (incl. distance & time estimates)                            | Plan a route from Shanghai Jiao Tong University Minhang Campus to Hongqiao Railway Station, estimate distance and time. |
+| 2   | poi_nearby_search | POI / nearby search                                                         | Find 3 quiet coffee shops near People's Square in Shanghai, with names and addresses.                  |
+| 3   | route_planning    | Route planning (incl. distance & time estimates)                            | Plan a route from People's Square in Shanghai to Hongqiao Railway Station, estimate distance and time. |
 | 4   | live_navigation   | Navigation to a specific location                                                | Start navigation to the Bund in Shanghai.                                                                  |
-| 5   | hail_ride         | Ride hailing                                                                | Help hail an economy ride from People Square Shanghai to the east gate of Shanghai Jiao Tong University.                |
+| 5   | hail_ride         | Ride hailing                                                                | Help hail an economy ride from People's Square in Shanghai to the Shanghai Science and Technology Museum.                |
 | 6   | plan_trip         | Travel itinerary planning (= POI + route + ticketing + hotel + attractions) | Plan a 3-day Chengdu itinerary with attractions, routes, dining, and hotel-area suggestions.                            |
 
 
@@ -73,13 +73,12 @@
 | 24  | find_file          | File find & filter                              | Find PDF files modified in the last 7 days whose names contain 'contract', and list filenames and locations. |
 | 25  | operate_file       | File operations — copy / move / rename / delete | Copy relayagent_test.txt from Downloads to Documents; if the file is not found, only report the result.      |
 | 26  | write_text_file    | Text file creation & writing                    | Create a text file named relayagent_test_note.txt with the content 'This is a test file'.                    |
-| 27  | generate_document  | Document generation                             | Generate an 800-word draft report on the topic 'Evaluating on-device AI assistant capabilities'.             |
-| 28  | generate_slides    | Slides generation                               | Generate a 5-slide presentation outline on 'Opportunities and risks of on-device AI assistants'.             |
-| 29  | find_gallery_image | Gallery image search                            | Find photos containing a whiteboard in the gallery and list the matches.                                     |
-| 30  | read_memo          | Notes / memos — read                            | Read my latest memo and summarize it in one sentence.                                                        |
-| 31  | write_memo         | Notes / memos — write (create / edit)           | Create a memo titled 'RelayAgent test' with the content 'Finished checking capability examples today'.       |
-| 32  | read_task          | Tasks — read                                    | List my incomplete tasks due this week.                                                                      |
-| 33  | write_task         | Tasks — write                                   | Add a task 'Submit report' due tomorrow.                                                                     |
+| 27  | generate_slides    | Slides generation                               | Generate a 5-slide presentation outline on 'Opportunities and risks of on-device AI assistants'.             |
+| 28  | find_gallery_image | Gallery image search                            | Find photos containing a whiteboard in the gallery and list the matches.                                     |
+| 29  | read_memo          | Notes / memos — read                            | Read my latest memo and summarize it in one sentence.                                                        |
+| 30  | write_memo         | Notes / memos — write (create / edit)           | Create a memo titled 'RelayAgent test' with the content 'Finished checking capability examples today'.       |
+| 31  | read_task          | Tasks — read                                    | List my incomplete tasks due this week.                                                                      |
+| 32  | write_task         | Tasks — write                                   | Add a task 'Submit report' due tomorrow.                                                                     |
 
 
 ## Vertical lookup
@@ -87,7 +86,7 @@
 
 | #   | ID                      | Capability                           | Test example                                                                                                         |
 | --- | ----------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| 34  | search_vertical_content | App-specific vertical content search | Search within the current app for 'hidden bookstores in Shanghai' and list the 3 most relevant results with sources. |
+| 33  | search_vertical_content | App-specific vertical content search | Search within the current app for 'hidden bookstores in Shanghai' and list the 3 most relevant results with sources. |
 
 
 ## System
@@ -95,4 +94,4 @@
 
 | #   | ID                      | Capability                 | Test example                                                                             |
 | --- | ----------------------- | -------------------------- | ---------------------------------------------------------------------------------------- |
-| 35  | operate_system_settings | System settings operations | Turn on system dark mode; if it is already on, leave it unchanged and report the status. |
+| 34  | operate_system_settings | System settings operations | Turn on system dark mode; if it is already on, leave it unchanged and report the status. |

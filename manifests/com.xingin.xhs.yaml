@@ -55,6 +55,15 @@ embedded_agent:
         cafes, restaurants, attractions, stores, photo spots, parent-child
         venues, and other lifestyle places represented by UGC note or POI
         cards. It does not book, order, or start navigation.
+      # 固定提交模板——规划 LLM 只抽 {poi}/{place}（限定词并入 poi），措辞固定。
+      prompt_template: "查找[{place}附近的]{poi}"
+      prompt_slots:
+        - name: poi
+          desc: "目标地点类型,含限定词,如'适合拍照的咖啡店'/'带娃去的地方'"
+          required: true
+        - name: place
+          desc: "参照位置,如'武康大楼正门';未指明则留空"
+          required: false
       example_prompts:
         - "武康大楼正门附近有什么适合拍照的咖啡店"
         - "周末上海儿童艺术剧场南门附近带娃去哪玩"

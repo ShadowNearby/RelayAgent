@@ -46,6 +46,15 @@ embedded_agent:
         for attractions, restaurants, hotels, transportation hubs, family venues,
         and local travel services. The assistant returns recommendations or
         travel context and does not book or pay through this capability.
+      # 固定提交模板——规划 LLM 只抽 {poi}/{place}（限定词并入 poi），措辞固定。
+      prompt_template: "查找[{place}附近的]{poi}"
+      prompt_slots:
+        - name: poi
+          desc: "目标地点类型,含限定词,如'适合亲子的景点'/'适合商务聚餐的餐厅'"
+          required: true
+        - name: place
+          desc: "参照位置,如'上海天文馆游客中心';未指明则留空"
+          required: false
       example_prompts:
         - "上海天文馆游客中心附近有什么适合亲子的景点"
         - "世博源1区附近有哪些适合商务聚餐的餐厅"
@@ -61,6 +70,21 @@ embedded_agent:
         date/time, cabin, and price constraints, returns flight cards, and
         exposes a CTA into the native booking flow for seat/passenger/payment
         steps. User handoff is required before purchase.
+      # 固定提交模板——规划 LLM 只抽槽位(偏好并入 {preference}),措辞固定以触发机票流程。
+      prompt_template: "帮我订{time}从{origin}到{destination}的[{preference}]机票"
+      prompt_slots:
+        - name: time
+          desc: "出发时间,如'下周一下午'/'明天'"
+          required: true
+        - name: origin
+          desc: "出发城市或机场"
+          required: true
+        - name: destination
+          desc: "到达城市或机场"
+          required: true
+        - name: preference
+          desc: "舱位或价格偏好,如'经济舱'/'最便宜的';未指明则留空"
+          required: false
       example_prompts:
         - "帮我找下周一上海到北京下午的机票"
         - "明天最便宜的虹桥飞成都的航班"
@@ -91,6 +115,21 @@ embedded_agent:
         train cards with number, duration, price, and seat availability, then
         links into the native ticketing flow. User handoff is required before
         passenger details, 12306-backed ticketing, and payment.
+      # 固定提交模板——规划 LLM 只抽槽位(偏好并入 {preference}),措辞固定以触发火车票流程。
+      prompt_template: "帮我订{time}从{origin}到{destination}的[{preference}]火车票"
+      prompt_slots:
+        - name: time
+          desc: "出发时间,如'周五早上8点'/'明天最早'"
+          required: true
+        - name: origin
+          desc: "出发城市或车站"
+          required: true
+        - name: destination
+          desc: "到达城市或车站"
+          required: true
+        - name: preference
+          desc: "座位或价格偏好,如'二等座'/'最早的';未指明则留空"
+          required: false
       example_prompts:
         - "周五早上 8 点北京到天津的高铁"
         - "明天去苏州最早的车次"

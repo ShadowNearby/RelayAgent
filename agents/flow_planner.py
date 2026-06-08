@@ -25,12 +25,14 @@ Design (see CLAUDE.md + the `project_cross_app_planner` decision notes):
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from loguru import logger
 from openai import OpenAI
 
 from agents.capability_matrix_router import route as route_app_capability
+from agents.route_overlay import RouteOverlay, compute_route_key as _compute_route_key
 from agents.locale_policy import (
     appears_compatible_with_locale,
     first_locale,
@@ -153,6 +155,43 @@ Return ONE JSON object inside a ```json``` fence:
 """
 
 
+_SLOT_EXTRACT_SYSTEM = """You extract slot values to fill ONE fixed in-app-agent prompt template.
+
+You are given a capability's prompt template (e.g. "Navigate to {place}."), its
+slot specs (name, desc, required), the original user request, the planner's
+synthesized prompt for this step, and a list of upstream variables that earlier
+steps already produced.
+
+Your ONLY job is to extract each slot's value. Do NOT rephrase the template, do
+NOT translate, do NOT add slots that are not listed.
+
+Rules:
+- Prefer the user's own wording from the original request / synthesized prompt.
+  Keep proper nouns, addresses, place/product names, ids, URLs as-is.
+- If a slot's value should come from an EARLIER step's result, return that
+  variable as a literal placeholder token like "{poi.name}" — use ONLY names
+  from `referencable_upstream_vars`. Never invent a variable.
+- If a REQUIRED slot's value is genuinely absent from the request, leave it out
+  of `slots` and list its name in `missing` (do NOT guess or hallucinate).
+- An OPTIONAL slot with no value: just omit it from `slots`.
+- The template may contain `[ ... {slot} ... ]` OPTIONAL segments. Extract the
+  inner `{slot}` normally when the request supplies it; when it does not, just
+  omit that slot — the segment (its surrounding wording included) is dropped
+  automatically. Never emit the literal `[` / `]` brackets as part of a value.
+
+Return ONE JSON object inside a ```json``` fence:
+{"slots": {"<slot name>": "<value or {var} token>", ...}, "missing": ["<required slot name>", ...]}
+"""
+
+
+class PromptTemplateError(RuntimeError):
+    """Raised when a capability's prompt template cannot be filled deterministically.
+
+    Surfaced as a plan validation error (hard fail) so a residual/hallucinated
+    prompt is never submitted to the in-app agent.
+    """
+
+
 class FlowPlanner:
     def __init__(
         self,
@@ -166,6 +205,9 @@ class FlowPlanner:
         self._llm = llm
         self._model = model
         self.matrix = matrix
+        # Trace-guided route solidification: a confidently-successful route is
+        # short-circuited here (0 LLM); leg verdicts feed it from FlowRunner.
+        self._overlay = RouteOverlay()
         self._apps_by_id = {
             app.get("app_id"): app for app in catalog.get("apps", []) if app.get("app_id")
         }
@@ -249,41 +291,17 @@ class FlowPlanner:
             return plan
 
         errors: list[str] = []
+        # Vars bound by earlier steps (app steps + ask_user), in plan order, so a
+        # templated step's slot can legitimately reference an upstream {var}.
+        produced: set[str] = set()
         for i, step in enumerate(steps):
-            if not isinstance(step, dict) or _is_ask_user(step):
+            if not isinstance(step, dict):
                 continue
-            prompt = step.get("prompt")
-            if not prompt:
-                continue
-
-            request = self._route_request_for_step(step, nl_request)
-            try:
-                decision = route_app_capability(
-                    request,
-                    self.catalog,
-                    self.matrix,
-                    self._llm,
-                    self._model,
-                    preserve_goal=True,
-                )
-            except Exception as e:  # surfaced as a plan validation error below
-                errors.append(f"step {step.get('id') or i!r}: route failed: {e}")
-                continue
-
-            app_id = decision.get("app_id")
-            cap_id = decision.get("capability_id")
-            if app_id:
-                step["app"] = app_id
-            if cap_id:
-                step["capability"] = cap_id
-            if app_id:
-                step["prompt"] = self._maybe_localize_prompt(
-                    step["prompt"], app_id, nl_request
-                )
-            logger.info(
-                f"planner route step {step.get('id') or i!r} -> "
-                f"{app_id} / {cap_id} (reason: {decision.get('reason')})"
-            )
+            if not _is_ask_user(step):
+                self._route_one_step(step, i, nl_request, produced, errors)
+            bind = step.get("bind")
+            if bind:
+                produced.add(bind)
 
         if errors:
             raise PlanValidationError(nl_request, plan, errors)
@@ -291,6 +309,160 @@ class FlowPlanner:
         self._drop_unused_no_reply_binds(plan)
         self._refresh_apps_required(plan)
         return plan
+
+    def _route_one_step(
+        self,
+        step: dict,
+        i: int,
+        nl_request: str,
+        produced: set[str],
+        errors: list[str],
+    ) -> None:
+        """Route one app step, then fill its prompt (template or localize)."""
+        prompt = step.get("prompt")
+        if not prompt:
+            return
+
+        # Solidification key (RELAY_ROUTE_KEY_MODE; default value-independent B
+        # off the planner's provisional capability + app hint + request locale,
+        # so "navigate to A/B" share one route). Stashed on the step so
+        # FlowRunner can attribute the leg's verdict back to the same key. Reuse
+        # a key persisted by an earlier (fresh) build so a cache-hit re-run —
+        # where `prompt` is already filled and `capability` is the final routed
+        # one, not the provisional — keeps the SAME key instead of recomputing.
+        key = step.get("x_route_key") or _compute_route_key(
+            prompt,
+            provisional_cap=step.get("capability"),
+            provisional_app=step.get("app"),
+        )
+        step["x_route_key"] = key
+
+        request = self._route_request_for_step(step, nl_request)
+        try:
+            decision = route_app_capability(
+                request,
+                self.catalog,
+                self.matrix,
+                self._llm,
+                self._model,
+                preserve_goal=True,
+                route_key=key,
+                overlay=self._overlay,
+            )
+        except Exception as e:  # surfaced as a plan validation error
+            errors.append(f"step {step.get('id') or i!r}: route failed: {e}")
+            return
+
+        app_id = decision.get("app_id")
+        cap_id = decision.get("capability_id")
+        if app_id:
+            step["app"] = app_id
+        if cap_id:
+            step["capability"] = cap_id
+        if app_id:
+            cap_meta = self._caps.get(app_id, {}).get(cap_id, {})
+            if cap_meta.get("prompt_template"):
+                # Deterministic submit prompt: extract slots, fill the fixed
+                # template, skip locale rewrite (the template is authored in the
+                # app's target locale). Any failure is a hard plan error.
+                try:
+                    step["prompt"] = self._fill_prompt_template(
+                        cap_meta, step["prompt"], nl_request, produced
+                    )
+                except Exception as e:
+                    errors.append(f"step {step.get('id') or i!r}: {e}")
+                    return
+            else:
+                step["prompt"] = self._maybe_localize_prompt(
+                    step["prompt"], app_id, nl_request
+                )
+        logger.info(
+            f"planner route step {step.get('id') or i!r} -> "
+            f"{app_id} / {cap_id} (reason: {decision.get('reason')})"
+        )
+
+    def _fill_prompt_template(
+        self,
+        cap_meta: dict,
+        synthesized_prompt: str,
+        nl_request: str,
+        produced: set[str],
+    ) -> str:
+        """Fill a capability's `prompt_template` from extracted slot values.
+
+        The LLM extracts ONLY slot values (not phrasing); the template fixes the
+        wording so the in-app agent's intent routing isn't subject to phrasing
+        drift. A missing required slot or an out-of-scope `{var}` is a hard error
+        (raises PromptTemplateError) so a residual prompt never reaches the app.
+        """
+        template = cap_meta["prompt_template"]
+        slot_specs = cap_meta.get("prompt_slots") or []
+        slot_names = [s.get("name") for s in slot_specs if s.get("name")]
+        # Offer exactly the vars earlier steps actually produced — the same set
+        # the post-fill stray-var guard validates against — so a compliant
+        # extractor can never emit a var the guard will then hard-reject.
+        allowed_vars = sorted(produced)
+
+        user = json.dumps(
+            {
+                "template": template,
+                "slots": [
+                    {
+                        "name": s.get("name"),
+                        "desc": s.get("desc", ""),
+                        "required": s.get("required", True),
+                    }
+                    for s in slot_specs
+                ],
+                "original_user_request": nl_request,
+                "synthesized_prompt": synthesized_prompt,
+                "referencable_upstream_vars": allowed_vars,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        resp = self._llm.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": _SLOT_EXTRACT_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.0,
+            max_tokens=512,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        data = _parse_fenced_json(raw)
+        if not isinstance(data, dict):
+            raise PromptTemplateError(
+                f"slot extractor returned {type(data).__name__}, expected object "
+                f"(template {template!r})"
+            )
+        slots = data.get("slots") or {}
+        if not isinstance(slots, dict):
+            raise PromptTemplateError(f"slot extractor `slots` is not an object (template {template!r})")
+
+        missing = [
+            s.get("name")
+            for s in slot_specs
+            if s.get("required", True) and not _has_slot_value(slots, s.get("name"))
+        ]
+        if missing:
+            raise PromptTemplateError(
+                f"required slot(s) {missing} could not be extracted for template {template!r}"
+            )
+
+        filled = _fill_template(template, slots, slot_names)
+
+        # {var} guard (same intent as localize): any {var} surviving in the
+        # filled prompt must be an upstream-produced bind, else the runtime
+        # render() would silently drop it to ''.
+        stray = _var_roots(filled) - produced
+        if stray:
+            raise PromptTemplateError(
+                f"filled template references unbound vars {sorted(stray)}: {filled!r}"
+            )
+        logger.info(f"templated submit prompt via {template!r}: {filled!r}")
+        return filled
 
     def _drop_unused_no_reply_binds(self, plan: dict) -> None:
         """Remove stale binds from steps that cannot capture text replies.
@@ -307,6 +479,12 @@ class FlowPlanner:
 
         for idx, step in enumerate(steps):
             if not isinstance(step, dict) or _is_ask_user(step):
+                continue
+            # A falsy `bind` (null/"") is never meaningful — strip the key so it
+            # doesn't persist into the plan and land as a None blackboard key.
+            if "bind" in step and not step.get("bind"):
+                step.pop("bind", None)
+                step.pop("extract", None)
                 continue
             bind = step.get("bind")
             if not bind:
@@ -526,6 +704,62 @@ def _is_ask_user(step: dict) -> bool:
 def _var_roots(template: str) -> set[str]:
     """Root variable names referenced by `{var}` / `{var.field}` in a template."""
     return {m.group(1).split(".")[0] for m in _VAR_RE.finditer(template or "")}
+
+
+# Optional template segment: `[ ... {slot} ... ]`. Non-nested. Kept (brackets
+# stripped, inner slots filled) only when every declared slot it references has a
+# non-empty value; otherwise the whole segment — surrounding wording, spaces, and
+# punctuation included — is dropped.
+_OPT_SEGMENT_RE = re.compile(r"\[([^\[\]]*)\]")
+
+
+def _has_slot_value(slots: dict, name: str) -> bool:
+    v = slots.get(name)
+    return v is not None and str(v).strip() != ""
+
+
+def _fill_slots(text: str, slots: dict, slot_names: list[str]) -> str:
+    """Replace each declared `{slot}` with its value, leaving other braces intact.
+
+    Targeted replacement (not str.format) so cross-step `{var}` tokens that a slot
+    value carries (e.g. "{poi.name}") survive for the runtime `render()`.
+    """
+    for name in slot_names:
+        val = slots.get(name)
+        text = text.replace("{" + name + "}", "" if val is None else str(val))
+    return text
+
+
+def _fill_template(template: str, slots: dict, slot_names: list[str]) -> str:
+    """Fill declared `{slot}`s; conditionally render optional `[..]` segments.
+
+    Template syntax:
+    - `{slot}` — replaced by its extracted value (or an upstream `{var}` token).
+    - `[ ... {slot} ... ]` — an OPTIONAL segment, for slots declared
+      `required: false`. Kept (brackets stripped, inner slots filled) only when
+      every declared slot it references has a non-empty value; otherwise the
+      whole segment is removed, so surrounding wording/spaces/punctuation go with
+      it (e.g. `Navigate to {place}[ by {mode}].` → `Navigate to X.` when `mode`
+      is absent). A `[...]` with no declared slot inside is left as literal text.
+
+    A bare (un-bracketed) optional slot with no value is stripped to '' — put
+    optional slots inside a `[..]` segment to drop their surrounding wording too.
+    """
+    def _render_segment(m: re.Match) -> str:
+        inner = m.group(1)
+        referenced = [n for n in slot_names if ("{" + n + "}") in inner]
+        if not referenced:
+            return m.group(0)  # no declared slot → literal brackets, keep as-is
+        if all(_has_slot_value(slots, n) for n in referenced):
+            return _fill_slots(inner, slots, slot_names)
+        return ""
+
+    out = _OPT_SEGMENT_RE.sub(_render_segment, template)
+    # Fill any remaining required / bare declared slots outside optional segments.
+    out = _fill_slots(out, slots, slot_names)
+    # Tidy double spaces a dropped mid-sentence segment can leave behind.
+    out = re.sub(r"  +", " ", out).strip()
+    return out
 
 
 def _bind_referenced_later(bind: str, steps: list, start_idx: int) -> bool:

@@ -56,23 +56,6 @@ embedded_agent:
 
   capabilities:
 
-    - id: search_vertical_content
-      description: >
-        Booking.com-specific travel discovery through the AI chat surface. Use
-        for destination ideas, accommodation inspiration, activities,
-        experiences, seasonal travel advice, and travel Q&A. The assistant
-        returns conversational recommendations and may include Booking.com
-        inventory context, but this capability does not reserve or pay.
-      example_prompts:
-        - "European destinations for a short city break for two people."
-        - "Which beachfront accommodation areas in Miami are good for relaxing next summer?"
-        - "Where is a convenient area to stay for a first trip to New York?"
-      executable: false
-      handoff_to_user_required: false
-      typical_latency_seconds: 20
-      x_capture_full_reply:
-        max_scrolls: 6
-
     - id: poi_nearby_search
       description: >
         Travel-oriented activity, attraction, and experience discovery through
@@ -80,6 +63,17 @@ embedded_agent:
         experiences, neighborhoods, family activities, and local travel ideas
         tied to a destination or lodging area. It returns recommendations and
         context, not turn-by-turn navigation or purchase completion.
+      # Fixed submit template — planner extracts {poi}/{place} only (qualifiers
+      # fold into {poi}); wording stays fixed. {place} is optional: the
+      # `[ near {place}]` segment drops entirely when no place is given.
+      prompt_template: "Find {poi}[ near {place}]"
+      prompt_slots:
+        - name: poi
+          desc: "activity/experience type incl. qualifiers, e.g. 'rainy-day experiences'"
+          required: true
+        - name: place
+          desc: "destination or lodging area, e.g. 'Ginza in Tokyo'; leave empty if unspecified"
+          required: false
       example_prompts:
         - "What rainy-day experiences are available near Ginza in Tokyo?"
         - "If I am staying near King's Cross in London, where can I go in the evening?"
