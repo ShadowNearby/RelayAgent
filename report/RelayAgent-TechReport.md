@@ -500,7 +500,7 @@ result — cost *predictability* — emerges from the repetitions.
 ### 8.1 Experimental setup
 
 - **Device / model.** Real Android device (`46180DLAQ004LW`) under MobileWorld;
-  `qwen` VLM via the IPADS OpenAI-compatible gateway (provider-agnostic; Claude /
+  `qwen` VLM via the OpenAI-compatible gateway configured in `.env` (provider-agnostic; Claude /
   Gemini are swap-in).
 - **Tasks.** (T1) **order_food** — order three Mixue 蜜桃四季春 (default
   temperature/sugar). (T2) **flow** — find newly-opened, well-reviewed restaurants

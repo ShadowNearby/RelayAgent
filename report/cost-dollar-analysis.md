@@ -2,7 +2,7 @@
 
 **Scope:** T1 (order_food) and T2 (xhs→amap flow), four configs, per-task median.
 **Date of analysis:** 2026-06-03.
-**Model served:** `qwen3.5-27b` — Qwen3.5 27B native vision-language dense model (early-fusion multimodal, released Feb 2026), served via the SJTU IPADS lab OpenAI-compatible gateway at no direct charge to the project. The gateway folds image/vision tokens into `prompt_tokens`; no separate vision price is reported by the API.
+**Model served:** `qwen3.5-27b` — Qwen3.5 27B native vision-language dense model (early-fusion multimodal, released Feb 2026), served via the OpenAI-compatible gateway configured in `.env` (`LLM_BASE_URL`) at no direct charge to the project. The gateway folds image/vision tokens into `prompt_tokens`; no separate vision price is reported by the API.
 
 ---
 

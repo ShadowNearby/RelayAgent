@@ -5,7 +5,7 @@
 > 重要平台事实：**淘宝闪购的内置 AI = 千问**，order_food 四档是同一下单后端的受控对照。
 
 ## 环境
-- 设备：真机 `46180DLAQ004LW`；LLM 网关 SJTU IPADS，model=`qwen`（VL）
+- 设备：真机 `46180DLAQ004LW`；LLM 网关（`.env` 的 `LLM_BASE_URL`），model=`qwen`（VL）
 - MobileWorld server :6800；RelayAgent 入口 `agents.native_runner`
 - MW 原始 agent：`mw test --agent-type general_e2e`（逐步 VLM，每步带 3 张历史截图）
 - **n=1**（每组单次，抖动未平均）

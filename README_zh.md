@@ -110,7 +110,7 @@ RelayAgent/
 ├── manifests/                 # 每个 App 一张 YAML 卡片；9 张安卓卡片
 ├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、adb 辅助
 ├── scripts/                   # run_plan.py（NL flow）、benchmark runner、metrics
-├── docs/                      # 设计文档 —— 能力分类法
+├── docs/                      # 设计文档 —— NL flow、manifest 约定、prompt 模板、能力分类法
 ├── report/                    # 技术报告 + 冻结的基准数据
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
@@ -160,6 +160,11 @@ uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季
 uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电脑，预算2000以内"
 uv run python scripts/run_plan.py --dry-run "把这段材料整理成一份中文总结文档"
 ```
+
+设计文档：
+
+- [NL 跨 App Flow 架构](docs/nl_flow.zh.md) —— 合成、三段式路由、校验、执行、leg judge、handoff（pipeline 与 CLI 用法见[自动跨 App 规划器](docs/cross_app_planner.zh.md)）。
+- [Manifest 约定](docs/manifest_conventions.zh.md) —— 语言约定、`prompt_template`、`x_capture_full_reply`、卡片 `swipe` 方向、capability 关键字段（[prompt 模板细节](docs/prompt_template.zh.md)）。
 
 ## 运行测试
 

@@ -36,7 +36,6 @@ DEFAULT_ENV_FILE = Path(".env")
 DEFAULT_SERVER_URL = "http://127.0.0.1:6800"
 DEFAULT_SERVER_LOG = Path("artifacts") / "mobileworld_server.log"
 DEFAULT_APP = "com.google.android.apps.maps"
-DEFAULT_LLM_BASE_URL = "http://yjs-ipads.ipads-lab.se.sjtu.edu.cn:3000/v1"
 DEFAULT_MODEL = "qwen"
 
 
@@ -184,7 +183,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model-name", "--model_name", dest="model_name", default=None,
                    help="Model name; defaults to LLM_MODEL then qwen.")
     p.add_argument("--llm-base-url", "--llm_base_url", dest="llm_base_url", default=None,
-                   help="LLM base URL; defaults to LLM_BASE_URL then the SJTU qwen gateway.")
+                   help="LLM base URL; defaults to the LLM_BASE_URL set in .env.")
     p.add_argument("--api-key", "--api_key", dest="api_key", default=None,
                    help="LLM API key; defaults to LLM_API_KEY. Prefer .env over this flag.")
     p.add_argument("--max-round", "--max_round", dest="max_round", default="25",
@@ -218,8 +217,9 @@ def main(argv: list[str] | None = None) -> int:
         args.llm_base_url
         or os.getenv("LLM_BASE_URL")
         or env_vars.get("LLM_BASE_URL")
-        or DEFAULT_LLM_BASE_URL
     )
+    if not llm_base_url:
+        parser.error(f"LLM_BASE_URL is empty; put it in {env_file} or pass --llm-base-url")
     api_key = args.api_key or os.getenv("LLM_API_KEY") or env_vars.get("LLM_API_KEY")
     model_name = args.model_name or os.getenv("LLM_MODEL") or env_vars.get("LLM_MODEL") or DEFAULT_MODEL
     if not api_key:

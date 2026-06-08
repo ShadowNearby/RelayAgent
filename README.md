@@ -110,7 +110,7 @@ RelayAgent/
 ├── manifests/                 # one YAML card per app; 9 Android cards
 ├── agents/                    # relay adapter, planner, capability router, card loader, adb helper
 ├── scripts/                   # run_plan.py (NL flow), benchmark runner, metrics
-├── docs/                      # design docs — capability taxonomy
+├── docs/                      # design docs — NL flow, manifest conventions, prompt templates, capability taxonomy
 ├── report/                    # tech report + frozen benchmark data
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
@@ -161,6 +161,11 @@ uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季
 uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电脑，预算2000以内"
 uv run python scripts/run_plan.py --dry-run "把这段材料整理成一份中文总结文档"
 ```
+
+Design docs:
+
+- [NL cross-app flow architecture](docs/nl_flow.md) — synthesis, three-stage routing, validation, execution, leg judge, handoff (pipeline & CLI usage: [auto cross-app planner](docs/cross_app_planner.md)).
+- [Manifest conventions](docs/manifest_conventions.md) — language convention, `prompt_template`, `x_capture_full_reply`, card `swipe` direction, key capability fields ([prompt template detail](docs/prompt_template.md)).
 
 ## Run tests
 

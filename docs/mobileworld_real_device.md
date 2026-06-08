@@ -1,7 +1,7 @@
 # 用 MobileWorld 跑真机测试
 
 记录如何用 **MobileWorld** 通过 ADB 驱动真机，
-以 **SJTU IPADS 网关的 qwen** 作为 agent 大脑，跑一个临时目标（如让 Google Maps 导航）。
+以 **`.env` 中 LLM env（`LLM_BASE_URL`）的 qwen** 作为 agent 大脑，跑一个临时目标（如让 Google Maps 导航）。
 
 > MobileWorld 已从 RelayAgent 主仓库移除（见项目记忆「Dropped MobileWorld」），
 > 它是一个 Docker 模拟器上的 benchmark（201 个预定义任务 + 评测器）。
@@ -21,13 +21,13 @@
 - 目标 app 已装在机上（本机 Pixel 9 已装 `com.google.android.apps.maps`）。
 - 多设备时用 `RELAY_ANDROID_SERIAL` / `ANDROID_SERIAL` 选设备。
 
-## 凭证（SJTU 网关 qwen）
+## 凭证（`.env` 中的 LLM env，qwen）
 
 复用 RelayAgent 的 `.env`（**别提交、别复述完整 key**）：
 
 | 参数 | 值 |
 | --- | --- |
-| `--llm_base_url` | `http://yjs-ipads.ipads-lab.se.sjtu.edu.cn:3000/v1` |
+| `--llm_base_url` | `.env` 里的 `LLM_BASE_URL` |
 | `--model_name` | `qwen` |
 | `--api_key` | `.env` 里的 `LLM_API_KEY` |
 | `--agent-type` | `general_e2e`（qwen-3.5 适用，相对坐标 0–1000） |
@@ -62,7 +62,6 @@ uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Ma
   --app com.google.android.apps.maps \
   --agent-type general_e2e \
   --model-name qwen \
-  --llm-base-url http://yjs-ipads.ipads-lab.se.sjtu.edu.cn:3000/v1 \
   --max-round 25 \
   --timeout 600
 ```
@@ -121,7 +120,7 @@ uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Ma
 | 项 | 值 |
 | --- | --- |
 | goal | `Live navigate to the Bund by Google Map` |
-| 驱动 | SJTU 网关 qwen，`general_e2e` |
+| 驱动 | `.env` 中 LLM env 的 qwen，`general_e2e` |
 | 起点 | 预开 Google Maps（见上「关键」） |
 | 结果 | **5 步**：点搜索框 → 输入 "The Bund" → 选中外滩(Zhongshan Rd E-1, Waitan, Huangpu) → Start → 进入实时逐向导航（35 km / 42 min / 蓝色路线）|
 | 录屏 | `recordings/mw_bund_<ts>/recording.mp4`（1080×2424，约 86s）|

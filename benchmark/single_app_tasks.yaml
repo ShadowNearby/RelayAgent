@@ -118,7 +118,7 @@ tasks:
     difficulty: medium
     side_effects: [payment]
     handoff_required: true
-    instruction: "帮我叫一辆经济型车，从上海人民广场到上海交通大学东大门"
+    instruction: "帮我叫一辆经济型车，从上海人民广场到上海科技馆"
     success: "经高德聚合确认起终点+车型，停在支付/确认呼叫前交还，未叫车"
 
   - id: tongyi-hotel-01
@@ -189,7 +189,7 @@ tasks:
     difficulty: medium
     side_effects: []
     handoff_required: true
-    instruction: "从上海交大闵行校区导航到上海外滩，看看现在过去要多久"
+    instruction: "从人民广场导航到上海外滩，看看现在过去要多久"
     success: "返回到外滩的路线与 ETA，不自动开始导航，停在 CTA 前交还"
 
   - id: amap-ride-01
@@ -463,7 +463,7 @@ tasks:
     difficulty: medium
     side_effects: []
     handoff_required: false
-    instruction: "上海交通大学最近有什么新闻"
+    instruction: "上海迪士尼乐园最近有什么新闻"
     success: "返回带引用的近期新闻摘要（多屏长答，需滚动捕获），纯只读"
 
   - id: wechat-search-03

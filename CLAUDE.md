@@ -9,7 +9,7 @@
 
 ## LLM 端点
 
-值在 `.env`（gitignore，**别提交、别复述完整 key**）：`LLM_BASE_URL`（SJTU IPADS 网关）/ `LLM_API_KEY` / `LLM_MODEL`（=`qwen`）。
+值在 `.env`（gitignore，**别提交、别复述完整 key**）：`LLM_BASE_URL`（LLM 网关）/ `LLM_API_KEY` / `LLM_MODEL`（=`qwen`）。
 
 ## 跑测试
 
@@ -21,6 +21,7 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 ```
 
 - 旧的测试入口 / NL 入口 / 单 App 脚本入口已删除；新代码直接用 `python -m agents.native_runner`（指定 app）或 `run_plan.py --yes` / `run_plan.py --dry-run`（NL flow）。
+- **NL 跨 App Flow 架构**（合成 / 三段式路由 / 校验 / 执行 / leg judge / handoff）详见 [`docs/nl_flow.zh.md`](docs/nl_flow.zh.md)（English: [`docs/nl_flow.md`](docs/nl_flow.md)）；pipeline / CLI 用法 / 缓存 / 真机示例见 [`docs/cross_app_planner.zh.md`](docs/cross_app_planner.zh.md)。
 - 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.5）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
 
 需要 adb + 真机 USB 调试。**`agents.native_runner` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
@@ -61,6 +62,16 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 7. **两段式 precheck 省 dump**：Stage 1(~25ms) 截图区域 hash（裁顶 8% 状态栏、底 18% 输入区），变了=streaming 跳过。Stage 2(~2.5s，仅屏稳定才跑) uiautomator 文本 hash，连续 `STABLE_DUMPS_FOR_DONE`(=3) 拍相等才判 done（**不调 VLM**）。熔断：连续 ≥`MAX_DUMP_FAILS`(2) 次 dump 失败关本次 dump。看门狗：连续 ≥`MAX_SKIPS_BEFORE_FORCE`(5) 次 skip 强跑一次文本 dump。
 8. **回复文本优先 scrape，VLM 只兜底读文本（不判 done）。** `_extract_reply_text_from_dump`：dump → 按用户气泡 y 切割（`self._last_input_text` 定位）→ 过滤 chrome（`_REPLY_CHROME_LABELS` + streaming markers）→ 丢短 chip（有长节点时剔 <`MIN_CHIP_LEN`(25)）。scrape 落空（如 WebView/canvas 不入 a11y 树，或 `RELAY_SCRAPE=0` 基线）才回落 VLM 读帧。`capture_full` scroll 阶段同样 scrape，失败才回落。
 9. **权限弹窗自动 dismiss**：`predict` 入口 `_maybe_dismiss_permission_popup`。先 `dumpsys window` 拿前台包，不在 `_PERMISSION_PACKAGES` 白名单即 fast-exit。命中才 dump，按 `_ALLOW_LABELS`（始终允许>允许>Always allow>...）点 Allow，**永不 Deny**。每 task 上限 8 次。`RELAY_DISMISS_PERMISSIONS=0` 关。
+
+### Manifest 约定
+
+> 本节（语言约定 / `prompt_template` / `x_capture_full_reply` / 卡片 `swipe` 方向 / capability 关键字段）的完整版见 [`docs/manifest_conventions.zh.md`](docs/manifest_conventions.zh.md)（English: [`docs/manifest_conventions.md`](docs/manifest_conventions.md)）。下面是速查要点。
+
+**语言约定 — manifest 用对应 App 的语言写**：英文 App（如 `com.google.android.apps.bard`）的 manifest 用英文写，中文 App（如 `com.autonavi.minimap`）的 manifest 用中文写。
+
+### `prompt_template` — 模板化 submit prompt
+
+结构化能力（导航/订票等）可声明 capability 级 `prompt_template`（+`prompt_slots`），把发给 in-app agent 的措辞固化，LLM 只抽槽位，避免措辞漂移让 App 端意图路由跑偏。缺 **required** 槽**硬失败**；**可选**槽（`required: false`）包进 `[...]` 段，缺值时整段（含周边措辞）删除，例 `Navigate to {place}[ by {mode}].`。**保证边界**：固定的是措辞/意图路由，**槽位取值仍 LLM 抽**（temp=0），不保证取值正确。仅作用于 NL flow（`run_plan.py`/`FlowPlanner`），填充在 `flow_planner._fill_prompt_template` / `_fill_template`。**加载期** `card_catalog._validate_prompt_template` 校验 template↔slot 一致性（未声明占位符/死槽/required 在 `[...]` 内/optional 不在 `[...]`/括号不配对），命中抛 `ManifestValidationError`。详见 [`docs/prompt_template.zh.md`](docs/prompt_template.zh.md)（English: [`docs/prompt_template.md`](docs/prompt_template.md)）。
 
 ### `x_capture_full_reply` 开不开？
 
