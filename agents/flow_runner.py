@@ -42,7 +42,10 @@ import yaml
 from loguru import logger
 from openai import OpenAI
 
+from agents._adb import screencap
 from agents.action_model import ANSWER, ASK_USER, FINISHED
+from agents.leg_judge import LOADING, final_frames, judge_leg
+from agents.route_overlay import RouteOverlay
 from agents.runtime_config import ensure_llm_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -109,6 +112,10 @@ class FlowRunner:
         logger.info(f"flow traj root: {self.flow_traj_root}")
 
         self.bb: dict[str, Any] = {}
+
+        # Trace-guided route solidification: each leg's verdict is folded back
+        # into the overlay the planner's router reads from (see route_overlay).
+        self._overlay = RouteOverlay()
 
     # ------------------------------------------------------------- traj naming
 
@@ -257,19 +264,107 @@ class FlowRunner:
                 logger.info(f"captured reply ({len(reply)} chars) from {app}")
             else:
                 logger.info(f"no reply captured for output-free step {step['id']!r}")
+            # Semantic outcome check on top of the hard signals above: a leg can
+            # reach a terminal state with a non-empty reply yet still not have
+            # accomplished the goal. Best-effort — a judge failure must never
+            # abort the flow (see leg_judge module docstring).
+            self._judge_leg(
+                step, app, capability, prompt, reply, step_log_root,
+                summary.get("last_action_type"),
+            )
         finally:
             try:
                 reply_path.unlink()
             except OSError:
                 pass
 
-        if "bind" not in step:
+        # A falsy bind (missing, null, or "") means nothing downstream consumes
+        # this leg — don't write it (a `bind: null` would otherwise land as a
+        # None key in the blackboard).
+        if not step.get("bind"):
             return
         if "extract" in step:
             value = self._extract(reply, step["extract"])
         else:
             value = reply
         self.bb[step["bind"]] = value
+
+    # ------------------------------------------------------------ leg judge
+
+    def _judge_leg(
+        self,
+        step: dict,
+        app: str,
+        capability: str,
+        prompt: str,
+        reply: str,
+        step_log_root: Path,
+        terminal_action: str | None,
+    ) -> None:
+        """VLM success/failure check for a finished leg. Best-effort: logs the
+        verdict and persists it next to the leg trajectory; never raises."""
+        if os.getenv("RELAY_LEG_JUDGE", "1") != "1":
+            return
+        try:
+            leg_dir = step_log_root / "user_task"
+            frames = final_frames(leg_dir)
+
+            def judge(fr, live=None):
+                return judge_leg(
+                    llm=self._llm,
+                    model=self.env["LLM_MODEL"],
+                    goal=prompt,
+                    app=app,
+                    capability=capability,
+                    reply=reply,
+                    frames=fr,
+                    live_image=live,
+                    terminal_action=terminal_action,
+                )
+
+            verdict = judge(frames)
+            # `loading` means the screen was still in flight (e.g. a map spinning
+            # up after live_navigation's CTA), not a real outcome. Give it a
+            # moment and re-judge against a FRESHLY captured frame — only on
+            # loading, so the common case never pays this cost. The sub-run has
+            # exited but its app is still foreground, so screencap() sees the
+            # current state. Stop as soon as it settles.
+            retries = int(os.getenv("RELAY_LEG_JUDGE_LOADING_RETRIES", "3"))
+            wait = float(os.getenv("RELAY_LEG_JUDGE_LOADING_WAIT", "2.0"))
+            ctx = frames[-1:]  # one step frame for context alongside the live one
+            while verdict.status == LOADING and retries > 0:
+                retries -= 1
+                if wait > 0:
+                    time.sleep(wait)
+                live = screencap()
+                if live is None:  # capture failed — keep the loading verdict
+                    break
+                verdict = judge(ctx, live)
+            (leg_dir / "leg_verdict.json").write_text(
+                json.dumps(
+                    {"step": step["id"], "app": app, "capability": capability,
+                     **verdict.to_dict()},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            # Close the trace loop: fold this verdict into the route overlay so a
+            # repeatedly-successful route gets solidified (and a failing one
+            # paused) for the next run. `x_route_key` was stamped by the planner.
+            self._overlay.record(
+                step.get("x_route_key", ""),
+                prompt or step.get("prompt", ""),
+                app,
+                capability,
+                verdict.status,
+            )
+            if verdict.judged and not verdict.success:
+                logger.warning(
+                    f"leg {step['id']!r} ({app}/{capability}) judged FAILED: {verdict.reason}"
+                )
+        except Exception as e:  # judging is advisory — never break the flow
+            logger.warning(f"leg judge errored for {step.get('id')!r}: {e}")
 
     # ---------------------------------------------------------- ask_user
 

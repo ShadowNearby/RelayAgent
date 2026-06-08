@@ -75,37 +75,6 @@ embedded_agent:
         - wait:
             ms: 1200
 
-    - id: generate_document
-      description: >
-        Document generation through WPS 快速写作. The assistant drafts long-form
-        prose such as emails, reports, articles, summaries, and reflections from
-        a short brief, then can export the result as a .docx card in WPS storage.
-      example_prompts:
-        - "帮我写一封请假邮件，明天上午有事"
-        - "写一篇 800 字的读后感，主题：《活着》"
-        - "根据这些材料整理一份中文总结文档"
-      executable: true
-      handoff_to_user_required: true
-      typical_latency_seconds: 25
-      x_quick_chip:
-        text_or_desc: "快速写作"
-      x_pre_invocation_steps:
-        - tap_label:
-            text_or_desc: "一键快速成文"
-        - wait:
-            ms: 1200
-      x_post_result_flow:
-        description: >
-          After the article finishes streaming, tap "导出为文档" to generate a
-          .docx into WPS storage and stop before opening the editor.
-        steps:
-          - tap_label:
-              text_or_desc: "导出为文档"
-          - wait:
-              ms: 2500
-        stop_before:
-          - "打开文档"
-
 provenance:
   last_verified: "2026-05-25"
   verified_app_version: "14.45.1"

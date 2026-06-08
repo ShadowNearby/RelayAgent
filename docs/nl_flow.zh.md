@@ -1,0 +1,179 @@
+# NL 跨 App Flow 架构
+
+> English: [`nl_flow.md`](nl_flow.md)
+
+> 一句自然语言 → 自动合成的多 App 协作计划 → 执行。本文是**架构深挖**（合成 / 三段式路由 / 校验 / 执行 / leg judge / handoff / 路由固化）。
+> pipeline、CLI 用法、缓存、真机实跑示例见 [`cross_app_planner.zh.md`](cross_app_planner.zh.md)。
+>
+> 涉及代码：`agents/flow_planner.py` / `agents/flow_runner.py` / `agents/capability_matrix_router.py` / `agents/leg_judge.py` / `agents/route_overlay.py` / `scripts/run_plan.py`。
+
+---
+
+## 1. 总览
+
+```
+NL request
+  └─ FlowPlanner.plan()            合成 plan（一次 LLM，static one-shot，不做分步重规划）
+       ├─ resolve_app_routes()     每个 app step 用三段式 router 定 app+capability
+       │    └─ _fill_prompt_template / _maybe_localize_prompt  填 submit prompt
+       ├─ validate_plan()          本地校验（id 合法 / {var} 引用 / handoff 后接 ask_user / bind 唯一）
+       └─ 落盘 manifests/_generated/*.yaml
+  └─ FlowRunner.run()              按 step 顺序执行
+       ├─ app_step    → spawn `python -m agents.native_runner` 子进程（一 leg = 一 app + 一 capability）
+       ├─ ask_user    → 终端收人类输入（可渲染 select_from 选择列表）
+       └─ extract     → 文本 LLM 把上一 leg 回复解析成结构化 JSON
+       blackboard：{var}/{var.field} 在 step 间传值
+```
+
+关键设计取舍：
+
+- **Static one-shot planning**：planner 一次吐出整张计划，**不**在这里做分步重规划。
+- **plan 复用 flow yaml 形态**（`app_step` / `ask_user` / `extract` / `bind`），所以**不需要新 executor**，`FlowRunner` 直接执行。没有单独的 `inputs` 块——请求是具体的，字面值直接 bake 进 step prompt。
+- **每个 app step 是全新子进程**，不复用一个长生命周期 RelayAgent 跨 App：plan cursor / chat history 都是 single-card 作用域的。
+- **router 在子进程里被旁路**：`RELAY_FORCE_CAPABILITY` + `RELAY_INVOCATION_TEXT` 让子进程跳过路由 LLM 调用，直接进 plan building。
+
+## 2. Plan 合成（`FlowPlanner.plan`，`_PLANNER_SYSTEM`）
+
+输入：`build_catalog()` 产出的全 App catalog（含每个 capability 的 id / description / example_prompts / executable / `handoff_to_user_required` / `x_skip_wait_for_reply`） + 用户 NL。
+
+输出 plan（`json` fence，`temperature=0`）：
+
+```json
+{
+  "description": "<一句话计划摘要>",
+  "apps_required": [{"app_id": "...", "use_capability": "..."}],
+  "steps": [ <step>, ... ]
+}
+```
+
+**step 两类：**
+
+- **App step**：`{id, app?, capability?, prompt, extract?, bind?}`
+  - `app` / `capability` 是 **provisional**（暂定）：planner 只管拆任务 + 写每步具体 prompt，最终 app/capability 由后面的 matrix router 定。
+  - `extract`（可选，仅当下游要消费结构化数据）：`{prompt, bind_to_array_key}`。
+  - `bind`（可选，下游不需要就省）。
+- **Ask-user step**：`{id, type:"ask_user", bind, prompt_header, select_from?, item_label?}`——把控制交回人类再继续；`select_from` 渲染编号选择列表。
+
+**planner 的硬规则**（system prompt 内）：
+
+1. 只用 catalog 里出现的 id，绝不发明。
+2. step 间传值靠上游 `extract`+`bind`，下游 `{var}`/`{var.field}` 引用；**每个 `{var}` 必须由更早的 step bind 产生**。
+3. 回复是「用户该从中挑一个的列表」→ 插 `ask_user` + `select_from`。
+4. **`handoff_to_user_required` capability 永不作为非终态的最后动作**：若它不是整个任务的最后一步，**必须**后接 `ask_user`（展示 agent surfaced reply → 收用户答案 → 再接一个消费答案的 app step，且**重述完整意图**因为它跑全新 agent 会话）。若它**就是**最后一步（如最后打车），可作终态——它自己的 in-app handoff 就是用户最终确认。`x_skip_wait_for_reply` 的 step 不抓文本回复，别给它 `bind`/`extract`。
+5. prompt 优先用用户原话；每个 app-step prompt 默认用该 App 第一个 `locale` 语言（用户显式要别的语言才换）；专名/地址/产品名/代码/URL/邮箱/id/引用原文保留原语言。
+6. 单 App 请求 OK——一步计划即可。
+7. 现有 App 组合无法满足 → 返回 `{"unsatisfiable": true, "reason": "..."}`。
+
+## 3. 三段式路由（`capability_matrix_router.route`）
+
+单 App NL 路由策略的可复用版。`docs/app_capability_matrix.csv` 是 **cap × app 归属的 source of truth**；catalog 仅作 availability 校验（剔除 matrix 里指向已不存在 (app,cap) 的 stale 项）。
+
+- **Stage 0 — 固化短路**（route overlay，见 §9）：当传入 `route_key`+`overlay` 时，三段式**之前**先查固化表——命中且 `(app,cap)` 仍在 catalog → 直接返回，**0 次 LLM**。冷表/低置信回落下面三段，行为不变。
+- **Stage 1 — 垂类预筛**（`_stage1_prefilter`）：给 LLM 一份**不含 `foundation_llm`** 的垂类 capability 菜单（id+desc），选 ≤3 个最可能命中的 cap id。垂类都不合适就返回空 list。
+- **Stage 2 — rerank**（`_stage2_rerank`）：把 stage-1 命中的 cap × matrix 授权的可运行 App 展开成 (app, capability) 选项（带 desc / 例子 / locale），LLM 选**唯一**最佳并写 goal 句子。
+  - **早退**：选项只剩 1 个直接返回，不调 LLM。
+  - LLM 返回 `kind:"none"` 或选了 shortlist 外的 pair → 回落 stage-3。
+  - 命中垂类 cap 但 matrix 授权 0 个可运行 pair → 抛错（不静默吞）。
+- **Stage 3 — foundation 兜底**（`_stage3_foundation`）：垂类都不 fit 才进。**这是结构上独立的一段，不是 prompt 里一句提示**——在 foundation_llm App 里选最佳通用助手并写 goal。
+
+`route(..., preserve_goal=True)`：flow 规划只用 router 选 app/capability，**保留 planner 自己的 templated prompt**（把 `goal` 强制设回原 NL，不让 router 改写措辞）。
+
+> **locale policy**：goal 句子默认用所选 App 第一 locale 语言；用户显式要别的语言才换；专名/地址等保留原文。三段都带这条。
+
+## 4. 路由后填 prompt（`_route_one_step`）
+
+入口先算并盖上 `step["x_route_key"]`（归一化 prompt 的 sha1，供 §9 固化回路；复用已持久化的 key 避免 cache 重跑漂移），并把 `route_key`+`overlay` 传给 router。只有路由完知道了 capability，才知道用哪个模板，所以填 prompt 在这步：
+
+- capability 有 `prompt_template` → `_fill_prompt_template()`（抽槽位填固定模板），**跳过** `_maybe_localize_prompt`（模板本就按 App locale 写）。任何失败硬错。
+- 否则 → `_maybe_localize_prompt()`：原 free-synthesis prompt 若与 App locale 不兼容且用户没显式指定语言，调一次 LLM 改写成目标语言。改写**必须保持 `{var}` 占位符集合不变**，否则丢弃改写保留原文。
+
+完整 prompt 模板机制见 [`prompt_template.zh.md`](prompt_template.zh.md)。
+
+## 5. 本地校验（`_validate`，硬失败）
+
+合成完（含路由）跑本地校验，命中任何一条抛 `PlanValidationError`（带完整 error list；**LLM repair loop 是 `_repair` 里刻意保留的 TODO，暂为 no-op**，宁可硬失败也不静默执行坏 plan）：
+
+- step 必须是 object；`id` 唯一；`bind` 名唯一。
+- app step：`app`/`capability`/`prompt` 非空；`app` 在 catalog 内；`capability` 属于该 app。
+- prompt / `extract.prompt` 里每个 `{var}` 必须**已被更早 step 产生**。
+- **Rule 4**：mid-flow 的 `handoff_to_user_required` leg 必须后接 `ask_user`；作为**最后一步**的 handoff leg 是合法终态。
+- `x_skip_wait_for_reply` 的 cap 不能带 `bind`/`extract`。
+- ask_user：必须有 `bind`；`select_from` 必须已 bound；`prompt_header` 的 `{var}` 必须已 bound。
+
+路由阶段还会清理：`_drop_unused_no_reply_binds`（no-reply step 上下游没人引用的装饰性 `bind`/`extract` 去掉）、`_refresh_apps_required`（按实际路由结果重建 `apps_required`）。
+
+## 6. 执行（`FlowRunner.run`）
+
+按 step 顺序跑，blackboard `self.bb` 起空、随 step bind 增长。`render()` 做 `{var}`/`{var.field}` 替换（缺键 → `''`）。
+
+**App step（`_run_app_step`）：**
+
+- 每个 leg 一个全新 `python -m agents.native_runner <app> <prompt>` 子进程。
+- 子进程 env：`RELAY_FORCE_CAPABILITY`/`RELAY_INVOCATION_TEXT`（旁路 router）、`RELAY_SKIP_OPEN_APP=1`+`RELAY_AGENT_LAUNCH=1`（deferred-launch：冷启动放 agent 首帧 predict，把进程/leg 启动开销排除在 leg 墙钟外）、`RELAY_REPLY_OUT`（回复 JSON）、`RELAY_SUMMARY_OUT`（summary）、`RELAY_WALL_OUT`（agent 写 framework-excluded `wall_clock.json`）。
+- stdin 喂 `DEVNULL`：末尾 ask_user handoff 以 EOF 干净收尾，不阻塞 flow。
+- **每 leg traj 单独存**：每个 flow run 有自己的 traj root `traj_logs/plan_<app1>_<app2>..._<ts>/`，每 leg 一个 `NN_<id>/`。子进程跑完把全局 `traj_logs/user_task/` copytree 进本 leg 目录（下个 leg 启动会轮转掉全局目录），best-effort，不破坏 flow。
+- **回复 / 硬信号**：从 `RELAY_REPLY_OUT` 读 reply。需要 reply（有 `bind`/`extract`）却没拿到 → 抛错。no-reply leg 走 `_assert_output_free_step_completed`：必须 `rc==0` 且 last_action ∈ {ask_user, answer} 或 (finished 且 goal complete)，否则抛错。
+- **Leg judge**（语义层，见 §7）：硬信号之上的「自信地答错」检测。
+
+**Ask-user step（`_run_ask_user`）：** `select_from` 渲染编号列表（`item_label` 模板控制每项显示），用户输入经 `_resolve_choice`（编号 / 子串匹配 label 或 name / 空选第一项）；或纯 freeform。EOF → 空。
+
+**Extract（`_extract`）：** 对 `.env` 同端点跑文本-only chat completion，把上一 leg 回复解析成 fenced JSON；`bind_to_array_key` 从结果对象里拎出某 key。
+
+## 7. Leg Judge（`leg_judge.py`，语义结果判定）
+
+**leg** = 一个 native-runner 子运行，钉死一 app + 一 capability。`flow_runner` 的硬信号（崩溃 / 空回复 / 非终态）只抓**显性**失败，区分不了「自信地答错」和「答对」。
+
+- 镜像 MobileWorld `BaseTask.is_successful` 契约（`-> (score, reason)`，1.0 成功 / 0.0 失败），但开放世界无 per-task ground-truth oracle，**改为让 VLM 读** leg 的 goal + 抓到的回复 + 最后屏幕，三态分类：**`loading`**（仍在进行，结果未定，**不算失败**）/ **`success`** / **`failure`**。
+- **取最后 n 帧**（`final_frames`，默认 2 帧，StepLogger 落的 pre-action PNG）：发最后两帧而非一帧，让 judge 能区分卡死/loading vs 已 settle 的终态。
+- **handoff leg**（terminal_action == `ask_user`）改用 `_SUCCESS_HANDOFF` 定义——把最终决定交回用户是**预期不是失败**；非 handoff 用 `_SUCCESS_OUTCOME`（动作真做了 / 信息真显示）。
+- **loading-retry**（`flow_runner._judge_leg`）：首判 `loading` 时（如 live_navigation 点 CTA 后地图还在转），等 `RELAY_LEG_JUDGE_LOADING_WAIT`(2s) 用 `screencap()` 抓**当前**帧重判，最多 `RELAY_LEG_JUDGE_LOADING_RETRIES`(3) 次，settle 即停。只有 loading 才付这个代价。
+- **best-effort**：任何错误（无帧 / LLM 挂 / 无法解析）返回 `UNKNOWN`(`judged=False`)。**caller 绝不能让 judge 失败中断 flow**——按 CLAUDE.md fallback policy surface 后继续。`LegVerdict.score`（1.0/0.0/-1.0）落 `leg_verdict.json` 存到 leg 目录旁。`RELAY_LEG_JUDGE=0` 关。
+- **折回固化表**：verdict 写盘后，`_judge_leg` 末尾调 `overlay.record(step["x_route_key"], ..., verdict.status)`，把这条 verdict 折进路由固化回路（§9）。这是固化表的**唯一写入点**，复用现有 verdict，不增加任何 LLM 调用。
+
+## 8. Phase-A / Phase-B Handoff
+
+- **Phase A（现状）**：handoff 在 flow 粒度——handoff leg 后接 flow-level `ask_user`，再起一个**全新** leg 消费答案。会丢 in-app 会话状态，所以后续 leg 必须重述完整意图。
+- **Phase B（TODO，`flow_runner` 内注释）**：same-session handoff round-trip。leg 带 `resume:true` 时不用 EOF 关 stdin，保活子进程并接一条 flow⇄agent 通道（fifo/文件），让 in-app agent 的 handoff ask_user 阻塞等答案、在**同一会话**里 resume `predict()`，保住 in-app 状态。
+
+## 9. 路由固化（route overlay，trace-guided solidification）
+
+把 §7 的 leg verdict 从"只写日志"变成路由优化器的输入：被反复确认 `success` 的 `(意图 → app/capability)` 决策**固化成表查**，下次同意图零 LLM 命中；反复 `failure` 的自动失效、回落三段式。代码 `agents/route_overlay.py`，存储 `traj_logs/route_overlay.json`（git-ignored 学习产物，**非权威**；matrix CSV 仍是 source of truth，提升回 matrix 是独立人工 review 步骤）。
+
+**回路：**
+
+```
+合成 prompt ──compute_route_key(模式 a/b, 默认 b)──► step["x_route_key"]（随 yaml 持久化）
+   │  §3 Stage-0 route 短路读                      │  §7 leg judge 写
+   ▼                                               ▼
+route(route_key, overlay):                  _judge_leg 末尾:
+  lookup(key) 命中且 (app,cap)∈catalog          overlay.record(x_route_key, app, cap, status)
+    → 直接返回, 0 LLM                              success→consec_fail 清零 / failure→consec_fail++
+  否则 → 三段式 LLM                                原子写 route_overlay.json
+```
+
+**固化判定（`lookup`）**：某 `(app,cap)` 满足 `success ≥ MIN_HITS(3)` 且 `success_rate ≥ RATE(0.8)` 且 `consec_fail < MAX_FAILS(2)` 即返回（多个命中取 success 最高者）；否则 None → 回落 LLM。冷表/低置信永不短路，所以 **P0"影子期"天然内置**——`record` 一直在攒数据，`lookup` 在够格前都不生效（开/关 overlay 行为完全一致）。
+
+**自纠**：连续 `MAX_FAILS` 次 `failure` 暂停该项固化（回落 LLM 重选）；一次 `success` 清零 `consec_fail` 即恢复。`loading`/`unknown` 记录但**中性**（不进 rate 分母、不动 consec_fail）。
+
+**stale 守卫**：固化命中但 `(app,cap)` 已不在 catalog（manifest 改动 / 能力下线）→ 不短路，warning 后回落 live。
+
+**route_key（`compute_route_key`，`RELAY_ROUTE_KEY_MODE`，默认 `b`）**：
+
+- **模式 `a`（value-bearing）**：归一化（lowercase + 折空白）synthesized prompt 的 `sha1[:16]`。只复用重复 / 近似意图，与 plan 缓存（exact-string）同构。
+- **模式 `b`（value-independent，默认，P3）**：`provisional_cap | provisional_app | locale_bucket` 的 `sha1`，带 `b:` 前缀。键在 planner **暂定 capability** + app 提示 + **请求语言桶**（CJK / latin 粗分）上，不含字面值——于是"导航去人民广场""导航去虹桥机场"**共享一条固化路由**（跨意图复用，即便 plan 缓存 miss 也省三段式）；而中文导航（高德）与英文导航（Gemini）因 locale 桶不同**不会被错误合并**。无暂定 capability 时**安全回落** `a`。
+
+**key 稳定性**：`_route_one_step` 用 `step.get("x_route_key") or _compute_route_key(prompt, provisional_cap=..., provisional_app=...)`——cache 命中重跑时 `prompt` 已是填充后文本、`capability` 已是路由后的终值（非暂定），复用持久化 key 才不漂移。两种模式的 key 可在同一 store 共存（`b:` 前缀区分）。
+
+**best-effort**：lookup / record 任何异常只 warning，坏 JSON 当空表，绝不中断 plan / flow。原子写（temp + `os.replace`）保证跑崩也是合法 JSON。
+
+**三层缓存（由浅入深，逐层省 LLM）**：
+
+| 层 | 命中省掉 | 触发 | 日志证据 |
+| --- | --- | --- | --- |
+| plan 缓存 | 合成 plan 的 LLM | NL 规范化 exact-string 命中 `manifests/_generated/*.yaml` | `cache hit → ...yaml` |
+| route 固化 | 三段式 3 次 LLM | `success ≥ 3` 且 `rate ≥ 0.8` 且 `consec_fail < 2` | `route solidified -> ... (0 LLM)` |
+| (基线) 设备执行 | — | 始终发生 → 喂 leg judge → overlay | leg judge + overlay recorded |
+
+**Promote（`scripts/promote_routes.py`，只读）**：把 trace 学到的高置信路由摆出来供人工决定是否折回 matrix——**绝不写 matrix**（CSV 是手维护 source of truth）。扫 overlay，按更高的门槛（`RELAY_PROMOTE_MIN_HITS` 默认 5 / `RATE` 默认 0.9）筛出 `(intent → app/cap)`，标注每条在 matrix 里**已授权**（确认学到的偏好与 matrix 一致）还是**未列**（候选加 ✓ 或忽略的 stale 项）。`--csv` 额外吐 review 行供人粘贴。纯逻辑、无设备/LLM/网络。
+
+**开关 / 阈值**：`RELAY_ROUTE_OVERLAY`(默认1) / `RELAY_ROUTE_OVERLAY_PATH` / `RELAY_ROUTE_KEY_MODE`(默认 `b`) / `RELAY_ROUTE_SOLIDIFY_HITS`(3) / `RELAY_ROUTE_SOLIDIFY_RATE`(0.8) / `RELAY_ROUTE_MAX_FAILS`(2) / `RELAY_PROMOTE_MIN_HITS`(5) / `RELAY_PROMOTE_MIN_RATE`(0.9)。

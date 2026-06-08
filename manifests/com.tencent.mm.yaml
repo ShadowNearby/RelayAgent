@@ -83,6 +83,15 @@ embedded_agent:
         finding nearby shops, restaurants, services, attractions, or public
         place information surfaced as search-backed answers. It does not start
         navigation, book, order, or pay.
+      # 固定提交模板——规划 LLM 只抽 {poi}/{place}（限定词并入 poi），措辞固定。
+      prompt_template: "查找[{place}附近的]{poi}"
+      prompt_slots:
+        - name: poi
+          desc: "目标地点类型,含限定词,如'24小时便利店'/'评分高的咖啡店'"
+          required: true
+        - name: place
+          desc: "参照位置,如'徐家汇地铁站14号口';未指明则留空"
+          required: false
       example_prompts:
         - "上海自然博物馆南门附近有什么咖啡店"
         - "搜一下徐家汇地铁站14号口周边24小时便利店"
@@ -100,7 +109,7 @@ embedded_agent:
         response with no partner-app handoff.
       example_prompts:
         - "今天上海天气怎么样"
-        - "上海交通大学最近有什么新闻"
+        - "上海迪士尼乐园最近有什么新闻"
         - "解释一下量子纠缠"
       executable: false
       handoff_to_user_required: false

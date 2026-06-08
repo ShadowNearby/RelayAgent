@@ -18,6 +18,7 @@ from openai import OpenAI
 
 from agents.card_catalog import clean_text
 from agents.locale_policy import first_locale, locale_policy_text
+from agents.route_overlay import RouteOverlay
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MATRIX_CSV = REPO_ROOT / "docs" / "app_capability_matrix.csv"
@@ -355,13 +356,36 @@ def route(
     model: str,
     *,
     preserve_goal: bool = False,
+    route_key: str | None = None,
+    overlay: "RouteOverlay | None" = None,
 ) -> dict[str, Any]:
     """Route one natural-language task to one app/capability.
 
     `preserve_goal` lets flow planning use the router only for app/capability
     selection while keeping the planner's templated prompt intact.
+
+    `route_key` + `overlay` enable trace-guided solidification: when the overlay
+    has a confidently-successful (app, capability) for this key (and it is still
+    in the catalog), return it directly — ZERO LLM calls — instead of running
+    the three stages. A cold or low-confidence key falls through to the LLM
+    stages unchanged. See agents/route_overlay.py.
     """
     cat_index = _catalog_index(catalog)
+
+    if overlay is not None and route_key:
+        hit = overlay.lookup(route_key)
+        if hit is not None and hit in cat_index:  # guard against a stale pair
+            app_id, cap_id = hit
+            logger.info(f"route solidified -> {app_id} / {cap_id} (0 LLM, key {route_key})")
+            return {
+                "kind": "app",
+                "app_id": app_id,
+                "capability_id": cap_id,
+                "goal": nl,
+                "reason": "solidified from prior successful runs (route overlay)",
+            }
+        if hit is not None:  # solidified but now missing from the catalog
+            logger.warning(f"route overlay pair {hit} for {route_key} not in catalog; routing live")
 
     cap_ids = _stage1_prefilter(nl, matrix, llm, model)
     if cap_ids:

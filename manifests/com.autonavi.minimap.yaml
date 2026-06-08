@@ -64,6 +64,15 @@ embedded_agent:
         POI and nearby search in Amap for shops, restaurants, gas stations,
         attractions, and other local places. Returns list/map-marker results
         only; it does not start navigation, order, or purchase.
+      # 固定提交模板——规划 LLM 只抽 {poi}/{place}（限定词并入 poi），措辞固定。
+      prompt_template: "查找[{place}附近的]{poi}"
+      prompt_slots:
+        - name: poi
+          desc: "目标地点类型,含限定词,如'24小时便利店'/'加油站'"
+          required: true
+        - name: place
+          desc: "参照位置,如'复旦大学邯郸校区正门';未指明则留空"
+          required: false
       example_prompts:
         - "搜复旦大学邯郸校区正门附近24小时便利店"
         - "上海世博展览馆北入口附近有什么加油站"
@@ -91,6 +100,13 @@ embedded_agent:
         Turn-by-turn live navigation in Amap. The assistant can prepare the
         destination and route, but starting live guidance affects real-world
         movement and should be confirmed by the user.
+      # 固定提交模板（zh-CN）——规划 LLM 只抽取 {place}；
+      # 用「导航去…」稳定触发高德的导航流程，而非返回路线描述。
+      prompt_template: "导航去{place}"
+      prompt_slots:
+        - name: place
+          desc: "目的地名称或地址"
+          required: true
       example_prompts:
         - "开始导航去浦东足球场3号门"
         - "导航去中山医院门诊楼附近最近的地铁站入口"
@@ -106,6 +122,15 @@ embedded_agent:
         Ride hailing through Amap's aggregator. The assistant helps confirm
         origin/destination, car type, estimate, and payment path, with every
         irreversible confirmation left to the user.
+      # 固定提交模板——规划 LLM 只抽 {place}/{car_type},措辞固定以稳定触发打车流程。
+      prompt_template: "叫一辆[{car_type}]车去{place}"
+      prompt_slots:
+        - name: place
+          desc: "目的地名称或地址"
+          required: true
+        - name: car_type
+          desc: "车型,如经济型/舒适型;未指明则留空"
+          required: false
       example_prompts:
         - "叫一辆经济型车去前滩太古里木区北门"
         - "帮我叫个车去上海图书馆东馆南门"
