@@ -24,6 +24,7 @@ dependencies = [
     # kept conservative so validator behaviour matches the resolved lock.
     "pydantic<2.11",
     "socksio>=1.0.0",
+    "mobile-world",
 ]
 
 classifiers = [
@@ -66,3 +67,6 @@ include = [
     "LICENSE",
     ".env.example",
 ]
+
+[tool.uv.sources]
+mobile-world = { git = "https://github.com/ShadowNearby/MobileWorld" }

@@ -1,6 +1,6 @@
 # 用 MobileWorld 跑真机测试
 
-记录如何用 **MobileWorld**（独立仓库，本机在 `/home/yjs/MobileWorld`）通过 ADB 驱动真机，
+记录如何用 **MobileWorld** 通过 ADB 驱动真机，
 以 **SJTU IPADS 网关的 qwen** 作为 agent 大脑，跑一个临时目标（如让 Google Maps 导航）。
 
 > MobileWorld 已从 RelayAgent 主仓库移除（见项目记忆「Dropped MobileWorld」），
@@ -12,8 +12,11 @@
 
 - 物理 Android 机 USB 连接，已开 USB 调试（`adb devices` 能看到 `device`）。
 - 已装 ADB platform-tools。
+- MobileWorld 通过以下任一方式提供：
+  - 安装成当前 `uv` 环境里的 Python package / console command（`uv run mw ...` 可用）；
+  - 作为仓库内 git submodule 放在 `third_party/MobileWorld`。
 - AdbKeyboard 用于文本输入（MobileWorld 会自动装；手动：
-  `adb install /home/yjs/MobileWorld/ADBKeyboard.apk` 后
+  `adb install third_party/MobileWorld/ADBKeyboard.apk` 后
   `adb shell ime enable com.android.adbkeyboard/.AdbIME`）。
 - 目标 app 已装在机上（本机 Pixel 9 已装 `com.google.android.apps.maps`）。
 - 多设备时用 `RELAY_ANDROID_SERIAL` / `ANDROID_SERIAL` 选设备。
@@ -32,38 +35,42 @@
 ## 步骤
 
 ```bash
-cd /home/yjs/MobileWorld
+cd RelayAgent
 
-# 1. 装依赖（首次）
+# 1. 提供 MobileWorld（任选其一）
+# A. Python package / console command：确认 `uv run mw --help` 可用
+uv run mw --help
+
+# B. git submodule：放在仓库内相对路径
+git submodule add https://github.com/ShadowNearby/MobileWorld third_party/MobileWorld
+cd third_party/MobileWorld
 uv sync
+cd ../..
 
-# 2. 起后端 server（默认 0.0.0.0:6800，桥接 model ↔ 设备）
-#    若已在跑会报 "address already in use"，直接复用即可，不用重起。
-uv run mw server          # 等价 uv run mobile-world server
-
-# 2b. 确认 server 在线且认到设备（ok:true + 设备序列号）
-curl -s http://127.0.0.1:6800/health
-#   {"ok":true,"devices":["46180DLAQ004LW"],"device_status":{...:true}}
-
-# 3. 另开一个终端，跑临时目标（英文 goal 直接传）
-#    LLM_API_KEY 从 RelayAgent 的 .env 取，别硬编码进命令历史
-uv run mw test "Live navigate to the Bund by Google Map" \
-    --agent-type general_e2e \
-    --model-name qwen \
-    --llm-base-url http://yjs-ipads.ipads-lab.se.sjtu.edu.cn:3000/v1 \
-    --aw-host http://127.0.0.1:6800 \
-    --api-key "$LLM_API_KEY" \
-    --max-round 25 --timeout 600
+# 2. 跑临时目标（脚本会读取 .env、复用/启动 MobileWorld server、预开目标 app）
+uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Map"
 ```
 
 > 旗标连字符/下划线两种写法都收（`--model-name` == `--model_name`）。
 > `mw test` 是临时单任务入口，**不做 task 初始化/校验**，直接对当前设备屏幕开跑。
 > `--max-round` 限步数（默认 -1 不限），`--timeout` 限墙钟秒数。
 
+脚本默认等价于：
+
+```bash
+uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Map" \
+  --app com.google.android.apps.maps \
+  --agent-type general_e2e \
+  --model-name qwen \
+  --llm-base-url http://yjs-ipads.ipads-lab.se.sjtu.edu.cn:3000/v1 \
+  --max-round 25 \
+  --timeout 600
+```
+
 把 key 喂进去而不落进 shell history 的写法：
 
 ```bash
-export LLM_API_KEY=$(grep '^LLM_API_KEY=' /home/yjs/RelayAgent/.env | cut -d= -f2-)
+export LLM_API_KEY=$(grep '^LLM_API_KEY=' .env | cut -d= -f2-)
 uv run mw test "..." ... --api_key "$LLM_API_KEY"
 ```
 
@@ -76,10 +83,8 @@ uv run mw test "..." ... --api_key "$LLM_API_KEY"
 （外滩那次预开 Maps 后 5 步搞定）：
 
 ```bash
-adb shell am force-stop com.google.android.apps.maps
-adb shell monkey -p com.google.android.apps.maps -c android.intent.category.LAUNCHER 1
-sleep 6
-adb shell dumpsys window | grep -m1 mCurrentFocus   # 确认 MapsActivity 在前台
+uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Map" \
+  --app com.google.android.apps.maps
 ```
 
 goal 仍写完整意图（"Live navigate to the Bund by Google Map"），agent 会在 app 内
@@ -88,39 +93,28 @@ goal 仍写完整意图（"Live navigate to the Bund by Google Map"），agent �
 ## 实时看屏 / 录屏
 
 - 看实时设备画面：`uv run mw device`。
-- 录屏：`adb screenrecord` 单段上限 180s，导航演示常会超，用**分段循环录 + ffmpeg 合并**。
-  下面这个脚本（本机存在 `/tmp/mw_rec.sh`）跑前后台起、靠哨兵文件 `/tmp/mw_rec.stop` 收尾：
+- 录屏默认不开启；给脚本加 `--record` 后会自动分段 `adb screenrecord`，任务结束时结束当前分段并用
+  `ffmpeg` 合并到 `recording.mp4`：
 
 ```bash
-#!/usr/bin/env bash
-# 分段录屏：循环 180s screenrecord，出现 /tmp/mw_rec.stop 后停止并 ffmpeg 合并
-set -u
-OUTDIR="$1"; SERIAL="${RELAY_ANDROID_SERIAL:-46180DLAQ004LW}"; ADB="adb -s $SERIAL"
-mkdir -p "$OUTDIR"; rm -f /tmp/mw_rec.stop; i=0; LIST="$OUTDIR/concat.txt"; : > "$LIST"
-while [ ! -f /tmp/mw_rec.stop ]; do
-  dev="/sdcard/mwrec_$(printf %03d $i).mp4"
-  $ADB shell screenrecord --time-limit 180 "$dev"
-  loc="$OUTDIR/chunk_$(printf %03d $i).mp4"
-  $ADB pull "$dev" "$loc" >/dev/null 2>&1 && echo "file '$(basename "$loc")'" >> "$LIST"
-  $ADB shell rm -f "$dev" >/dev/null 2>&1; i=$((i+1))
-done
-[ -s "$LIST" ] && ffmpeg -y -f concat -safe 0 -i "$LIST" -c copy "$OUTDIR/recording.mp4" \
-  >/dev/null 2>&1 && echo "SAVED $OUTDIR/recording.mp4"
+uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Map" --record
 ```
 
-用法（起→跑→收）：
+默认输出到：
 
 ```bash
-OUT=/home/yjs/RelayAgent/recordings/mw_bund_$(date +%Y%m%d_%H%M%S)
-/tmp/mw_rec.sh "$OUT" > /tmp/mw_rec.log 2>&1 &     # 起录屏
-# ... 预开 app + 跑 mw test ...
-touch /tmp/mw_rec.stop                              # 通知收尾
-adb shell pkill -2 screenrecord                     # 结束当前分段，让循环看到哨兵退出
-# 合并后 recording.mp4 落在 $OUT/，可删 chunk_*.mp4 与 concat.txt
+recordings/mobileworld_<timestamp>/recording.mp4
 ```
 
-> 收尾要点：只 `touch` 哨兵不够——当前 `screenrecord` 还在阻塞那 180s，必须 `pkill` 掉
-> 设备端 screenrecord 才会结束本段、循环才看到哨兵退出并合并。
+也可以指定目录：
+
+```bash
+uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Map" \
+  --record-dir recordings/mw_bund_manual
+```
+
+> `adb screenrecord` 单段上限 180s；脚本会循环分段录制。若本机没有 `ffmpeg`，会保留
+> `chunk_*.mp4` 和 `concat.txt`，不做合并。
 
 ## 实测示例（2026-06-07 已跑通）
 
