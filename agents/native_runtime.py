@@ -302,7 +302,10 @@ class StepLogger:
         if os.getenv("RELAY_STEP_LOG", "1") == "0":
             logger.info("step logging OFF (RELAY_STEP_LOG=0)")
             return None
-        override = os.getenv("RELAY_STEP_LOG_DIR")
+        # RELAY_STEP_LOG_DIR overrides the steps location outright; otherwise
+        # ride along with the run's traj dir (RELAY_TRAJ_DIR, set per leg by the
+        # flow runner) so steps/ lands next to traj.json. Default: global dir.
+        override = os.getenv("RELAY_STEP_LOG_DIR") or os.getenv("RELAY_TRAJ_DIR")
         traj_dir = Path(override) if override else Path("traj_logs") / "user_task"
         try:
             return cls(traj_dir)

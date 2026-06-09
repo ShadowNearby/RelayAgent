@@ -29,7 +29,11 @@ if str(REPO_ROOT) not in sys.path:
 
 ENV_FILE = REPO_ROOT / ".env"
 DEFAULT_AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
-TRAJ_DIR = REPO_ROOT / "traj_logs" / "user_task"
+# Where this run's trajectory (traj.json + steps/ + agent_reply.json) lands.
+# Defaults to the shared global dir; the flow runner pins it per leg via
+# RELAY_TRAJ_DIR so each leg writes straight into its own dir.
+_TRAJ_DIR_ENV = os.getenv("RELAY_TRAJ_DIR")
+TRAJ_DIR = Path(_TRAJ_DIR_ENV) if _TRAJ_DIR_ENV else REPO_ROOT / "traj_logs" / "user_task"
 SUMMARY_OUT_ENV = "RELAY_SUMMARY_OUT"
 
 from agents.runtime_config import resolve_llm_config  # noqa: E402
@@ -41,8 +45,12 @@ def _agent_file() -> Path:
 
 
 def _rotate_traj_dir() -> None:
-    """Move a prior user_task/ aside so this run owns traj_logs/user_task/."""
-    if TRAJ_DIR.exists():
+    """Move a prior user_task/ aside so this run owns traj_logs/user_task/.
+
+    When RELAY_TRAJ_DIR pins a per-run dir (e.g. a flow leg), there's no shared
+    dir to reclaim — each leg dir is already unique — so skip the backup rename
+    and just ensure the dir exists and seed an empty traj.json."""
+    if not _TRAJ_DIR_ENV and TRAJ_DIR.exists():
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup = TRAJ_DIR.parent / f"user_task_backup_{ts}"
         try:
