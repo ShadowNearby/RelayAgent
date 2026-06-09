@@ -19,10 +19,16 @@ embedded_agent:
       method: tap_sequence
       steps:
         # Top-left menu icon on home (any main tab: 首页/市集/消息/我).
-        # ImageView, clickable, content-desc="菜单", bounds [24,183,119,278]
-        # at 1080×2424. Tapping it lands DIRECTLY in the 点点 chat — there
-        # is no intermediate drawer despite the parent being a DrawerLayout.
-        - tap: { accessibility_id: "菜单" }
+        # ImageView, clickable, bounds [24,183,119,278] at 1080×2424.
+        # In the English locale the content-desc is no longer "菜单", so we
+        # can't anchor by accessibility_id — tap the fixed top-left position
+        # by ratio instead. Center (71.5, 230.5) → x≈0.0662, y≈0.0951.
+        # Tapping it lands DIRECTLY in the 点点 chat — there is no
+        # intermediate drawer despite the parent being a DrawerLayout.
+        - tap:
+            screen_fraction:
+              x_ratio: 0.0662
+              y_ratio: 0.0951
 
   invocation:
     input:

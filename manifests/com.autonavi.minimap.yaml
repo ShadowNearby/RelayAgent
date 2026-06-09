@@ -85,14 +85,16 @@ embedded_agent:
     - id: route_planning
       description: >
         Route planning in Amap, including destination disambiguation, distance,
-        ETA, traffic information, and route options. The assistant may show a
-        Navigate CTA, but scripted flows stop before live turn-by-turn guidance
-        so the user can choose mode and confirm.
+        ETA, traffic information, and route options. Informational: it returns
+        the route/distance/ETA as a reply that downstream steps can consume. The
+        assistant may show a Navigate CTA, but planning itself is not a handoff —
+        starting live turn-by-turn guidance is the separate `live_navigation`
+        capability (which the user confirms).
       example_prompts:
         - "导航到上海科技馆2号门"
         - "我现在去上海南站南广场进站口要多久"
       executable: true
-      handoff_to_user_required: true
+      handoff_to_user_required: false
       typical_latency_seconds: 8
 
     - id: live_navigation

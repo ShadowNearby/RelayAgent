@@ -91,13 +91,15 @@ embedded_agent:
       description: >
         Route planning via Tongyi's map orchestration, including address parsing,
         destination disambiguation, route options, distance, ETA, and traffic
-        estimates. It may surface a navigation CTA, but scripted flows stop
-        before live turn-by-turn guidance so the user can confirm.
+        estimates. Informational: it returns the route/distance/ETA as a reply
+        that downstream steps can consume. It may surface a navigation CTA, but
+        planning itself is not a handoff — starting live turn-by-turn guidance is
+        the separate `live_navigation` capability (which the user confirms).
       example_prompts:
         - "从上海儿童医学中心门诊楼到虹桥火车站南进站口怎么走"
         - "我现在去张江人工智能岛7号楼大概要多久"
       executable: true
-      handoff_to_user_required: true
+      handoff_to_user_required: false
       typical_latency_seconds: 12
       x_capture_full_reply:
         max_scrolls: 6

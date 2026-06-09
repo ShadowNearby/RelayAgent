@@ -328,9 +328,13 @@ embedded_agent:
 
     - id: send_sms
       description: >
-        SMS send or SMS-draft behavior in Gemini. Sending is unverified and
-        potentially irreversible, so never automate a final SMS send action
-        without explicit user approval and a visible system confirmation.
+        The act of SENDING / transmitting an SMS to a recipient through Gemini
+        (recipient + final message body together). This is ONLY the dispatch
+        step — composing, formatting, or assembling the message text is NOT this
+        capability (use a general text/reasoning capability for that, then send
+        the finished text here). Sending is unverified and potentially
+        irreversible, so never automate a final SMS send action without explicit
+        user approval and a visible system confirmation.
       # Fixed submit template — planner extracts recipient/message only; the
       # final send confirmation is still left to the user via handoff.
       prompt_template: 'Send a text message to {contact}: "{message}"'
@@ -347,31 +351,6 @@ embedded_agent:
       executable: true
       handoff_to_user_required: true
       typical_latency_seconds: 25
-
-    - id: find_gallery_image
-      description: >
-        Finding images/photos from the device gallery and answering questions
-        about them via Gemini's attachment menu or camera/gallery. The user
-        selects a photo from the gallery and asks about its contents
-        (screenshot/photo Q&A, object identification, extraction).
-      example_prompts:
-        - "Choose a refrigerator photo from the gallery and identify the ingredients inside."
-        - "Open the whiteboard photo in the gallery and read the content on it."
-      executable: true
-      handoff_to_user_required: true
-      typical_latency_seconds: 30
-      x_attachment_entry:
-        text_or_desc: "Add attachment"
-        screen_fraction:
-          x_ratio: 0.1463
-          y_ratio: 0.9175
-      x_attachment_options_observed:
-        - "Gallery"
-        - "Camera"
-        - "Images"
-      x_tool_menu_entry:
-        open_menu: "Add attachment"
-        text_or_desc: "Images"
 
     - id: generate_slides
       description: >

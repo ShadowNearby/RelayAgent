@@ -1,0 +1,140 @@
+spec_version: "0.1"
+card_version: "0.1.0"
+app_id: "com.microsoft.copilot"
+app_name: "Copilot"
+platforms: ["android"]
+locale: ["en-US"]
+
+embedded_agent:
+  name: "Copilot"
+  description: >
+    Microsoft Copilot Android app. Launcher package and visible UI package are
+    both `com.microsoft.copilot` (main activity
+    `com.microsoft.copilotn.MainActivity`). The main surface is a single-thread
+    chat agent with a text input and a voice/Copilot Voice slot. It is a
+    general-purpose conversational assistant strongest at information tasks,
+    writing, summarization, translation, reasoning, and public web/search
+    retrieval. It cannot operate non-Microsoft third-party accounts such as
+    Taobao, Slack, X/Twitter, ride-hailing, hotel/flight/train booking, or food
+    delivery, and is exposed here with foundation-LLM Q&A only.
+
+  entry:
+    primary:
+      # Cold-launch (force-stop + relaunch) lands on a fresh Copilot chat with
+      # the greeting screen and the input field ready, so no tap sequence and no
+      # separate fresh-conversation prep is needed — go straight to input +
+      # submit.
+      method: tap_sequence
+      steps: []
+
+  invocation:
+    input:
+      # Native EditText at the bottom of the chat surface. It exposes no
+      # resource-id and no hint attribute; the visible placeholder is a sibling
+      # TextView reading "Message Copilot". Bounds below are the collapsed,
+      # pre-focus center on Pixel 9 1080x2424.
+      field:
+        text: "Message Copilot"
+        screen_fraction:
+          x_ratio: 0.4898
+          y_ratio: 0.8590
+    submit:
+      # The right-side slot is Copilot Voice when the input is empty and becomes
+      # send once text is present. The send control exposes content-desc "Send"
+      # (on an inner View; the clickable parent has no label), so prefer a11y
+      # grounding over the fixed center ~(968, 2092).
+      trigger:
+        accessibility_id: "Send"
+
+  output:
+    method: none
+
+  capabilities:
+
+    - id: foundation_llm
+      description: >
+        Foundation LLM capability in Copilot: Q&A, explanation, rewriting,
+        translation, brainstorming, summarization, extraction, filtering,
+        sorting, comparison, deduplication, fact-check-style retrieval,
+        arXiv/public-web summaries, arithmetic, unit/date/number conversion, and
+        table transformations. Also covers public-web lookups — GitHub
+        repo/issue/commit info, securities/finance info (stock price, dividend
+        yield, ESG), and weather — all returned as search-style summaries. Pure
+        chat output; source freshness should be verified for high-stakes use,
+        and finance results are informational only, not investment advice.
+      example_prompts:
+        - "Explain the Transformer attention mechanism in three sentences."
+        - "Convert USD 1,234.56 to CNY at an exchange rate of 7.1."
+        - "Look up the main purpose of the GitHub repository openai/codex."
+        - "Look up AAPL's current stock price, dividend yield, and ESG overview, and include sources."
+        - "Check today's weather in Shanghai and give a one-sentence conclusion."
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 8
+
+    - id: poi_nearby_search
+      description: >
+        POI and nearby-place lookup through Copilot's web/search-backed answers.
+        Returns candidate places, addresses, and rough local information, but
+        does not open maps, start navigation, or verify live business status.
+      # Fixed submit template — planner extracts {poi}/{place} only (qualifiers
+      # fold into {poi}); wording stays fixed. {place} is optional: the
+      # `[ near {place}]` segment drops entirely when no place is given.
+      prompt_template: "Find {poi}[ near {place}]"
+      prompt_slots:
+        - name: poi
+          desc: "target place type incl. qualifiers, e.g. 'highly rated coffee shops'"
+          required: true
+        - name: place
+          desc: "reference location, e.g. 'the south gate of Shanghai Concert Hall'; leave empty if unspecified"
+          required: false
+      example_prompts:
+        - "Find three coffee shops near the south gate of Shanghai Concert Hall."
+        - "What indoor venues near Century Park Gate 7 are good for children?"
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 25
+      x_capture_full_reply:
+        max_scrolls: 8
+
+    - id: search_product
+      description: >
+        Product search, recommendation, and comparison through Copilot Shopping
+        (web/search-backed). The assistant parses budget, brand, specs, use
+        case, and reviews, then returns product suggestions, price comparisons,
+        and deal pointers as search-style cards. It does not auto-order or run
+        checkout; purchasing remains a user action in the linked store.
+      example_prompts:
+        - "Find a student-friendly tablet under USD 300."
+        - "Recommend a few lightweight commuter umbrellas for summer."
+        - "Compare the iPhone 17 and the previous generation on value for money."
+      executable: false
+      handoff_to_user_required: false
+      typical_latency_seconds: 20
+      x_capture_full_reply:
+        max_scrolls: 6
+
+provenance:
+  last_verified: "2026-06-09"
+  verified_app_version: "30.0.440527002"
+  verified_os: "android-16"
+  verified_device: "Pixel 9"
+  verification_method: scripted
+  evidence_url: ""
+  x_device_metrics:
+    resolution_px: [1080, 2424]
+    density_dpi: 420
+
+constraints:
+  app_version_min: "30.0.440527002"
+  region: ["US"]
+  network_required: true
+  known_issues:
+    - "Launcher and UI package are both `com.microsoft.copilot`; main activity is `com.microsoft.copilotn.MainActivity`."
+    - "The chat input is a native EditText with no resource-id and no hint attribute; the visible placeholder `Message Copilot` is a separate TextView. The send control is a Compose-style View with sparse accessibility metadata — only an inner `content-desc=Send` node, no resource-id."
+    - "Cold-launch (force-stop + relaunch) already opens a fresh Copilot chat with the greeting screen and input field ready, so no `New chat` tap or other entry step is needed before typing."
+    - "The rightmost input button changes role: empty input opens Copilot Voice; after text entry the same slot becomes send (`content-desc=Send`, visible center ~ (968, 2092) on Pixel 9). Use a11y/text grounding instead of fixed bounds."
+    - "First launch may show an Android location-permission dialog; it is handled by the runtime permission auto-dismiss and is unrelated to the chat surface."
+    - "Feature availability depends on the signed-in Microsoft account, Copilot plan, country/region, and policy. Only foundation-LLM Q&A is exposed in this manifest."
