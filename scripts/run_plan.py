@@ -152,6 +152,12 @@ def _print_preview(plan: dict, catalog: dict, source: str, plan_path: Path | Non
             print(f"  {n}. [ask_user] {tail}bind {s.get('bind')}")
             if s.get("prompt_header"):
                 print(f"        \"{_truncate(s['prompt_header'])}\"")
+        elif s.get("type") == "mobileworld":
+            hint = f" (app hint {s['app']})" if s.get("app") else ""
+            print(f"  {n}. [MobileWorld fallback]{hint} — {s.get('x_fallback_reason') or 'uncovered by RA'}")
+            print(f"        -> {_truncate(s.get('prompt', ''))}")
+            if s.get("bind"):
+                print(f"        -> bind {s.get('bind')}")
         else:
             print(f"  {n}. [agent] {_app_name(catalog, s.get('app'))}/{s.get('capability')}")
             print(f"        -> {_truncate(s.get('prompt', ''))}")
@@ -222,6 +228,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--record", nargs="?", const="", default=None, metavar="DIR",
                    help="Record device screen via adb screenrecord. "
                         "Optional DIR overrides traj_logs/recordings/<ts>/.")
+    p.add_argument("--no-mw-fallback", action="store_true",
+                   help="Disable the MobileWorld fallback: a leg RA can't cover "
+                        "makes the plan unsatisfiable instead of running via "
+                        "MobileWorld's general_e2e agent. Same as RELAY_MW_FALLBACK=0.")
     args, extra = p.parse_known_args(argv)
 
     try:
@@ -236,7 +246,10 @@ def main(argv: list[str] | None = None) -> int:
         f"matrix: {len(matrix['cap_desc'])} capabilities, {len(matrix['app_ids'])} apps"
     )
     llm = OpenAI(base_url=env["LLM_BASE_URL"], api_key=env["LLM_API_KEY"])
-    planner = FlowPlanner(catalog, llm, env["LLM_MODEL"], matrix=matrix)
+    mw_fallback = not args.no_mw_fallback
+    planner = FlowPlanner(
+        catalog, llm, env["LLM_MODEL"], matrix=matrix, mw_fallback=mw_fallback
+    )
 
     # 1) cache lookup, else 2) synthesize + validate + persist.
     plan: dict[str, Any]
@@ -269,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             plan = planner.plan(args.nl)
         except PlanValidationError as e:
             logger.error(str(e))
-            print("\nGenerated plan failed validation; aborting (repair is not implemented yet; see flow_planner._repair TODO).")
+            print("\nGenerated plan still failed validation after LLM repair rounds; aborting.")
             print("Errors:")
             for err in e.errors:
                 print(f"  - {err}")

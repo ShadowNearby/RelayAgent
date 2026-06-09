@@ -16,8 +16,9 @@ Design (see CLAUDE.md + the `project_cross_app_planner` decision notes):
 - App/capability selection is resolved after step synthesis by the shared
   matrix-backed three-stage router. We then validate the plan locally (known
   ids, no dangling `{var}` reference, handoff legs followed by ask_user, unique
-  binds). On failure we hard-fail with the error list — an LLM repair loop is a
-  deliberate TODO (see `_repair`), not yet wired.
+  binds). On a routing or validation error we feed the error list back to the
+  LLM for a corrected plan (`_repair`) and re-route + re-validate, up to
+  `_REPAIR_ROUNDS` rounds; only then do we hard-fail with `PlanValidationError`.
 - `handoff_to_user_required` capabilities are NEVER terminal: the planner
   must follow them with an `ask_user` step (Phase-A handoff round-trip).
 """
@@ -25,13 +26,18 @@ Design (see CLAUDE.md + the `project_cross_app_planner` decision notes):
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
 from loguru import logger
 from openai import OpenAI
 
-from agents.capability_matrix_router import route as route_app_capability
+from agents.capability_matrix_router import (
+    NoRunnableAppForCapability,
+    route as route_app_capability,
+)
+from agents.llm_retry import create_with_retry
 from agents.route_overlay import RouteOverlay, compute_route_key as _compute_route_key
 from agents.locale_policy import (
     appears_compatible_with_locale,
@@ -63,6 +69,59 @@ class PlanValidationError(RuntimeError):
             f"Synthesized plan failed validation ({len(errors)} error(s)):\n  - {joined}"
         )
 
+
+# Max LLM repair rounds: re-prompt with the plan + its validation/routing errors
+# and re-validate, before giving up with PlanValidationError.
+_REPAIR_ROUNDS = 3
+
+# Step type for a MobileWorld fallback leg: a leg RA's manifest/capability
+# routing could not cover, handed to MobileWorld's manifest-free general_e2e
+# agent instead of failing the whole plan. See docs/nl_flow.md "MobileWorld 兜底".
+MW_STEP_TYPE = "mobileworld"
+
+
+def mw_fallback_enabled() -> bool:
+    """Whether an uncoverable leg falls back to MobileWorld instead of failing
+    the plan. Default on; disable with RELAY_MW_FALLBACK=0 (or
+    `run_plan.py --no-mw-fallback`)."""
+    return os.getenv("RELAY_MW_FALLBACK", "1") != "0"
+
+
+def _to_mw_leg(step: dict, reason: str) -> dict:
+    """In place, turn one synthesized app step into a MobileWorld fallback leg.
+
+    Keeps `id` / `prompt` / `bind` / `extract` (MW's final answer text feeds the
+    same blackboard slot an app leg would) and keeps `app` as a *prelaunch hint*
+    only — there is no capability to route. Drops the capability requirement and
+    the coverage-gap marker."""
+    step["type"] = MW_STEP_TYPE
+    step.pop("capability", None)
+    step.pop("x_coverage_gap", None)
+    # Drop the provisional route key stamped before routing failed: a MW leg is
+    # not a matrix route, so it must not feed route solidification.
+    step.pop("x_route_key", None)
+    step["x_fallback_reason"] = reason
+    return step
+
+
+def _mw_whole_request_plan(nl_request: str, reason: str) -> dict:
+    """A one-leg plan that hands the entire request to MobileWorld.
+
+    Used when the planner LLM judges the request unsatisfiable outright (no
+    steps to convert leg-by-leg), so per-leg fallback degenerates to a single
+    MobileWorld leg carrying the original request."""
+    return {
+        "description": f"MobileWorld fallback: {reason}",
+        "apps_required": [],
+        "steps": [
+            {
+                "id": "mw_fallback",
+                "type": MW_STEP_TYPE,
+                "prompt": nl_request,
+                "x_fallback_reason": reason,
+            }
+        ],
+    }
 
 _PLANNER_SYSTEM = """You synthesize a multi-app cowork PLAN from a user's natural-language request.
 
@@ -99,7 +158,7 @@ A step is ONE of:
       "type": "ask_user",
       "bind": "<var name to store the user's choice/answer>",
       "prompt_header": "<what to show the user; may reference {var}>",
-      "select_from": "<var holding a list>",   // OPTIONAL — render a numbered pick list from that list
+      "select_from": "<bare var name (a string, NOT a list/object) that an EARLIER step bound to a list>",   // OPTIONAL — render a numbered pick list from that list
       "item_label": "{name}（{district}）"       // OPTIONAL — how to render each list item
     }
 
@@ -112,7 +171,13 @@ RULES:
    then reference it downstream as {var} or {var.field}. EVERY {var} you reference
    MUST be produced by an EARLIER step's bind.
 3. When a step's reply is a LIST the user should choose from, insert an ask_user
-   step with `select_from` so they can pick one.
+   step with `select_from` so they can pick one. `select_from` MUST be a bare var
+   NAME (a plain string, never a list or object literal) that an EARLIER step
+   already bound to that list. So if the list comes from reading/searching
+   something (a calendar, an inbox, a product search), you MUST first add that
+   read/search app step with an `extract` + `bind` that produces the list, and
+   point `select_from` at that bind. Never reference a var in `select_from` (or
+   `{var}`) that no earlier step binds.
 4. If a capability has "handoff_to_user_required": true and it is NOT the final
    action of the whole task, you MUST follow it with an ask_user step (show the
    agent's surfaced reply via prompt_header, collect the user's answer), then
@@ -132,8 +197,17 @@ RULES:
    names, code, URLs, emails, ids, and quoted literal text in their original
    language.
 6. A single-app request is fine — emit a one-step plan.
-7. If NO combination of the available apps/capabilities can satisfy the request,
-   return instead: {"unsatisfiable": true, "reason": "<short explanation>"}.
+7. A `foundation_llm` capability is a GENERAL knowledge / reasoning / text
+   capability. For information, Q&A, summarization, drafting, explanation, or
+   lookup tasks that no dedicated app capability covers (e.g. explaining a GitHub
+   repo or project, summarizing an arXiv paper, answering a general question),
+   route them to a `foundation_llm` capability rather than declaring the request
+   unsatisfiable.
+8. Only return unsatisfiable when the task REQUIRES a concrete device/app action
+   that no capability provides (e.g. posting to a specific chat platform the
+   catalog lacks, taking a camera photo, controlling an app not in the catalog)
+   AND `foundation_llm` cannot stand in:
+   return {"unsatisfiable": true, "reason": "<short explanation>"}.
 
 No prose outside the fence."""
 
@@ -200,11 +274,15 @@ class FlowPlanner:
         model: str,
         *,
         matrix: dict[str, Any] | None = None,
+        mw_fallback: bool | None = None,
     ) -> None:
         self.catalog = catalog
         self._llm = llm
         self._model = model
         self.matrix = matrix
+        # When True, a leg RA can't cover (or a request judged unsatisfiable) is
+        # handed to MobileWorld instead of failing the plan.
+        self.mw_fallback = mw_fallback_enabled() if mw_fallback is None else mw_fallback
         # Trace-guided route solidification: a confidently-successful route is
         # short-circuited here (0 LLM); leg verdicts feed it from FlowRunner.
         self._overlay = RouteOverlay()
@@ -238,7 +316,7 @@ class FlowPlanner:
             f"User request:\n{nl_request}\n\n"
             "Synthesize the plan JSON now."
         )
-        resp = self._llm.chat.completions.create(
+        resp = create_with_retry(self._llm,
             model=self._model,
             messages=[
                 {"role": "system", "content": _PLANNER_SYSTEM},
@@ -255,28 +333,105 @@ class FlowPlanner:
                 nl_request, data, [f"planner returned a {type(data).__name__}, expected an object"]
             )
         if data.get("unsatisfiable"):
-            logger.info(f"planner: unsatisfiable — {data.get('reason')!r}")
+            reason = data.get("reason")
+            if self.mw_fallback:
+                logger.info(f"planner: unsatisfiable — {reason!r}; MobileWorld fallback (whole request)")
+                return _mw_whole_request_plan(nl_request, str(reason or "no app covers this request"))
+            logger.info(f"planner: unsatisfiable — {reason!r}")
             return data
 
-        if self.matrix is not None:
-            data = self.resolve_app_routes(data, nl_request)
-
-        self.validate_plan(data, nl_request)
-
-        n_legs = sum(1 for s in data["steps"] if not _is_ask_user(s))
-        if n_legs >= 4:
-            # No hard cap (by decision), but a long plan is worth flagging.
-            logger.warning(f"synthesized plan has {n_legs} app legs — review the preview carefully")
-        logger.info(f"planner: {len(data['steps'])} steps ({n_legs} app legs)")
+        # Route → validate → repair loop. resolve_app_routes raises
+        # PlanValidationError on routing errors; _validate returns validation
+        # errors. Either kind feeds an LLM repair round before we give up — up
+        # to `_REPAIR_ROUNDS` re-prompts.
+        for attempt in range(_REPAIR_ROUNDS + 1):
+            errors: list[str] = []
+            coverage_gaps: list[str] = []
+            if self.matrix is not None:
+                try:
+                    data = self.resolve_app_routes(data, nl_request)
+                except PlanValidationError as e:
+                    errors = list(e.errors)
+                    coverage_gaps = list(getattr(e, "coverage_gaps", []))
+            if not errors:
+                errors = self._validate(data)
+            if not errors:
+                n_legs = sum(1 for s in data["steps"] if not _is_ask_user(s))
+                if n_legs >= 4:
+                    # No hard cap (by decision), but a long plan is worth flagging.
+                    logger.warning(f"synthesized plan has {n_legs} app legs — review the preview carefully")
+                tail = f" after {attempt} repair round(s)" if attempt else ""
+                logger.info(f"planner: {len(data['steps'])} steps ({n_legs} app legs){tail}")
+                return data
+            if attempt == _REPAIR_ROUNDS:
+                # If repair never managed to avoid a capability that no app
+                # provides, the request is unsatisfiable with the current apps —
+                # report that rather than a validation failure.
+                if coverage_gaps:
+                    reason = (
+                        "Required capability has no app authorized in the catalog: "
+                        + "; ".join(coverage_gaps)
+                    )
+                    if self.mw_fallback:
+                        return self._apply_mw_fallback_to_gaps(data, nl_request, reason)
+                    logger.info(f"planner: unsatisfiable (coverage gap) — {reason}")
+                    return {"unsatisfiable": True, "reason": reason}
+                raise PlanValidationError(nl_request, data, errors)
+            logger.info(
+                f"planner: {len(errors)} error(s); repair round {attempt + 1}/{_REPAIR_ROUNDS}: {errors}"
+            )
+            data = self._repair(data, errors, nl_request)
+            if not isinstance(data, dict):
+                raise PlanValidationError(
+                    nl_request, data, [f"repair returned a {type(data).__name__}, expected an object"]
+                )
+            if data.get("unsatisfiable"):
+                reason = data.get("reason")
+                if self.mw_fallback:
+                    logger.info(
+                        f"planner (repair): unsatisfiable — {reason!r}; MobileWorld fallback (whole request)"
+                    )
+                    return _mw_whole_request_plan(nl_request, str(reason or "no app covers this request"))
+                logger.info(f"planner (repair): unsatisfiable — {reason!r}")
+                return data
+        # unreachable (loop returns or raises), but keeps type-checkers happy
         return data
+
+    def _apply_mw_fallback_to_gaps(
+        self, plan: dict, nl_request: str, reason: str
+    ) -> dict:
+        """Convert every coverage-gap step (tagged by `_route_one_step`) into a
+        MobileWorld fallback leg, then re-validate the now-satisfiable plan.
+
+        Repair has already had its rounds to re-route the gap to a real
+        capability (preferred); this is the last resort so the plan runs instead
+        of failing. Any non-gap step keeps its resolved app/capability."""
+        converted = [
+            _to_mw_leg(step, step.get("x_coverage_gap") or reason)["id"]
+            for step in plan.get("steps", [])
+            if isinstance(step, dict) and step.get("x_coverage_gap")
+        ]
+        logger.info(
+            f"planner: coverage gap unrepaired — MobileWorld fallback for leg(s) {converted}"
+        )
+        self._refresh_apps_required(plan)
+        errors = self._validate(plan)
+        if errors:
+            # The fallback itself produced an invalid plan (e.g. a downstream
+            # {var} that only the dropped capability could have bound). Fall back
+            # to reporting unsatisfiable rather than running a broken plan.
+            logger.warning(
+                f"planner: MobileWorld fallback plan still invalid: {errors}; reporting unsatisfiable"
+            )
+            return {"unsatisfiable": True, "reason": reason}
+        return plan
 
     def validate_plan(self, plan: dict, nl_request: str) -> None:
         errors = self._validate(plan)
         if errors:
-            # TODO(repair): feed `errors` back to the LLM and retry (max ~2
-            # rounds) before giving up. Deferred by design — for now we
-            # hard-fail so a malformed plan never silently executes.
-            self._repair(plan, errors)  # no-op stub; see below
+            # The synthesis path (`plan`) repairs via an LLM round before this
+            # raises; direct callers (e.g. a cached plan) still hard-fail so a
+            # malformed plan never silently executes.
             raise PlanValidationError(nl_request, plan, errors)
 
     # --------------------------------------------------------------- routing
@@ -291,20 +446,31 @@ class FlowPlanner:
             return plan
 
         errors: list[str] = []
+        # Coverage gaps: steps whose matched capability has no app at all. These
+        # are surfaced separately so `plan` can classify the request as
+        # unsatisfiable rather than as a (repairable) validation error.
+        gaps: list[str] = []
         # Vars bound by earlier steps (app steps + ask_user), in plan order, so a
         # templated step's slot can legitimately reference an upstream {var}.
         produced: set[str] = set()
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
-            if not _is_ask_user(step):
-                self._route_one_step(step, i, nl_request, produced, errors)
+            # MobileWorld fallback legs have no app/capability to route (a cached
+            # plan can already carry them); skip routing, like ask_user.
+            if not _is_ask_user(step) and not _is_mw_leg(step):
+                self._route_one_step(step, i, nl_request, produced, errors, gaps)
             bind = step.get("bind")
-            if bind:
+            # Only track string binds; a non-string bind (the LLM occasionally
+            # emits a list/object) is left for `_validate` to flag — adding it
+            # here would crash on the unhashable value before validation runs.
+            if bind and isinstance(bind, str):
                 produced.add(bind)
 
         if errors:
-            raise PlanValidationError(nl_request, plan, errors)
+            err = PlanValidationError(nl_request, plan, errors)
+            err.coverage_gaps = gaps  # type: ignore[attr-defined]
+            raise err
 
         self._drop_unused_no_reply_binds(plan)
         self._refresh_apps_required(plan)
@@ -317,6 +483,7 @@ class FlowPlanner:
         nl_request: str,
         produced: set[str],
         errors: list[str],
+        gaps: list[str],
     ) -> None:
         """Route one app step, then fill its prompt (template or localize)."""
         prompt = step.get("prompt")
@@ -349,6 +516,18 @@ class FlowPlanner:
                 route_key=key,
                 overlay=self._overlay,
             )
+        except NoRunnableAppForCapability as e:
+            # Coverage gap: the matched capability has no app. Record it both as
+            # an error (so a repair round can try to re-route, e.g. to
+            # foundation_llm) and as a gap (so an unrepaired plan is classified
+            # unsatisfiable rather than invalid). Tag the step too, so that if
+            # repair never closes the gap, `_apply_mw_fallback_to_gaps` can turn
+            # exactly these steps into MobileWorld legs.
+            msg = f"step {step.get('id') or i!r}: route failed: {e}"
+            errors.append(msg)
+            gaps.append(msg)
+            step["x_coverage_gap"] = str(e)
+            return
         except Exception as e:  # surfaced as a plan validation error
             errors.append(f"step {step.get('id') or i!r}: route failed: {e}")
             return
@@ -421,7 +600,7 @@ class FlowPlanner:
             ensure_ascii=False,
             indent=2,
         )
-        resp = self._llm.chat.completions.create(
+        resp = create_with_retry(self._llm,
             model=self._model,
             messages=[
                 {"role": "system", "content": _SLOT_EXTRACT_SYSTEM},
@@ -533,7 +712,7 @@ class FlowPlanner:
             indent=2,
         )
         try:
-            resp = self._llm.chat.completions.create(
+            resp = create_with_retry(self._llm,
                 model=self._model,
                 messages=[
                     {"role": "system", "content": _LOCALIZE_PROMPT_SYSTEM},
@@ -593,11 +772,38 @@ class FlowPlanner:
 
     # --------------------------------------------------------------- repair
 
-    def _repair(self, plan: dict, errors: list[str]) -> None:
-        """TODO(repair): re-prompt the LLM with `errors` to fix `plan`, up to
-        ~2 rounds, and return the repaired plan. Intentionally a no-op for now
-        — validation failures hard-fail via PlanValidationError."""
-        return None
+    def _repair(self, plan: dict, errors: list[str], nl_request: str) -> Any:
+        """Re-prompt the LLM with the broken plan + its validation/routing errors
+        and return a corrected plan dict (same schema). May return an
+        `{"unsatisfiable": ...}` dict. The caller re-routes and re-validates the
+        result, so a still-broken repair just consumes another round."""
+        user = (
+            "Available apps catalog:\n"
+            f"{json.dumps(self.catalog, ensure_ascii=False, indent=2)}\n\n"
+            f"User request:\n{nl_request}\n\n"
+            "Your previous plan FAILED validation. Previous plan:\n"
+            f"{json.dumps(plan, ensure_ascii=False, indent=2)}\n\n"
+            "Errors to fix:\n"
+            + "\n".join(f"- {e}" for e in errors)
+            + "\n\nReturn a CORRECTED plan JSON (same schema, inside a ```json fence) "
+            "that fixes ALL of these errors; keep the parts that were fine. Common "
+            "fixes: add the missing ask_user step after a handoff capability; make "
+            "`select_from` a plain var name bound by an earlier step; bind every "
+            "{var} you reference upstream. If the request truly cannot be satisfied, "
+            'return {"unsatisfiable": true, "reason": "<why>"} instead.'
+        )
+        resp = create_with_retry(self._llm,
+            model=self._model,
+            messages=[
+                {"role": "system", "content": _PLANNER_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.0,
+            max_tokens=2048,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        logger.debug(f"repair raw reply: {raw}")
+        return _parse_fenced_json(raw)
 
     # ------------------------------------------------------------- validate
 
@@ -617,23 +823,50 @@ class FlowPlanner:
                 errors.append(f"step #{i} is not an object")
                 continue
             sid = step.get("id") or f"#{i}"
-            if step.get("id") in seen_ids:
+            # Coerce the id to a string before the dup check so a non-string id
+            # (list/object from the LLM) can't crash the unhashable set ops.
+            sid_key = sid if isinstance(sid, str) else json.dumps(sid, sort_keys=True)
+            if sid_key in seen_ids:
                 errors.append(f"duplicate step id {step.get('id')!r}")
-            seen_ids.add(step.get("id"))
+            seen_ids.add(sid_key)
 
             if _is_ask_user(step):
                 self._validate_ask_user(step, sid, produced, errors)
+            elif _is_mw_leg(step):
+                self._validate_mw_leg(step, sid, produced, errors)
             else:
                 self._validate_app_step(step, sid, steps, i, produced, errors)
 
             bind = step.get("bind")
-            if bind:
+            if bind is not None and not isinstance(bind, str):
+                # Guard against an unhashable bind (the LLM occasionally emits a
+                # list/object); record it so the repair round fixes it instead
+                # of crashing the set membership / add below.
+                errors.append(
+                    f"step {sid!r}: bind must be a single var name string, "
+                    f"got {type(bind).__name__}"
+                )
+            elif bind:
                 if bind in seen_binds:
                     errors.append(f"step {sid!r}: duplicate bind name {bind!r}")
                 seen_binds.add(bind)
                 produced.add(bind)
 
         return errors
+
+    def _validate_mw_leg(
+        self, step: dict, sid: str, produced: set[str], errors: list[str],
+    ) -> None:
+        """A MobileWorld fallback leg needs no app/capability (it's manifest-free
+        general_e2e), but still needs a prompt and bound upstream {var}s."""
+        prompt = step.get("prompt")
+        if not prompt:
+            errors.append(f"step {sid!r}: missing `prompt`")
+        refs = _var_roots(prompt or "")
+        if isinstance(step.get("extract"), dict):
+            refs |= _var_roots(step["extract"].get("prompt", ""))
+        for r in sorted(refs - produced):
+            errors.append(f"step {sid!r}: references {{{r}}} before it is bound")
 
     def _validate_app_step(
         self, step: dict, sid: str, steps: list, idx: int,
@@ -686,8 +919,23 @@ class FlowPlanner:
         if not step.get("bind"):
             errors.append(f"ask_user step {sid!r}: missing `bind`")
         sel = step.get("select_from")
-        if sel and sel not in produced:
-            errors.append(f"ask_user step {sid!r}: select_from {sel!r} is not bound by an earlier step")
+        if sel is not None:
+            if not isinstance(sel, str):
+                # The LLM occasionally emits a list/object here; record it as a
+                # validation error (the repair round fixes it) instead of letting
+                # an unhashable value crash the `in produced` membership test.
+                errors.append(
+                    f"ask_user step {sid!r}: select_from must be a single var name "
+                    f"string, got {type(sel).__name__}"
+                )
+            else:
+                # select_from may be written as `{var}` or `var.field`; resolve to
+                # its root bind name before checking it was produced upstream.
+                root = sel.strip("{}").split(".")[0].strip()
+                if root and root not in produced:
+                    errors.append(
+                        f"ask_user step {sid!r}: select_from {sel!r} is not bound by an earlier step"
+                    )
         for r in sorted(_var_roots(step.get("prompt_header", "")) - produced):
             errors.append(f"ask_user step {sid!r}: prompt_header references {{{r}}} before it is bound")
 
@@ -699,6 +947,10 @@ class FlowPlanner:
 
 def _is_ask_user(step: dict) -> bool:
     return isinstance(step, dict) and step.get("type") == "ask_user"
+
+
+def _is_mw_leg(step: dict) -> bool:
+    return isinstance(step, dict) and step.get("type") == MW_STEP_TYPE
 
 
 def _var_roots(template: str) -> set[str]:
