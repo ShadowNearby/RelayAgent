@@ -1228,7 +1228,7 @@ wheels = [
 [[package]]
 name = "mobile-world"
 version = "0.1.0"
-source = { git = "https://github.com/ShadowNearby/MobileWorld#2d6cb11f10aa7a53cc2436e2f4dc3c229a5d204d" }
+source = { git = "https://github.com/ShadowNearby/MobileWorld?rev=12306ff9795f6b94bfffac8e9667c9eb4f8349f3#12306ff9795f6b94bfffac8e9667c9eb4f8349f3" }
 dependencies = [
     { name = "absl-py" },
     { name = "aiofiles" },
@@ -1909,7 +1909,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7" },
-    { name = "mobile-world", git = "https://github.com/ShadowNearby/MobileWorld" },
+    { name = "mobile-world", git = "https://github.com/ShadowNearby/MobileWorld?rev=12306ff9795f6b94bfffac8e9667c9eb4f8349f3" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pydantic", specifier = "<2.11" },

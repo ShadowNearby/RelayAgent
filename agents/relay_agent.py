@@ -123,12 +123,17 @@ _VISION_STEP_KINDS = frozenset({"wait_for_reply"})
 # letting the next observe happen promptly. Tunable via RELAY_POLL_SKIP_SLEEP.
 _POLL_SKIP_SLEEP = float(os.getenv("RELAY_POLL_SKIP_SLEEP", "0.3"))
 
-# The active run is written under traj_logs/user_task/ (see CLAUDE.md).
+# Where this run's trajectory lands (see CLAUDE.md). Defaults to the shared
+# global dir; the flow runner pins it per leg via RELAY_TRAJ_DIR so traj.json /
+# agent_reply.json land straight in the leg's dir (no global user_task copy).
 # We append every LLM call into traj.json at top-level under "0".llm_calls so
 # the calls live alongside the per-step traj entries. The per-step traj writer
 # rewrites the whole file each step but preserves unknown sibling keys, so the
 # field survives across step writes.
-_TRAJ_DIR = Path("traj_logs") / "user_task"
+_TRAJ_DIR = (
+    Path(os.environ["RELAY_TRAJ_DIR"]) if os.getenv("RELAY_TRAJ_DIR")
+    else Path("traj_logs") / "user_task"
+)
 
 _GROUNDING_SYSTEM = (
     "You are a UI grounding model. Given a phone screenshot and a target "
@@ -850,7 +855,9 @@ class RelayAgent(_MCPAgentBase):
         self._reply_precheck_skips: int = 0
         self._reply_precheck_skips_since_vlm: int = 0
         self._reply_dump_fail_streak: int = 0
-        self._reply_precheck_disabled: bool = False
+        # Elapsed-second mark (relative to _reply_start_ts) before which we
+        # stop hammering a failing dump and just skip; None = no cooldown.
+        self._reply_dump_cooldown_until: float | None = None
         self._reply_last_shot_hash: str | None = None
         self._reply_last_dump_text_hash: str | None = None
         self._reply_text_stable_streak: int = 0
@@ -1006,7 +1013,7 @@ class RelayAgent(_MCPAgentBase):
         self._reply_precheck_skips = 0
         self._reply_precheck_skips_since_vlm = 0
         self._reply_dump_fail_streak = 0
-        self._reply_precheck_disabled = False
+        self._reply_dump_cooldown_until = None
         self._reply_last_shot_hash = None
         self._reply_last_dump_text_hash = None
         self._reply_text_stable_streak = 0
@@ -1476,6 +1483,11 @@ class RelayAgent(_MCPAgentBase):
             # reply that briefly pauses mid-stream.
             STABLE_DUMPS_FOR_DONE = 3
             MAX_DUMP_FAILS = 2
+            # After MAX_DUMP_FAILS consecutive dump failures we back off for
+            # this many elapsed seconds instead of disabling dumping for the
+            # whole wait: uiautomator dump is flaky while an app is still
+            # compositing its reply, and those failures are usually transient.
+            DUMP_RETRY_BACKOFF = 5.0
             # Some apps render the reply in a WebView / canvas that isn't in the
             # a11y tree: the text-hash stabilizes (on chrome) but the a11y
             # scrape stays empty. When that happens we fall back to the VLM to
@@ -1505,7 +1517,7 @@ class RelayAgent(_MCPAgentBase):
                 self._reply_precheck_skips = 0
                 self._reply_precheck_skips_since_vlm = 0
                 self._reply_dump_fail_streak = 0
-                self._reply_precheck_disabled = False
+                self._reply_dump_cooldown_until = None
                 self._reply_last_shot_hash = None
                 self._reply_last_dump_text_hash = None
                 self._reply_text_stable_streak = 0
@@ -1539,20 +1551,28 @@ class RelayAgent(_MCPAgentBase):
                         ),
                     )
 
-            # Circuit breaker: after repeated dump failures we can no longer
-            # measure stability — stop dumping and wait out the ceiling (the
-            # timeout branch above scrapes on the way out).
-            if self._reply_precheck_disabled:
-                self._reply_precheck_skips += 1
-                time.sleep(_POLL_SKIP_SLEEP)
-                return (
-                    JSONAction(action_type="wait"),
-                    False,
-                    (
-                        f"dump disabled; waiting out ceiling "
-                        f"@ {elapsed:.1f}s/{max_seconds}s"
-                    ),
-                )
+            # Circuit breaker (recoverable): after repeated dump failures we
+            # back off rather than disabling dumping for the rest of the wait
+            # — the failures are usually transient compositing hiccups. We
+            # skip cheaply until the cooldown elapses, then fall through and
+            # retry one dump; a single success below clears the streak and
+            # resumes normal cadence.
+            if self._reply_dump_cooldown_until is not None:
+                if elapsed < self._reply_dump_cooldown_until:
+                    self._reply_precheck_skips += 1
+                    time.sleep(_POLL_SKIP_SLEEP)
+                    return (
+                        JSONAction(action_type="wait"),
+                        False,
+                        (
+                            f"dump cooling down, retry @ "
+                            f"{self._reply_dump_cooldown_until:.1f}s "
+                            f"@ {elapsed:.1f}s/{max_seconds}s"
+                        ),
+                    )
+                # Cooldown elapsed — retry a dump (the streak stays armed, so
+                # if it fails again we just re-arm the backoff below).
+                self._reply_dump_cooldown_until = None
 
             # Stage 2 — pixels stable (or forced): dump + hash the visible text.
             text_hash = _dump_visible_text_hash()
@@ -1561,11 +1581,14 @@ class RelayAgent(_MCPAgentBase):
                 self._reply_dump_fail_streak += 1
                 self._reply_text_stable_streak = 0
                 if self._reply_dump_fail_streak >= MAX_DUMP_FAILS:
-                    self._reply_precheck_disabled = True
+                    self._reply_dump_cooldown_until = (
+                        elapsed + DUMP_RETRY_BACKOFF
+                    )
                     logger.warning(
-                        "wait_for_reply text-hash dump disabled for this wait "
-                        f"— {self._reply_dump_fail_streak} consecutive dump "
-                        "failures; will wait out the timeout ceiling"
+                        "wait_for_reply text-hash dump backing off "
+                        f"{DUMP_RETRY_BACKOFF:.0f}s — "
+                        f"{self._reply_dump_fail_streak} consecutive dump "
+                        "failures; will retry, not give up"
                     )
                 time.sleep(_POLL_SKIP_SLEEP)
                 return (
@@ -1652,7 +1675,7 @@ class RelayAgent(_MCPAgentBase):
             self._reply_precheck_skips = 0
             self._reply_precheck_skips_since_vlm = 0
             self._reply_dump_fail_streak = 0
-            self._reply_precheck_disabled = False
+            self._reply_dump_cooldown_until = None
             self._reply_last_shot_hash = None
             self._reply_last_dump_text_hash = None
             self._reply_text_stable_streak = 0
@@ -1894,8 +1917,8 @@ class RelayAgent(_MCPAgentBase):
         """Dump the captured in-app agent reply as JSON to:
           1. RELAY_REPLY_OUT (if set) — for parent batch/NL runners;
           2. <traj dir>/agent_reply.json — always, so the reply lives next
-             to traj.json / screenshots and survives the per-run backup of
-             traj_logs/user_task/. Best-effort; never raises."""
+             to traj.json / screenshots (the flow runner pins <traj dir> per
+             leg via RELAY_TRAJ_DIR). Best-effort; never raises."""
         payload = json.dumps(
             {
                 "reply": self._last_agent_reply,
@@ -1907,11 +1930,10 @@ class RelayAgent(_MCPAgentBase):
         env_path = os.getenv(_REPLY_OUT_ENV)
         if env_path:
             targets.append(Path(env_path))
-        # The active run lives under traj_logs/user_task/ (see CLAUDE.md).
-        # Drop the reply there too so it's discoverable by default.
-        traj_dir = Path("traj_logs") / "user_task"
-        if traj_dir.exists():
-            targets.append(traj_dir / "agent_reply.json")
+        # Drop the reply in the run's traj dir too so it's discoverable by
+        # default (the flow runner pins this per leg via RELAY_TRAJ_DIR).
+        if _TRAJ_DIR.exists():
+            targets.append(_TRAJ_DIR / "agent_reply.json")
         for path in targets:
             try:
                 path.write_text(payload, encoding="utf-8")

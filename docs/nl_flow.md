@@ -16,7 +16,7 @@ NL request
   └─ FlowPlanner.plan()            synthesize plan (one LLM call, static one-shot, no step-by-step replanning)
        ├─ resolve_app_routes()     resolve each app step's app+capability via the three-stage router
        │    └─ _fill_prompt_template / _maybe_localize_prompt  fill the submit prompt
-       ├─ validate_plan()          local validation (valid ids / {var} refs / handoff followed by ask_user / unique binds)
+       ├─ validate + repair loop   local validation; on error, feed the errors back to an LLM repair round (≤2), re-route, re-validate
        └─ persist to manifests/_generated/*.yaml
   └─ FlowRunner.run()              execute steps in order
        ├─ app_step    → spawn `python -m agents.native_runner` subprocess (one leg = one app + one capability)
@@ -62,7 +62,8 @@ Output plan (`json` fence, `temperature=0`):
 4. **A `handoff_to_user_required` capability is never the final action of a non-terminal step**: if it is not the whole task's last step, it **must** be followed by an `ask_user` (show the agent's surfaced reply → collect the user's answer → then a follow-up app step that consumes the answer, **re-stating the full intent** because it runs a fresh agent session). If it **is** the last step (e.g. hailing the ride at the end), it may be terminal — its own in-app handoff is the user's final confirmation. An `x_skip_wait_for_reply` step captures no text reply, so give it no `bind`/`extract`.
 5. Prefer the user's own wording; default each app-step prompt to that app's first `locale` language (only switch if the user explicitly asks for another); preserve proper nouns / addresses / product names / code / URLs / emails / ids / quoted literals in their original language.
 6. A single-app request is fine — emit a one-step plan.
-7. If no combination of available apps satisfies the request → return `{"unsatisfiable": true, "reason": "..."}`.
+7. **`foundation_llm` is the general info/knowledge fallback**: information / Q&A / summarization / drafting / lookup tasks that no dedicated capability covers (explaining a GitHub repo, summarizing an arXiv paper, general knowledge) route to a `foundation_llm` capability instead of being declared unsatisfiable.
+8. Return `{"unsatisfiable": true, "reason": "..."}` only when the task **requires a concrete device/app action** no capability provides (posting to a chat platform the catalog lacks, taking a camera photo) **and `foundation_llm` cannot stand in**.
 
 ## 3. Three-stage routing (`capability_matrix_router.route`)
 
@@ -89,16 +90,18 @@ The entry first computes and stamps `step["x_route_key"]` (the normalized-prompt
 
 Full prompt-template mechanism: [`prompt_template.md`](prompt_template.md).
 
-## 5. Local validation (`_validate`, hard fail)
+## 5. Local validation + LLM repair (`_validate` → `_repair`)
 
-After synthesis (incl. routing) we run local validation; any hit raises `PlanValidationError` (with the full error list; **the LLM repair loop is a deliberate TODO in `_repair`, currently a no-op** — better to hard-fail than silently execute a bad plan):
+After synthesis (incl. routing) we run local validation. What it checks:
 
 - each step is an object; `id` unique; `bind` name unique.
 - app step: `app`/`capability`/`prompt` non-empty; `app` in the catalog; `capability` belongs to that app.
 - every `{var}` in `prompt` / `extract.prompt` must be **produced by an earlier step**.
 - **Rule 4**: a mid-flow `handoff_to_user_required` leg must be followed by `ask_user`; a handoff leg that is the **last step** is a valid terminal.
 - an `x_skip_wait_for_reply` cap cannot carry `bind`/`extract`.
-- ask_user: must have `bind`; `select_from` must be already bound; `prompt_header` `{var}`s must be already bound.
+- ask_user: must have `bind`; `select_from` must be a **string** bound by an earlier step (resolved to its **root** name, so `{var}` / `var.field` forms are accepted; a non-string `select_from` is a recorded error, not a crash); `prompt_header` `{var}`s must be already bound.
+
+**Repair loop** (`plan()` → `_repair`): on a routing **or** validation error, the broken plan + its error list are fed back to the LLM for a corrected plan (same schema), which is then re-routed and re-validated — up to `_REPAIR_ROUNDS` (2) rounds. Only after the rounds are exhausted does `plan()` raise `PlanValidationError` (with the full error list). A repair round may legitimately return `{"unsatisfiable": ...}`. (`validate_plan()` itself, used directly on a **cached** plan, still hard-fails without repair — a cached plan was already valid when persisted.) Malformed model JSON (raw control chars in strings) is tolerated via `json.loads(strict=False)` in `_parse_fenced_json`.
 
 The routing phase also cleans up: `_drop_unused_no_reply_binds` (strip a decorative `bind`/`extract` on a no-reply step that nothing downstream references) and `_refresh_apps_required` (rebuild `apps_required` from the actual routing result).
 
@@ -111,7 +114,7 @@ Steps run in order; the blackboard `self.bb` starts empty and grows with each st
 - Each leg is a fresh `python -m agents.native_runner <app> <prompt>` subprocess.
 - Subprocess env: `RELAY_FORCE_CAPABILITY`/`RELAY_INVOCATION_TEXT` (bypass router), `RELAY_SKIP_OPEN_APP=1`+`RELAY_AGENT_LAUNCH=1` (deferred-launch: cold-launch happens in the agent's first predict, so process/leg startup is excluded from the leg's wall-clock), `RELAY_REPLY_OUT` (reply JSON), `RELAY_SUMMARY_OUT` (summary), `RELAY_WALL_OUT` (the agent writes the framework-excluded `wall_clock.json`).
 - stdin is `DEVNULL`: a trailing ask_user handoff closes cleanly on EOF instead of blocking the flow.
-- **Per-leg traj preserved**: each flow run has its own traj root `traj_logs/plan_<app1>_<app2>..._<ts>/`, one `NN_<id>/` per leg. After the sub-run we copytree the global `traj_logs/user_task/` into this leg's dir (the next leg's startup would rotate the global dir away); best-effort, never breaks the flow.
+- **Per-leg traj preserved**: each flow run has its own traj root `traj_logs/<ts>_plan_<app1>_<app2>.../`, one `NN_<id>/` per leg. After the sub-run we copytree the global `traj_logs/user_task/` into this leg's dir (the next leg's startup would rotate the global dir away); best-effort, never breaks the flow.
 - **Reply / hard signals**: read the reply from `RELAY_REPLY_OUT`. A leg that needs a reply (`bind`/`extract`) but captured none → raise. A no-reply leg goes through `_assert_output_free_step_completed`: requires `rc==0` and last_action ∈ {ask_user, answer} or (finished and goal complete), else raise.
 - **Leg judge** (semantic layer, see §7): the "confidently wrong" check on top of the hard signals.
 
@@ -177,3 +180,20 @@ route(route_key, overlay):                            end of _judge_leg:
 **Promote (`scripts/promote_routes.py`, read-only)**: surfaces the high-confidence routes the trace has learned so a human can decide whether to fold them into the matrix — it **never writes the matrix** (the CSV is the hand-maintained source of truth). It scans the overlay at a *higher* bar (`RELAY_PROMOTE_MIN_HITS` default 5 / `RATE` default 0.9), lists each `(intent → app/cap)` and whether it is **already authorized** in the matrix (the learned preference agrees) or **not listed** (a candidate ✓ or a stale entry to ignore). `--csv` also emits review rows to hand-paste. Pure logic — no device/LLM/network.
 
 **Switches / thresholds**: `RELAY_ROUTE_OVERLAY` (default 1) / `RELAY_ROUTE_OVERLAY_PATH` / `RELAY_ROUTE_KEY_MODE` (default `b`) / `RELAY_ROUTE_SOLIDIFY_HITS` (3) / `RELAY_ROUTE_SOLIDIFY_RATE` (0.8) / `RELAY_ROUTE_MAX_FAILS` (2) / `RELAY_PROMOTE_MIN_HITS` (5) / `RELAY_PROMOTE_MIN_RATE` (0.9).
+
+## 10. MobileWorld fallback (when no capability covers a leg)
+
+RA's routing rests on a **hand-maintained manifest + capability matrix**. When a leg (or the whole request) is **covered by no app/capability**, rather than give up, hand it to **MobileWorld's `general_e2e`** — a **manifest-free general end-to-end UI agent** that opens apps and navigates from the current screen to accomplish any goal (the fork is already pinned as the `mobile-world` dependency in `pyproject.toml`, installed under `.venv/.../mobile_world/`).
+
+**Trigger (planner, every unsatisfiable outcome):**
+
+- **Coverage gap** (capability matched but no app authorized in the matrix, `NoRunnableAppForCapability`): `_route_one_step` tags the step `x_coverage_gap` but **still runs the repair rounds** (repair may re-route the gap to a real capability such as `foundation_llm` — preferred over MW). If a gap survives all repair rounds, `_apply_mw_fallback_to_gaps` converts exactly the tagged steps into MW legs (`_to_mw_leg`) in place, re-validates, and returns the now-**satisfiable** plan instead of `{"unsatisfiable"}`.
+- **LLM judges the whole request unsatisfiable** (`plan()`/`_repair` returns `{"unsatisfiable"}`, so there are no steps): degenerates to "whole request = one MW leg" via `_mw_whole_request_plan` (a single leg whose `prompt` is the original request).
+
+**MW leg shape** (new step type `type: mobileworld`): keeps `id`/`prompt`/`bind`/`extract`; `app` is only a **prelaunch hint** (no capability to route); carries `x_fallback_reason`. `_validate` uses `_validate_mw_leg`: requires a non-empty `prompt` and upstream-bound `{var}`s, skipping app/capability/handoff checks. `resolve_app_routes` skips MW legs (including on a cached re-run).
+
+**Execution (`FlowRunner._run_mobileworld_step`)**: shells out to `scripts/run_mobileworld.py` (which owns the MW server lifecycle / prelaunch / `.env` LLM config) with `--agent-type general_e2e --output <leg_dir>` (trajectory lands at `<leg_dir>/user_task/traj.json`), `--app` if there's a hint else `--no-prelaunch`. Afterward `_harvest_mw_traj` takes the **last `answer` action's text** as the leg reply → feeds the blackboard (same `bind`/`extract` path as an app leg), and writes `summary.json` + `agent_reply.json`. The **leg judge** runs as usual (`final_frames` falls back to `user_task/screenshots/*.png` when `steps/` is absent); MW legs are **not solidified** (not a matrix route, no `x_route_key`). Flow-level LLM calls fold into the leg's `traj.json` as usual.
+
+**Switches / knobs**: `RELAY_MW_FALLBACK` (default `1`; `0` or `run_plan.py --no-mw-fallback` disables it, restoring the old unsatisfiable-exit behavior) / `RELAY_MW_MAX_ROUND` (default 25) / `RELAY_MW_TIMEOUT` (default 600). The preview marks MW legs with `[MobileWorld fallback]`.
+
+**Deferred**: each MW leg starts/stops its own MW server (multiple MW legs could reuse one FlowRunner-managed server); route solidification for MW legs.

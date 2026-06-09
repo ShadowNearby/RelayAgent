@@ -26,9 +26,9 @@
   ├─(2) 缓存查找                    manifests/_generated/ 里精确串匹配；--no-cache 跳过
   │        命中 ┐
   │            └────────────────────────────────┐
-  ├─(3) FlowPlanner.plan()         未命中：LLM 合成 → fenced JSON → 本地校验
+  ├─(3) FlowPlanner.plan()         未命中：LLM 合成 → fenced JSON → 路由 + 校验（+ ≤2 轮 LLM repair）
   │        │                                     │
-  │        ├─ 校验不过 → 硬报错退出（repair 是 TODO）
+  │        ├─ repair 后仍不过 → 硬报错退出
   │        └─ unsatisfiable → 打印原因退出
   │                                              │
   ├─(4) 落盘                        写 plan YAML 到 manifests/_generated/
@@ -44,7 +44,7 @@
 | 文件 | 角色 |
 | --- | --- |
 | [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI 入口：缓存 / 落盘 / 预览 / 确认 / 录屏 / 派发 |
-| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`：catalog → prompt → LLM → JSON → 校验（含 repair TODO 空壳） |
+| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`：catalog → prompt → LLM → JSON → 路由 + 校验 + LLM repair（≤2 轮） |
 | [`agents/flow_runner.py`](../agents/flow_runner.py) | 执行器：跑每个 leg、bind 回复、处理 ask_user / extract |
 | [`manifests/_generated/`](../manifests/_generated/) | 生成物 + 缓存目录，`.gitignore` 把内容排除出版本库 |
 
@@ -118,11 +118,11 @@ steps: [ ... ]
 - `steps` 是非空 list；
 - 每个 app step：`app` / `capability` / `prompt` 齐全，`app` 命中 catalog，`capability` 命中该 app；
 - prompt / `extract.prompt` / `prompt_header` 里引用的每个 `{root_var}` 都已被更早的 step bind（**挡悬空引用**）；
-- `ask_user` 的 `select_from` 指向已 bind 的变量；
+- `ask_user` 的 `select_from` 是**字符串**且指向已 bind 的变量（归一到**根名**比对，故 `{var}` / `var.field` 形式都通过；非字符串记成校验错误、绝不崩）；
 - `bind` 名唯一、`id` 不重复；
 - **规则 4 的校验**：`handoff_to_user_required` 的 capability 若**不是**最后一步，下一步必须是 `ask_user`（末尾的允许作终点）。
 
-> **校验失败 = 硬报错退出**，打印错误清单 + 原始 plan。**LLM repair 重修循环是 TODO**（`FlowPlanner._repair` 是空壳），刻意不实现，以免坏 plan 静默执行。
+> **Repair 回路（已实装）：** 命中路由或校验错误时，`plan()` 把坏 plan + 错误清单喂回 LLM（`_repair`）要修正 plan，再重路由 + 重校验——最多 `_REPAIR_ROUNDS`（2）轮；轮次用尽仍不过才**硬报错退出**（打印错误清单 + 原始 plan），以免坏 plan 静默执行。`validate_plan()` 单独作用（缓存 plan 路径）时仍直接硬失败、不 repair。模型返回的坏 JSON（裹裸控制符）由 `json.loads(strict=False)` 容忍。
 
 ---
 
@@ -194,7 +194,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | 项 | 状态 | 位置 |
 | --- | --- | --- |
-| LLM repair 重修循环 | TODO（硬报错代替） | `flow_planner.py:_repair` + `# TODO(repair):` |
+| LLM repair 重修循环 | **已实装**（≤2 轮，再硬报错） | `flow_planner.py:_repair` + `plan()` repair 回路 |
 | 语义缓存复用 | TODO（仅精确串匹配） | `run_plan.py:_cache_lookup` `# TODO(semantic-cache):` |
 | Phase B 同会话续跑 | 仅留缝 | `flow_runner.py` / `relay_agent.py` 的 `# TODO(phase-B):` |
 | 静态一次性规划 | 设计如此 | 不做逐步 / 失败重规划；leg 输出异常不自适应 |
@@ -232,7 +232,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | 文件 | 内容 |
 | --- | --- |
-| `agents/flow_planner.py` | `FlowPlanner`：catalog → system prompt → LLM → fenced JSON → 本地校验（`_validate`）。`PlanValidationError` 携带错误清单。`_repair` 是 TODO 空壳。 |
+| `agents/flow_planner.py` | `FlowPlanner`：catalog → system prompt → LLM → fenced JSON → 路由 + 校验（`_validate`）+ LLM repair（`_repair`，≤2 轮）。`PlanValidationError` 携带错误清单。 |
 | `scripts/run_plan.py` | CLI 入口：精确串缓存 / 合成 / 落盘 / 预览 / 确认 / 录屏 / 派发 `FlowRunner`。flag：`--dry-run` `--yes` `--no-cache` `--record` `-- <透传>`。 |
 | `manifests/_generated/.gitignore` | 把生成的 plan / 缓存排除出版本库，只保留 `.gitignore` 自身。 |
 | `docs/cross_app_planner.zh.md` | 本文档。 |
@@ -241,7 +241,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | 文件 | 改动 |
 | --- | --- |
-| `agents/flow_runner.py` | ① `# TODO(phase-B):` 缝注释（`stdin=DEVNULL` 处）。② `_traj_stem()`：用 plan 涉及的 app 命名 traj 目录——`plan_<app1>_<app2>…`——而非冗长的 NL-slug 文件名。 |
+| `agents/flow_runner.py` | ① `# TODO(phase-B):` 缝注释（`stdin=DEVNULL` 处）。② `_traj_stem()`：traj 目录名时间在前、再接 plan 涉及的 app——`<ts>_plan_<app1>_<app2>…`——而非冗长的 NL-slug 文件名。 |
 | `agents/relay_agent.py` | handoff 分支加 `# TODO(phase-B):` 缝注释（不改逻辑）。 |
 | `CLAUDE.md` | `跑测试` 加 run_plan 入口；新增"自动跨 App 规划"速览节并指向本文档；"三个→四个入口脚本"。 |
 | `README_zh.md` | scripts 目录清单加 run_plan；`自然语言入口` 后加"自动合成跨 App plan"小节。 |
@@ -251,6 +251,6 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 - **静态一次性规划**而非逐步/ReAct：复用现有 `FlowRunner`，改动最小、可立即落地；代价是 leg 输出异常不自适应。
 - **独立 `run_plan.py`** 作为 NL flow 入口：单 App 请求变成 1-step plan，多 App 请求也走同一条执行路径。
 - **预览 + 确认（默认 N）**：跨 App 含不可逆副作用（打车/下单），执行前必须人能看清并放行。
-- **校验失败硬报错、repair 留 TODO**：宁可中止也不让坏 plan 静默执行。
+- **repair 后再硬报错**：路由/校验错误先经 ≤2 轮 LLM repair，仍不过才中止——总好过让坏 plan 静默执行。
 - **handoff 末尾可作终点、中间才强插 ask_user**：如一条收尾在打车的 plan；末尾 leg 的 in-app handoff 本身即终态确认。
 - **缓存先精确串匹配、语义复用留 TODO**：先把主链路跑通，避免在缓存上过早投入。

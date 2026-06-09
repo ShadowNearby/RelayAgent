@@ -69,4 +69,4 @@ include = [
 ]
 
 [tool.uv.sources]
-mobile-world = { git = "https://github.com/ShadowNearby/MobileWorld" }
+mobile-world = { git = "https://github.com/ShadowNearby/MobileWorld", rev = "12306ff9795f6b94bfffac8e9667c9eb4f8349f3" }

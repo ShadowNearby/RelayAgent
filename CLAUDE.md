@@ -22,6 +22,7 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 - 旧的测试入口 / NL 入口 / 单 App 脚本入口已删除；新代码直接用 `python -m agents.native_runner`（指定 app）或 `run_plan.py --yes` / `run_plan.py --dry-run`（NL flow）。
 - **NL 跨 App Flow 架构**（合成 / 三段式路由 / 校验 / 执行 / leg judge / handoff）详见 [`docs/nl_flow.zh.md`](docs/nl_flow.zh.md)（English: [`docs/nl_flow.md`](docs/nl_flow.md)）；pipeline / CLI 用法 / 缓存 / 真机示例见 [`docs/cross_app_planner.zh.md`](docs/cross_app_planner.zh.md)。
+- **capability 不覆盖 → MobileWorld 兜底**：任何 unsatisfiable（coverage gap 修复用尽 / LLM 判整条不可满足）不再放弃，而是把那条 leg（或整条请求）转成 `type: mobileworld` leg，交给 MobileWorld 无 manifest 的 `general_e2e` 执行（经 `scripts/run_mobileworld.py`，answer 文本回灌 blackboard）。默认开，`RELAY_MW_FALLBACK=0` / `run_plan.py --no-mw-fallback` 关；`RELAY_MW_MAX_ROUND`(25)/`RELAY_MW_TIMEOUT`(600)。详见 nl_flow §10。
 - 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.5）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
 
 需要 adb + 真机 USB 调试。**`agents.native_runner` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
@@ -34,7 +35,7 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 - `agents/agent_base.py` — `BaseAgent` + `MCPAgent`（OpenAI client、token 计数、`openai_chat_completions_create` 含 claude/gpt/o1/kimi 分支）。`relay_agent` 经 `from agents.agent_base import MCPAgent as _MCPAgentBase`（别名排序见文件头注释，让 loader 选 RelayAgent）。
 - `agents/_img.py` — `pil_to_base64`。
 - `agents/native_runtime.py` — **`NativeEnv`**（`JSONAction`→直 adb：swipe 几何、scroll 方向反转、`ADB_INPUT_B64` 键盘广播、`skip_screenshot` 复用上一帧）+ 进程内 `obs→predict→execute` 循环 + **AdbKeyboard IME 激活**。
-- `agents/native_runner.py` — 单 app 模块入口；`run_plan` / `run_single_app_benchmark` 按 task spawn `python -m agents.native_runner` 子进程（无 server）。agent 经 `RELAY_WALL_OUT`/`RELAY_REPLY_OUT` 落 `wall_clock.json`/`reply.json`，这正是这些消费方读的。
+- `agents/native_runner.py` — 单 app 模块入口；`run_plan` / `run_benchmark_test` 按 task spawn `python -m agents.native_runner` 子进程（无 server）。agent 经 `RELAY_WALL_OUT`/`RELAY_REPLY_OUT` 落 `wall_clock.json`/`reply.json`，这正是这些消费方读的。
 
 ## 性能旋钮
 
@@ -95,13 +96,20 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 ## Trajectory 日志目录
 
-每次 `agents.native_runner` 启动（`_rotate_traj_dir`）把上次 `traj_logs/user_task/` 搬到 `traj_logs/user_task_backup_<ts>/`（ts = 新跑启动时刻），再 mkdir + seed 空 `traj.json`（供 agent `_append_llm_call`）。**本次输出永远在 `traj_logs/user_task/`**；`ls -td ...backup_* | head -1` 是**上一次**的内容。
+> 完整约定（三写入方 / 轮转 / leg 目录形态 / `flow_llm_calls` / 消费方 / env 速查）见 [`docs/trajectory_logging.zh.md`](docs/trajectory_logging.zh.md)（English: [`docs/trajectory_logging.md`](docs/trajectory_logging.md)）。下面是速查要点。
+
+**输出目录由 `RELAY_TRAJ_DIR` 决定**（traj.json + `steps/` + `agent_reply.json` 都落这里；`native_runner.TRAJ_DIR` / `relay_agent._TRAJ_DIR` / `StepLogger` 三处统一读它）：
+
+- **不设**（standalone `python -m agents.native_runner`）：默认 `traj_logs/user_task/`。每次启动（`_rotate_traj_dir`）把上次 `traj_logs/user_task/` 搬到 `traj_logs/user_task_backup_<ts>/`，再 mkdir + seed 空 `traj.json`。`ls -td ...backup_* | head -1` 是**上一次**的内容。
+- **设**（NL flow 每条 leg，`flow_runner` 设 `RELAY_TRAJ_DIR=<flow_root>/NN_<id>`）：子进程直接写进该 leg 目录，**不碰全局 `user_task`、不轮转、无 copytree**。flow 输出形如 `traj_logs/<ts>_plan_<apps>/NN_<id>/{traj.json, steps/, agent_reply.json, wall_clock.json, summary.json, leg_verdict.json}`（**没有 `user_task/` 子层**）。`wall_clock.json`/`summary.json` 仍各经 `RELAY_WALL_OUT`/`RELAY_SUMMARY_OUT` 指到同一 leg 目录。
+- flow 级 LLM call（leg judge / bind extract）由 `FlowRunner._RecordingLLM` 记录，fold 进每条 leg 的 `traj.json` 顶层 `flow_llm_calls`（与 in-app agent 的 `["0"]["llm_calls"]` 区分）。
+- `scripts/run_benchmark_test.py` 的 **relay 侧**经 `run_plan.py` 跑 NL flow，从产出的每条 leg 目录 harvest（`summary.json` + `traj.json` 的 `flow_llm_calls` + `leg_verdict.json` + `agent_reply.json`）；**mw 侧**（MobileWorld）写自己的 `mw/user_task/`，是外部 runtime 约定，不归 `RELAY_TRAJ_DIR` 管。
 
 ### Step 日志（逐步轨迹）
 
 `agents/native_runtime.py:StepLogger`，在 `run_task` 循环里每步落盘，**默认开**：记下 agent 这一步**看到的截图**、它返回的 **action**、以及**点击位置**。
 
-- 落 `traj_logs/user_task/steps/`（跟 traj.json 同目录，享受同样的 backup 轮转）。`RELAY_STEP_LOG_DIR` 可改目录。
+- 落 `<RELAY_TRAJ_DIR>/steps/`（跟 traj.json 同目录；standalone 默认 `traj_logs/user_task/steps/`，flow 则在 leg 目录下）。`RELAY_STEP_LOG_DIR` 显式覆写优先级最高。
 - 每步：`step_<n>.png`（agent 行动所依据的那帧，pre-action obs，所以 action 的 `(x,y)` 就落在这帧上）+ `step_<n>_marked.png`（在帧上画标记：tap/long_press/double_tap 画红点+十字，swipe/scroll/drag 画红箭头；无坐标的 action 如 input_text 不出 marked 帧）+ `steps.json`（索引：step、ts、action_type、完整 action dict、`click=[x,y]`、agent 的 thought、两张图文件名）。`steps.json` 每步整体重写，跑崩了也是合法 JSON。
 - best-effort：`record` 包 try/except，落盘失败只 warning，绝不打断 obs→predict→execute 循环。
 - **`RELAY_STEP_LOG=0` 关掉**——**性能测试必关**：每步一次 PNG 写盘，tap/swipe 还要 `convert('RGB')`+重编码一张标注帧，是真实单步开销，会污染墙钟。

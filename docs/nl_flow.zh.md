@@ -16,7 +16,7 @@ NL request
   └─ FlowPlanner.plan()            合成 plan（一次 LLM，static one-shot，不做分步重规划）
        ├─ resolve_app_routes()     每个 app step 用三段式 router 定 app+capability
        │    └─ _fill_prompt_template / _maybe_localize_prompt  填 submit prompt
-       ├─ validate_plan()          本地校验（id 合法 / {var} 引用 / handoff 后接 ask_user / bind 唯一）
+       ├─ 校验 + repair 回路        本地校验；命中错误就把错误清单喂回 LLM 重修（≤2 轮）→ 重路由 → 重校验
        └─ 落盘 manifests/_generated/*.yaml
   └─ FlowRunner.run()              按 step 顺序执行
        ├─ app_step    → spawn `python -m agents.native_runner` 子进程（一 leg = 一 app + 一 capability）
@@ -62,7 +62,8 @@ NL request
 4. **`handoff_to_user_required` capability 永不作为非终态的最后动作**：若它不是整个任务的最后一步，**必须**后接 `ask_user`（展示 agent surfaced reply → 收用户答案 → 再接一个消费答案的 app step，且**重述完整意图**因为它跑全新 agent 会话）。若它**就是**最后一步（如最后打车），可作终态——它自己的 in-app handoff 就是用户最终确认。`x_skip_wait_for_reply` 的 step 不抓文本回复，别给它 `bind`/`extract`。
 5. prompt 优先用用户原话；每个 app-step prompt 默认用该 App 第一个 `locale` 语言（用户显式要别的语言才换）；专名/地址/产品名/代码/URL/邮箱/id/引用原文保留原语言。
 6. 单 App 请求 OK——一步计划即可。
-7. 现有 App 组合无法满足 → 返回 `{"unsatisfiable": true, "reason": "..."}`。
+7. **`foundation_llm` 是通用信息/知识兜底**：信息 / 问答 / 总结 / 起草 / 查询类任务，若无专属 capability 覆盖（解释 GitHub repo、总结 arXiv 论文、通用知识），路由到 `foundation_llm` capability，而不是判 unsatisfiable。
+8. 仅当任务**要求一个现有 capability 给不了的具体设备/App 动作**（往 catalog 没有的聊天平台发消息、拍照）**且 `foundation_llm` 顶替不了**时，才返回 `{"unsatisfiable": true, "reason": "..."}`。
 
 ## 3. 三段式路由（`capability_matrix_router.route`）
 
@@ -89,16 +90,18 @@ NL request
 
 完整 prompt 模板机制见 [`prompt_template.zh.md`](prompt_template.zh.md)。
 
-## 5. 本地校验（`_validate`，硬失败）
+## 5. 本地校验 + LLM repair（`_validate` → `_repair`）
 
-合成完（含路由）跑本地校验，命中任何一条抛 `PlanValidationError`（带完整 error list；**LLM repair loop 是 `_repair` 里刻意保留的 TODO，暂为 no-op**，宁可硬失败也不静默执行坏 plan）：
+合成完（含路由）跑本地校验。校验内容：
 
 - step 必须是 object；`id` 唯一；`bind` 名唯一。
 - app step：`app`/`capability`/`prompt` 非空；`app` 在 catalog 内；`capability` 属于该 app。
 - prompt / `extract.prompt` 里每个 `{var}` 必须**已被更早 step 产生**。
 - **Rule 4**：mid-flow 的 `handoff_to_user_required` leg 必须后接 `ask_user`；作为**最后一步**的 handoff leg 是合法终态。
 - `x_skip_wait_for_reply` 的 cap 不能带 `bind`/`extract`。
-- ask_user：必须有 `bind`；`select_from` 必须已 bound；`prompt_header` 的 `{var}` 必须已 bound。
+- ask_user：必须有 `bind`；`select_from` 必须是**字符串**且由更早 step bound（归一到**根名**比对，故 `{var}` / `var.field` 形式都接受；非字符串记成校验错误而非崩）；`prompt_header` 的 `{var}` 必须已 bound。
+
+**Repair 回路**（`plan()` → `_repair`）：命中路由**或**校验错误时，把坏 plan + 错误清单喂回 LLM 要一份修正 plan（同 schema），再重路由 + 重校验——最多 `_REPAIR_ROUNDS`（2）轮。轮次用尽才由 `plan()` 抛 `PlanValidationError`（带完整 error list）。repair 轮也可能合法返回 `{"unsatisfiable": ...}`。（`validate_plan()` 单独作用于**缓存** plan 时仍直接硬失败、不 repair——缓存 plan 落盘时已校验过。）模型返回的坏 JSON（字符串里裹裸控制符）由 `_parse_fenced_json` 的 `json.loads(strict=False)` 容忍。
 
 路由阶段还会清理：`_drop_unused_no_reply_binds`（no-reply step 上下游没人引用的装饰性 `bind`/`extract` 去掉）、`_refresh_apps_required`（按实际路由结果重建 `apps_required`）。
 
@@ -111,7 +114,7 @@ NL request
 - 每个 leg 一个全新 `python -m agents.native_runner <app> <prompt>` 子进程。
 - 子进程 env：`RELAY_FORCE_CAPABILITY`/`RELAY_INVOCATION_TEXT`（旁路 router）、`RELAY_SKIP_OPEN_APP=1`+`RELAY_AGENT_LAUNCH=1`（deferred-launch：冷启动放 agent 首帧 predict，把进程/leg 启动开销排除在 leg 墙钟外）、`RELAY_REPLY_OUT`（回复 JSON）、`RELAY_SUMMARY_OUT`（summary）、`RELAY_WALL_OUT`（agent 写 framework-excluded `wall_clock.json`）。
 - stdin 喂 `DEVNULL`：末尾 ask_user handoff 以 EOF 干净收尾，不阻塞 flow。
-- **每 leg traj 单独存**：每个 flow run 有自己的 traj root `traj_logs/plan_<app1>_<app2>..._<ts>/`，每 leg 一个 `NN_<id>/`。子进程跑完把全局 `traj_logs/user_task/` copytree 进本 leg 目录（下个 leg 启动会轮转掉全局目录），best-effort，不破坏 flow。
+- **每 leg traj 单独存**：每个 flow run 有自己的 traj root `traj_logs/<ts>_plan_<app1>_<app2>.../`，每 leg 一个 `NN_<id>/`。子进程跑完把全局 `traj_logs/user_task/` copytree 进本 leg 目录（下个 leg 启动会轮转掉全局目录），best-effort，不破坏 flow。
 - **回复 / 硬信号**：从 `RELAY_REPLY_OUT` 读 reply。需要 reply（有 `bind`/`extract`）却没拿到 → 抛错。no-reply leg 走 `_assert_output_free_step_completed`：必须 `rc==0` 且 last_action ∈ {ask_user, answer} 或 (finished 且 goal complete)，否则抛错。
 - **Leg judge**（语义层，见 §7）：硬信号之上的「自信地答错」检测。
 
@@ -177,3 +180,20 @@ route(route_key, overlay):                  _judge_leg 末尾:
 **Promote（`scripts/promote_routes.py`，只读）**：把 trace 学到的高置信路由摆出来供人工决定是否折回 matrix——**绝不写 matrix**（CSV 是手维护 source of truth）。扫 overlay，按更高的门槛（`RELAY_PROMOTE_MIN_HITS` 默认 5 / `RATE` 默认 0.9）筛出 `(intent → app/cap)`，标注每条在 matrix 里**已授权**（确认学到的偏好与 matrix 一致）还是**未列**（候选加 ✓ 或忽略的 stale 项）。`--csv` 额外吐 review 行供人粘贴。纯逻辑、无设备/LLM/网络。
 
 **开关 / 阈值**：`RELAY_ROUTE_OVERLAY`(默认1) / `RELAY_ROUTE_OVERLAY_PATH` / `RELAY_ROUTE_KEY_MODE`(默认 `b`) / `RELAY_ROUTE_SOLIDIFY_HITS`(3) / `RELAY_ROUTE_SOLIDIFY_RATE`(0.8) / `RELAY_ROUTE_MAX_FAILS`(2) / `RELAY_PROMOTE_MIN_HITS`(5) / `RELAY_PROMOTE_MIN_RATE`(0.9)。
+
+## 10. MobileWorld 兜底（capability 不覆盖时）
+
+RA 的路由建立在**人工维护的 manifest + capability matrix**上。当一条 leg（或整条请求）**没有任何 app/capability 覆盖**时，与其放弃，不如交给 **MobileWorld 的 `general_e2e`**——一个**无需 manifest 的通用端到端 UI agent**，能从当前屏自行开 app、导航完成任意目标（fork 已 pin 在 `pyproject.toml` 的 `mobile-world` 依赖里，装进 `.venv/.../mobile_world/`）。
+
+**触发（planner，所有 unsatisfiable）**：
+
+- **coverage gap**（命中 capability 但 matrix 无授权 app，`NoRunnableAppForCapability`）：`_route_one_step` 在该 step 打标 `x_coverage_gap`，**仍走完修复轮**（repair 可能把缺口重路由到真 capability，如 `foundation_llm`——优先于 MW）。修复用尽仍有缺口时，`_apply_mw_fallback_to_gaps` 把**带标记的那几条 step**就地转成 MW leg（`_to_mw_leg`），复验后返回**可满足**的 plan，而不是 `{"unsatisfiable"}`。
+- **LLM 判整条不可满足**（`plan()`/`_repair` 返回 `{"unsatisfiable"}`，此时**无 steps**）：退化为「整条请求 = 一条 MW leg」，`_mw_whole_request_plan` 返回单 leg plan（`prompt = 原始 NL 请求`）。
+
+**MW leg 形态**（新 step type `type: mobileworld`）：保留 `id`/`prompt`/`bind`/`extract`；`app` 仅作**预启动提示**（无 capability 可路由）；带 `x_fallback_reason`。`_validate` 用 `_validate_mw_leg`：只要 `prompt` 非空 + `{var}` 引用已被上游 bound，跳过 app/capability/handoff 校验。`resolve_app_routes` 跳过 MW leg（缓存命中复跑同样跳过）。
+
+**执行（`FlowRunner._run_mobileworld_step`）**：shell 出 `scripts/run_mobileworld.py`（它管 MW server 生命周期 / prelaunch / `.env` LLM 配置），`--agent-type general_e2e --output <leg_dir>`（轨迹落 `<leg_dir>/user_task/traj.json`），有 `app` 提示则 `--app`，否则 `--no-prelaunch`。跑完 `_harvest_mw_traj` 取**最后一个 `answer` action 的 text** 当 leg reply→回灌 blackboard（`bind`/`extract` 与 app leg 同路径），并合成 `summary.json` + `agent_reply.json`。**leg judge** 照常跑（`final_frames` 在 `steps/` 缺失时回退读 `user_task/screenshots/*.png`）；MW leg **不进路由固化**（不是 matrix 表项，无 `x_route_key`）。flow 级 LLM call 照常折进 leg 的 `traj.json`。
+
+**开关 / 旋钮**：`RELAY_MW_FALLBACK`(默认 `1`；`0` 或 `run_plan.py --no-mw-fallback` 关，关掉则恢复旧的 unsatisfiable 退出行为) / `RELAY_MW_MAX_ROUND`(默认 25) / `RELAY_MW_TIMEOUT`(默认 600)。预览里 MW leg 标 `[MobileWorld fallback]`。
+
+**留待后续**：每条 MW leg 各自起停 MW server（多 MW leg 可由 FlowRunner 预起一次复用）；MW leg 的 route solidification。
