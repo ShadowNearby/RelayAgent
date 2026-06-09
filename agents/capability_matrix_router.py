@@ -17,6 +17,7 @@ from loguru import logger
 from openai import OpenAI
 
 from agents.card_catalog import clean_text
+from agents.llm_retry import create_with_retry
 from agents.locale_policy import first_locale, locale_policy_text
 from agents.route_overlay import RouteOverlay
 
@@ -27,6 +28,22 @@ MATRIX_CSV = REPO_ROOT / "docs" / "app_capability_matrix.csv"
 # stage: vertical capabilities are matched first, and `foundation_llm` is only
 # considered when nothing vertical fits.
 FOUNDATION_CAP = "foundation_llm"
+
+
+class NoRunnableAppForCapability(RuntimeError):
+    """The request matched a vertical capability that no app provides.
+
+    A genuine coverage gap (the matrix authorizes zero runnable app/capability
+    pairs for the matched capability ids), as opposed to a malformed plan. The
+    flow planner treats this as `unsatisfiable` rather than a validation error.
+    """
+
+    def __init__(self, cap_ids: list[str]) -> None:
+        self.cap_ids = cap_ids
+        super().__init__(
+            f"matched vertical capability ids {cap_ids}, but the matrix "
+            "authorizes no runnable app/capability pairs for them"
+        )
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _HEADER_APPID_RE = re.compile(r"\(([^)]+)\)\s*$")
@@ -78,7 +95,8 @@ def load_matrix(path: Path = MATRIX_CSV) -> dict[str, Any]:
 
 
 def _llm_json(llm: OpenAI, model: str, system: str, user: str) -> dict[str, Any]:
-    resp = llm.chat.completions.create(
+    resp = create_with_retry(
+        llm,
         model=model,
         messages=[
             {"role": "system", "content": system},
@@ -241,11 +259,7 @@ def _stage2_rerank(
         ):
             options.append(_option_for_pair(app_id, cap_id, matrix, cat_index))
     if not options:
-        raise RuntimeError(
-            "stage-2 early-exit: matched vertical capability ids "
-            f"{cap_ids}, but the matrix authorizes no runnable app/capability "
-            "pairs for them"
-        )
+        raise NoRunnableAppForCapability(cap_ids)
     if len(options) == 1:
         only = options[0]
         logger.info(
