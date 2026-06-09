@@ -86,6 +86,9 @@ def _system(handoff: bool) -> str:
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.+?\})\s*```", re.DOTALL)
 _OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 _STEP_NUM_RE = re.compile(r"step_(\d+)\.png$")
+# MobileWorld's TrajLogger names frames `<task>-0-<step>.png` under
+# user_task/screenshots/ — used as a fallback for MobileWorld fallback legs.
+_MW_STEP_NUM_RE = re.compile(r"-(\d+)\.png$")
 
 
 @dataclass(frozen=True)
@@ -116,26 +119,41 @@ class LegVerdict:
         return {"status": self.status, "score": self.score, "reason": self.reason}
 
 
-def final_frames(leg_user_task_dir: Path, n: int = 2) -> list[Path]:
+def final_frames(leg_dir: Path, n: int = 2) -> list[Path]:
     """The last `n` step screenshots of a finished leg, oldest→newest.
 
-    Reads the per-step PNGs the StepLogger drops under `<leg>/user_task/steps/`
+    Reads the per-step PNGs the StepLogger drops under `<leg>/steps/`
     (see CLAUDE.md "Step 日志"). Sending the last two (not just one) lets the
-    judge tell a stuck/loading screen apart from a settled final state."""
-    steps_dir = leg_user_task_dir / "steps"
-    if not steps_dir.is_dir():
-        return []
+    judge tell a stuck/loading screen apart from a settled final state.
 
-    def _num(p: Path) -> int:
-        m = _STEP_NUM_RE.search(p.name)
-        return int(m.group(1)) if m else -1
+    Falls back to MobileWorld's layout (`<leg>/user_task/screenshots/*.png`) when
+    `steps/` is absent, so a MobileWorld fallback leg can also be judged."""
+    steps_dir = leg_dir / "steps"
+    if steps_dir.is_dir():
+        def _num(p: Path) -> int:
+            m = _STEP_NUM_RE.search(p.name)
+            return int(m.group(1)) if m else -1
 
-    # step_<n>.png only (skip step_<n>_marked.png — same frame with annotations).
-    frames = sorted(
-        (p for p in steps_dir.glob("step_*.png") if "_marked" not in p.name),
-        key=_num,
-    )
-    return frames[-n:] if n > 0 else frames
+        # step_<n>.png only (skip step_<n>_marked.png — annotated dup).
+        frames = sorted(
+            (p for p in steps_dir.glob("step_*.png") if "_marked" not in p.name),
+            key=_num,
+        )
+        return frames[-n:] if n > 0 else frames
+
+    mw_dir = leg_dir / "user_task" / "screenshots"
+    if mw_dir.is_dir():
+        def _mw_num(p: Path) -> int:
+            m = _MW_STEP_NUM_RE.search(p.name)
+            return int(m.group(1)) if m else -1
+
+        frames = sorted(
+            (p for p in mw_dir.glob("*.png") if "marked" not in p.name),
+            key=_mw_num,
+        )
+        return frames[-n:] if n > 0 else frames
+
+    return []
 
 
 def judge_leg(
