@@ -16,7 +16,7 @@ NL request
   └─ FlowPlanner.plan()            synthesize plan (one LLM call, static one-shot, no step-by-step replanning)
        ├─ resolve_app_routes()     resolve each app step's app+capability via the three-stage router
        │    └─ _fill_prompt_template / _maybe_localize_prompt  fill the submit prompt
-       ├─ validate + repair loop   local validation; on error, feed the errors back to an LLM repair round (≤2), re-route, re-validate
+       ├─ validate + repair loop   local validation; on error, feed the errors back to an LLM repair round (≤3), re-route, re-validate
        └─ persist to manifests/_generated/*.yaml
   └─ FlowRunner.run()              execute steps in order
        ├─ app_step    → spawn `python -m agents.native_runner` subprocess (one leg = one app + one capability)
@@ -101,7 +101,7 @@ After synthesis (incl. routing) we run local validation. What it checks:
 - an `x_skip_wait_for_reply` cap cannot carry `bind`/`extract`.
 - ask_user: must have `bind`; `select_from` must be a **string** bound by an earlier step (resolved to its **root** name, so `{var}` / `var.field` forms are accepted; a non-string `select_from` is a recorded error, not a crash); `prompt_header` `{var}`s must be already bound.
 
-**Repair loop** (`plan()` → `_repair`): on a routing **or** validation error, the broken plan + its error list are fed back to the LLM for a corrected plan (same schema), which is then re-routed and re-validated — up to `_REPAIR_ROUNDS` (2) rounds. Only after the rounds are exhausted does `plan()` raise `PlanValidationError` (with the full error list). A repair round may legitimately return `{"unsatisfiable": ...}`. (`validate_plan()` itself, used directly on a **cached** plan, still hard-fails without repair — a cached plan was already valid when persisted.) Malformed model JSON (raw control chars in strings) is tolerated via `json.loads(strict=False)` in `_parse_fenced_json`.
+**Repair loop** (`plan()` → `_repair`): on a routing **or** validation error, the broken plan + its error list are fed back to the LLM for a corrected plan (same schema), which is then re-routed and re-validated — up to `_REPAIR_ROUNDS` (3) rounds. Only after the rounds are exhausted does `plan()` raise `PlanValidationError` (with the full error list). A repair round may legitimately return `{"unsatisfiable": ...}`. (`validate_plan()` itself, used directly on a **cached** plan, still hard-fails without repair — a cached plan was already valid when persisted.) Malformed model JSON (raw control chars in strings) is tolerated via `json.loads(strict=False)` in `_parse_fenced_json`.
 
 The routing phase also cleans up: `_drop_unused_no_reply_binds` (strip a decorative `bind`/`extract` on a no-reply step that nothing downstream references) and `_refresh_apps_required` (rebuild `apps_required` from the actual routing result).
 
@@ -112,9 +112,9 @@ Steps run in order; the blackboard `self.bb` starts empty and grows with each st
 **App step (`_run_app_step`):**
 
 - Each leg is a fresh `python -m agents.native_runner <app> <prompt>` subprocess.
-- Subprocess env: `RELAY_FORCE_CAPABILITY`/`RELAY_INVOCATION_TEXT` (bypass router), `RELAY_SKIP_OPEN_APP=1`+`RELAY_AGENT_LAUNCH=1` (deferred-launch: cold-launch happens in the agent's first predict, so process/leg startup is excluded from the leg's wall-clock), `RELAY_REPLY_OUT` (reply JSON), `RELAY_SUMMARY_OUT` (summary), `RELAY_WALL_OUT` (the agent writes the framework-excluded `wall_clock.json`).
+- Subprocess env: `RELAY_FORCE_CAPABILITY`/`RELAY_INVOCATION_TEXT` (bypass router), `RELAY_SKIP_OPEN_APP=1`+`RELAY_AGENT_LAUNCH=1` (deferred-launch: cold-launch happens in the agent's first predict, so process/leg startup is excluded from the leg's wall-clock), `RELAY_TRAJ_DIR` (pin traj.json / steps/ / agent_reply.json straight into this leg's `NN_<id>/` dir — no global `user_task` scratch, no post-run copytree), `RELAY_REPLY_OUT` (reply JSON), `RELAY_SUMMARY_OUT` (summary), `RELAY_WALL_OUT` (the agent writes the framework-excluded `wall_clock.json`).
 - stdin is `DEVNULL`: a trailing ask_user handoff closes cleanly on EOF instead of blocking the flow.
-- **Per-leg traj preserved**: each flow run has its own traj root `traj_logs/<ts>_plan_<app1>_<app2>.../`, one `NN_<id>/` per leg. After the sub-run we copytree the global `traj_logs/user_task/` into this leg's dir (the next leg's startup would rotate the global dir away); best-effort, never breaks the flow.
+- **Per-leg traj preserved**: each flow run has its own traj root `traj_logs/<ts>_plan_<app1>_<app2>.../`, one `NN_<id>/` per leg. The subprocess writes trajectory artifacts directly into that leg dir via `RELAY_TRAJ_DIR`; the native runner skips its global backup rotation when pinned. See [`trajectory_logging.md`](trajectory_logging.md).
 - **Reply / hard signals**: read the reply from `RELAY_REPLY_OUT`. A leg that needs a reply (`bind`/`extract`) but captured none → raise. A no-reply leg goes through `_assert_output_free_step_completed`: requires `rc==0` and last_action ∈ {ask_user, answer} or (finished and goal complete), else raise.
 - **Leg judge** (semantic layer, see §7): the "confidently wrong" check on top of the hard signals.
 
@@ -192,8 +192,8 @@ RA's routing rests on a **hand-maintained manifest + capability matrix**. When a
 
 **MW leg shape** (new step type `type: mobileworld`): keeps `id`/`prompt`/`bind`/`extract`; `app` is only a **prelaunch hint** (no capability to route); carries `x_fallback_reason`. `_validate` uses `_validate_mw_leg`: requires a non-empty `prompt` and upstream-bound `{var}`s, skipping app/capability/handoff checks. `resolve_app_routes` skips MW legs (including on a cached re-run).
 
-**Execution (`FlowRunner._run_mobileworld_step`)**: shells out to `scripts/run_mobileworld.py` (which owns the MW server lifecycle / prelaunch / `.env` LLM config) with `--agent-type general_e2e --output <leg_dir>` (trajectory lands at `<leg_dir>/user_task/traj.json`), `--app` if there's a hint else `--no-prelaunch`. Afterward `_harvest_mw_traj` takes the **last `answer` action's text** as the leg reply → feeds the blackboard (same `bind`/`extract` path as an app leg), and writes `summary.json` + `agent_reply.json`. The **leg judge** runs as usual (`final_frames` falls back to `user_task/screenshots/*.png` when `steps/` is absent); MW legs are **not solidified** (not a matrix route, no `x_route_key`). Flow-level LLM calls fold into the leg's `traj.json` as usual.
+**Execution (`FlowRunner._run_mobileworld_step`)**: `FlowRunner` starts **one** MobileWorld server for the whole flow (`_ensure_mw_server` / `_teardown_mw_server` in `run()`'s `finally`) and reuses it across MW legs. Each leg shells out to `scripts/run_mobileworld.py` with `--no-start-server --server-url <flow-managed>` plus `--agent-type general_e2e --output <leg_dir>` (trajectory lands at `<leg_dir>/user_task/traj.json`), `--app` if there's a hint else `--no-prelaunch`. Afterward `_harvest_mw_traj` takes the **last `answer` action's text** as the leg reply → feeds the blackboard (same `bind`/`extract` path as an app leg), and writes `summary.json` + `agent_reply.json`. The **leg judge** runs as usual (`final_frames` falls back to `user_task/screenshots/*.png` when `steps/` is absent); MW legs are **not solidified** (not a matrix route, no `x_route_key`). Flow-level LLM calls fold into the leg's `traj.json` as usual.
 
-**Switches / knobs**: `RELAY_MW_FALLBACK` (default `1`; `0` or `run_plan.py --no-mw-fallback` disables it, restoring the old unsatisfiable-exit behavior) / `RELAY_MW_MAX_ROUND` (default 25) / `RELAY_MW_TIMEOUT` (default 600). The preview marks MW legs with `[MobileWorld fallback]`.
+**Switches / knobs**: `RELAY_MW_FALLBACK` (default `1`; `0` or `run_plan.py --no-mw-fallback` disables it, restoring the old unsatisfiable-exit behavior) / `RELAY_MW_SERVER_URL` (default `http://127.0.0.1:6800`) / `RELAY_MW_MAX_ROUND` (default 25) / `RELAY_MW_TIMEOUT` (default 600). The preview marks MW legs with `[MobileWorld fallback]`.
 
-**Deferred**: each MW leg starts/stops its own MW server (multiple MW legs could reuse one FlowRunner-managed server); route solidification for MW legs.
+**Deferred**: route solidification for MW legs.

@@ -26,7 +26,7 @@ one sentence
   ├─(2) cache lookup               exact string match in manifests/_generated/; skipped by --no-cache
   │        hit ┐
   │           └────────────────────────────────┐
-  ├─(3) FlowPlanner.plan()         miss: LLM synthesize → fenced JSON → route + validate (+ ≤2 LLM repair rounds)
+  ├─(3) FlowPlanner.plan()         miss: LLM synthesize → fenced JSON → route + validate (+ ≤3 LLM repair rounds)
   │        │                                     │
   │        ├─ invalid after repair → hard-fail + exit
   │        └─ unsatisfiable → print reason + exit
@@ -44,7 +44,7 @@ Files involved:
 | File | Role |
 | --- | --- |
 | [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI entry: cache / persist / preview / confirm / recording / dispatch |
-| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`: catalog → prompt → LLM → JSON → route + validate + LLM repair (≤2 rounds) |
+| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`: catalog → prompt → LLM → JSON → route + validate + LLM repair (≤3 rounds) |
 | [`agents/flow_runner.py`](../agents/flow_runner.py) | the executor: runs each leg, binds replies, handles ask_user / extract |
 | [`manifests/_generated/`](../manifests/_generated/) | generated-artifact + cache dir; `.gitignore` keeps its contents out of version control |
 
@@ -122,7 +122,7 @@ Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 - `bind` names are unique and `id`s don't repeat;
 - **the rule-4 check**: if a `handoff_to_user_required` capability is **not** the last step, the next step must be an `ask_user` (a terminal one at the end is allowed).
 
-> **Repair loop (implemented):** on a routing or validation error, `plan()` feeds the broken plan + its error list back to the LLM (`_repair`) for a corrected plan, then re-routes and re-validates — up to `_REPAIR_ROUNDS` (2) rounds. Only after the rounds are exhausted does it **hard-fail + exit** (printing the error list + raw plan), so a bad plan never executes silently. `validate_plan()` on its own (cached-plan path) still hard-fails without repair. Malformed model JSON (raw control chars) is tolerated via `json.loads(strict=False)`.
+> **Repair loop (implemented):** on a routing or validation error, `plan()` feeds the broken plan + its error list back to the LLM (`_repair`) for a corrected plan, then re-routes and re-validates — up to `_REPAIR_ROUNDS` (3) rounds. Only after the rounds are exhausted does it **hard-fail + exit** (printing the error list + raw plan), so a bad plan never executes silently. `validate_plan()` on its own (cached-plan path) still hard-fails without repair. Malformed model JSON (raw control chars) is tolerated via `json.loads(strict=False)`.
 
 ---
 
@@ -194,7 +194,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | Item | Status | Location |
 | --- | --- | --- |
-| LLM repair loop | **Done** (≤2 rounds, then hard-fail) | `flow_planner.py:_repair` + `plan()` repair loop |
+| LLM repair loop | **Done** (≤3 rounds, then hard-fail) | `flow_planner.py:_repair` + `plan()` repair loop |
 | Semantic cache reuse | TODO (exact string match only) | `run_plan.py:_cache_lookup` `# TODO(semantic-cache):` |
 | Phase B same-session resume | seam only | `# TODO(phase-B):` in `flow_runner.py` / `relay_agent.py` |
 | Static one-shot planning | by design | no step-by-step / failure replanning; doesn't adapt to surprising leg output |
@@ -232,7 +232,7 @@ This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 
 | File | Content |
 | --- | --- |
-| `agents/flow_planner.py` | `FlowPlanner`: catalog → system prompt → LLM → fenced JSON → route + validate (`_validate`) + LLM repair (`_repair`, ≤2 rounds). `PlanValidationError` carries the error list. |
+| `agents/flow_planner.py` | `FlowPlanner`: catalog → system prompt → LLM → fenced JSON → route + validate (`_validate`) + LLM repair (`_repair`, ≤3 rounds). `PlanValidationError` carries the error list. |
 | `scripts/run_plan.py` | CLI entry: exact-string cache / synthesize / persist / preview / confirm / recording / dispatch to `FlowRunner`. Flags: `--dry-run` `--yes` `--no-cache` `--record` `-- <forward>`. |
 | `manifests/_generated/.gitignore` | keeps generated plans / cache out of version control, retaining only `.gitignore` itself. |
 | `docs/cross_app_planner.md` / `docs/cross_app_planner.zh.md` | this document (English / Chinese). |
@@ -251,6 +251,6 @@ This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 - **Static one-shot planning** rather than step-by-step / ReAct: reuses the existing `FlowRunner`, minimal change, immediately shippable; the cost is no adaptation to surprising leg output.
 - **A dedicated `run_plan.py`** as the NL flow entry: single-app requests become 1-step plans, while multi-app requests share the same execution path.
 - **Preview + confirm (default N)**: cross-app carries irreversible side effects (ride-hailing / ordering), so a human must see and approve before execution.
-- **LLM repair before hard-fail**: validation/routing errors get ≤2 LLM repair rounds; only if still broken do we abort — better that than let a bad plan execute silently.
+- **LLM repair before hard-fail**: validation/routing errors get ≤3 LLM repair rounds; only if still broken do we abort — better that than let a bad plan execute silently.
 - **Handoff may be terminal at the end, ask_user forced only mid-flow**: e.g. a plan ending on hailing a ride — the final leg's in-app handoff is itself the terminal confirmation.
 - **Cache exact-string first, semantic reuse left as TODO**: get the main path working before investing in caching.
