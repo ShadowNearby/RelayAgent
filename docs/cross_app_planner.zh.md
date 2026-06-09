@@ -26,7 +26,7 @@
   ├─(2) 缓存查找                    manifests/_generated/ 里精确串匹配；--no-cache 跳过
   │        命中 ┐
   │            └────────────────────────────────┐
-  ├─(3) FlowPlanner.plan()         未命中：LLM 合成 → fenced JSON → 路由 + 校验（+ ≤2 轮 LLM repair）
+  ├─(3) FlowPlanner.plan()         未命中：LLM 合成 → fenced JSON → 路由 + 校验（+ ≤3 轮 LLM repair）
   │        │                                     │
   │        ├─ repair 后仍不过 → 硬报错退出
   │        └─ unsatisfiable → 打印原因退出
@@ -44,7 +44,7 @@
 | 文件 | 角色 |
 | --- | --- |
 | [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI 入口：缓存 / 落盘 / 预览 / 确认 / 录屏 / 派发 |
-| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`：catalog → prompt → LLM → JSON → 路由 + 校验 + LLM repair（≤2 轮） |
+| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`：catalog → prompt → LLM → JSON → 路由 + 校验 + LLM repair（≤3 轮） |
 | [`agents/flow_runner.py`](../agents/flow_runner.py) | 执行器：跑每个 leg、bind 回复、处理 ask_user / extract |
 | [`manifests/_generated/`](../manifests/_generated/) | 生成物 + 缓存目录，`.gitignore` 把内容排除出版本库 |
 
@@ -122,7 +122,7 @@ steps: [ ... ]
 - `bind` 名唯一、`id` 不重复；
 - **规则 4 的校验**：`handoff_to_user_required` 的 capability 若**不是**最后一步，下一步必须是 `ask_user`（末尾的允许作终点）。
 
-> **Repair 回路（已实装）：** 命中路由或校验错误时，`plan()` 把坏 plan + 错误清单喂回 LLM（`_repair`）要修正 plan，再重路由 + 重校验——最多 `_REPAIR_ROUNDS`（2）轮；轮次用尽仍不过才**硬报错退出**（打印错误清单 + 原始 plan），以免坏 plan 静默执行。`validate_plan()` 单独作用（缓存 plan 路径）时仍直接硬失败、不 repair。模型返回的坏 JSON（裹裸控制符）由 `json.loads(strict=False)` 容忍。
+> **Repair 回路（已实装）：** 命中路由或校验错误时，`plan()` 把坏 plan + 错误清单喂回 LLM（`_repair`）要修正 plan，再重路由 + 重校验——最多 `_REPAIR_ROUNDS`（3）轮；轮次用尽仍不过才**硬报错退出**（打印错误清单 + 原始 plan），以免坏 plan 静默执行。`validate_plan()` 单独作用（缓存 plan 路径）时仍直接硬失败、不 repair。模型返回的坏 JSON（裹裸控制符）由 `json.loads(strict=False)` 容忍。
 
 ---
 
@@ -194,7 +194,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | 项 | 状态 | 位置 |
 | --- | --- | --- |
-| LLM repair 重修循环 | **已实装**（≤2 轮，再硬报错） | `flow_planner.py:_repair` + `plan()` repair 回路 |
+| LLM repair 重修循环 | **已实装**（≤3 轮，再硬报错） | `flow_planner.py:_repair` + `plan()` repair 回路 |
 | 语义缓存复用 | TODO（仅精确串匹配） | `run_plan.py:_cache_lookup` `# TODO(semantic-cache):` |
 | Phase B 同会话续跑 | 仅留缝 | `flow_runner.py` / `relay_agent.py` 的 `# TODO(phase-B):` |
 | 静态一次性规划 | 设计如此 | 不做逐步 / 失败重规划；leg 输出异常不自适应 |
@@ -232,7 +232,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | 文件 | 内容 |
 | --- | --- |
-| `agents/flow_planner.py` | `FlowPlanner`：catalog → system prompt → LLM → fenced JSON → 路由 + 校验（`_validate`）+ LLM repair（`_repair`，≤2 轮）。`PlanValidationError` 携带错误清单。 |
+| `agents/flow_planner.py` | `FlowPlanner`：catalog → system prompt → LLM → fenced JSON → 路由 + 校验（`_validate`）+ LLM repair（`_repair`，≤3 轮）。`PlanValidationError` 携带错误清单。 |
 | `scripts/run_plan.py` | CLI 入口：精确串缓存 / 合成 / 落盘 / 预览 / 确认 / 录屏 / 派发 `FlowRunner`。flag：`--dry-run` `--yes` `--no-cache` `--record` `-- <透传>`。 |
 | `manifests/_generated/.gitignore` | 把生成的 plan / 缓存排除出版本库，只保留 `.gitignore` 自身。 |
 | `docs/cross_app_planner.zh.md` | 本文档。 |
@@ -251,6 +251,6 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 - **静态一次性规划**而非逐步/ReAct：复用现有 `FlowRunner`，改动最小、可立即落地；代价是 leg 输出异常不自适应。
 - **独立 `run_plan.py`** 作为 NL flow 入口：单 App 请求变成 1-step plan，多 App 请求也走同一条执行路径。
 - **预览 + 确认（默认 N）**：跨 App 含不可逆副作用（打车/下单），执行前必须人能看清并放行。
-- **repair 后再硬报错**：路由/校验错误先经 ≤2 轮 LLM repair，仍不过才中止——总好过让坏 plan 静默执行。
+- **repair 后再硬报错**：路由/校验错误先经 ≤3 轮 LLM repair，仍不过才中止——总好过让坏 plan 静默执行。
 - **handoff 末尾可作终点、中间才强插 ask_user**：如一条收尾在打车的 plan；末尾 leg 的 in-app handoff 本身即终态确认。
 - **缓存先精确串匹配、语义复用留 TODO**：先把主链路跑通，避免在缓存上过早投入。

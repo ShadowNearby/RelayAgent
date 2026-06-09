@@ -60,10 +60,18 @@ class PlanValidationError(RuntimeError):
     surface them (and so a future repair loop can feed them back to the LLM).
     """
 
-    def __init__(self, nl_request: str, plan: Any, errors: list[str]) -> None:
+    def __init__(
+        self,
+        nl_request: str,
+        plan: Any,
+        errors: list[str],
+        *,
+        coverage_gaps: list[str] | None = None,
+    ) -> None:
         self.nl_request = nl_request
         self.plan = plan
         self.errors = errors
+        self.coverage_gaps: list[str] = list(coverage_gaps or [])
         joined = "\n  - ".join(errors)
         super().__init__(
             f"Synthesized plan failed validation ({len(errors)} error(s)):\n  - {joined}"
@@ -352,7 +360,7 @@ class FlowPlanner:
                     data = self.resolve_app_routes(data, nl_request)
                 except PlanValidationError as e:
                     errors = list(e.errors)
-                    coverage_gaps = list(getattr(e, "coverage_gaps", []))
+                    coverage_gaps = list(e.coverage_gaps)
             if not errors:
                 errors = self._validate(data)
             if not errors:
@@ -468,9 +476,7 @@ class FlowPlanner:
                 produced.add(bind)
 
         if errors:
-            err = PlanValidationError(nl_request, plan, errors)
-            err.coverage_gaps = gaps  # type: ignore[attr-defined]
-            raise err
+            raise PlanValidationError(nl_request, plan, errors, coverage_gaps=gaps)
 
         self._drop_unused_no_reply_binds(plan)
         self._refresh_apps_required(plan)
