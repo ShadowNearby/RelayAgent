@@ -36,6 +36,37 @@ def force_stop(package: str, *, timeout: float = 10.0) -> None:
         )
 
 
+def kill_all_apps(*, timeout: float = 25.0) -> list[str]:
+    """Force-stop every *running* third-party app, then return to the launcher.
+
+    Used as a between-task hard reset so no app (chat thread, half-finished
+    booking, logged-in session sheet) survives into the next task. We force-stop
+    only third-party packages (`pm list packages -3`) that actually have a live
+    process (`ps -A`), so we skip the ~hundreds of installed-but-idle apps and
+    never touch system packages. Best-effort: per-app failures only warn.
+    """
+    base = adb_base()
+    try:
+        third = subprocess.run(base + ["shell", "pm", "list", "packages", "-3"],
+                               check=False, capture_output=True, text=True, timeout=timeout)
+        installed = {ln.split("package:", 1)[1].strip()
+                     for ln in third.stdout.splitlines() if ln.startswith("package:")}
+        procs = subprocess.run(base + ["shell", "ps", "-A", "-o", "NAME"],
+                               check=False, capture_output=True, text=True, timeout=timeout)
+        # process name may carry a `:service` suffix — the package is the prefix
+        running = {ln.strip().split(":", 1)[0] for ln in procs.stdout.splitlines()}
+        targets = sorted(installed & running)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning(f"kill_all_apps enumerate failed: {exc}")
+        targets = []
+    for pkg in targets:
+        force_stop(pkg)
+    subprocess.run(base + ["shell", "input", "keyevent", "KEYCODE_HOME"],
+                   check=False, capture_output=True, timeout=10)
+    logger.info(f"kill_all_apps: force-stopped {len(targets)} running app(s): {targets}")
+    return targets
+
+
 def screencap(timeout: float = 5.0):
     """Grab a fresh device screenshot as a PIL.Image (or None on failure).
 

@@ -167,7 +167,7 @@ def judge_leg(
     frames: list[Path],
     live_image: Any = None,
     terminal_action: str | None = None,
-    max_tokens: int = 256,
+    max_tokens: int = 1024,
 ) -> LegVerdict:
     """Classify a finished leg as success / failure / loading. Never raises.
 
@@ -268,7 +268,7 @@ def _parse_verdict(raw: str) -> tuple[str, str] | None:
     try:
         data = json.loads(payload)
     except (json.JSONDecodeError, TypeError):
-        return None
+        return _salvage_verdict(raw)
     if not isinstance(data, dict):
         return None
     reason = str(data.get("reason", "")).strip()
@@ -278,3 +278,18 @@ def _parse_verdict(raw: str) -> tuple[str, str] | None:
     if "success" in data:  # legacy boolean shape
         return (SUCCESS if bool(data["success"]) else FAILURE), reason
     return None
+
+
+_STATUS_SALVAGE_RE = re.compile(r'"status"\s*:\s*"(success|failure|loading)"')
+_REASON_SALVAGE_RE = re.compile(r'"reason"\s*:\s*"([^"]*)')
+
+
+def _salvage_verdict(raw: str) -> tuple[str, str] | None:
+    """JSON 不可解析（典型：max_tokens 把 ```json 块截断在字符串中间）时，
+    直接从残文里捞 status；reason 尽量带上截断前缀。"""
+    m = _STATUS_SALVAGE_RE.search(raw)
+    if m is None:
+        return None
+    rm = _REASON_SALVAGE_RE.search(raw)
+    reason = (rm.group(1).strip() if rm else "") or "(salvaged from truncated judge output)"
+    return m.group(1), reason

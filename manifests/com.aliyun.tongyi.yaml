@@ -9,9 +9,8 @@ embedded_agent:
   name: "千问"
   description: >
     Alibaba's Tongyi Qianwen App — the entire app is an AI agent surface.
-    Built-in orchestration layer routes intents (train/food/ride/hotel/movie/
-    shopping) to Alibaba partner apps (Fliggy, Taobao Flash, Taobao, Amap,
-    Damai) via OAuth.
+    A built-in orchestration layer fulfills intents (train/food/ride/hotel/
+    movie/shopping) directly within the assistant via OAuth-linked services.
     Three auth tiers affect completion semantics; see OQ-12.
 
   entry:
@@ -197,7 +196,7 @@ embedded_agent:
 
     - id: order_food
       description: >
-        Food ordering and local delivery via Taobao Flash. The assistant searches
+        Food ordering and local delivery handled in-assistant. The assistant searches
         nearby stores, recommends items, applies stored address/preferences, and
         can proceed to checkout, but final order/address/payment confirmation is
         irreversible and must be handed to the user.
@@ -226,7 +225,7 @@ embedded_agent:
 
     - id: search_product
       description: >
-        Product search, recommendation, and comparison via Taobao. The assistant
+        Product search, recommendation, and comparison handled in-assistant. The assistant
         parses budget, brand, specs, use case, delivery constraints, reviews,
         and promotions, then returns product cards or comparison guidance. It
         does not auto-order; purchase/pre-checkout intents route to
@@ -245,7 +244,7 @@ embedded_agent:
 
     - id: track_order
       description: >
-        Order, logistics, after-sales, or refund-status lookup via Taobao. This
+        Order, logistics, after-sales, or refund-status lookup handled in-assistant. This
         capability is read-only; if the user wants to initiate a return, refund,
         or modification, switch to a handoff flow.
       example_prompts:

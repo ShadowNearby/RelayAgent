@@ -155,7 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("AdbKeyboard not active; input_text steps may fail.", file=sys.stderr)
 
     start = time.monotonic()
-    summary = {}
+    summary: dict = {}
     try:
         summary = run_task(args.goal, agent, env, max_step=args.max_step)
     finally:
@@ -164,6 +164,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             finalize()
         if not args.keep_ime:
             reset_ime()
+        # Always stamp the agent's accumulated token total onto the summary —
+        # even when run_task raised mid-leg, the agent has been counting usage,
+        # and a bare {} summary would silently drop it from the run_plan token
+        # accounting. On normal completion run_task already filled it; this only
+        # backfills the crash path. Best-effort: never mask the original error.
+        if not summary.get("token_usage"):
+            try:
+                get_usage = getattr(agent, "get_total_token_usage", None)
+                if callable(get_usage):
+                    summary["token_usage"] = get_usage()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[native] failed to read token usage: {exc}", file=sys.stderr)
         summary_out = os.getenv(SUMMARY_OUT_ENV)
         if summary_out:
             try:

@@ -76,6 +76,7 @@ NL request
   - LLM 返回 `kind:"none"` 或选了 shortlist 外的 pair → 回落 stage-3。
   - 命中垂类 cap 但 matrix 授权 0 个可运行 pair → 抛错（不静默吞）。
 - **Stage 3 — foundation 兜底**（`_stage3_foundation`）：垂类都不 fit 才进。**这是结构上独立的一段，不是 prompt 里一句提示**——在 foundation_llm App 里选最佳通用助手并写 goal。
+  - **逃生口（不是无条件 catch-all）**：foundation 助手只产出**文本答案**；若任务要求一个聊天助手做不到的**具体设备/OS 副作用动作**（文件管理、重命名/移动/删除文件、改系统设置、驱动别的 App UI），stage-3 返回 `kind:"none"` → 抛 `FoundationNotApplicable`。`_route_one_step` 把它**当 coverage gap** 处理（打 `x_coverage_gap`、进 gaps），让 repair 重试，仍未闭合则 `_apply_mw_fallback_to_gaps` 转 **MobileWorld leg**，而不是硬塞进 foundation_llm。例：「把 Download 里 `bid_` 前缀文件按创建日期重命名」。
 
 `route(..., preserve_goal=True)`：flow 规划只用 router 选 app/capability，**保留 planner 自己的 templated prompt**（把 `goal` 强制设回原 NL，不让 router 改写措辞）。
 
@@ -101,7 +102,7 @@ NL request
 - `x_skip_wait_for_reply` 的 cap 不能带 `bind`/`extract`。
 - ask_user：必须有 `bind`；`select_from` 必须是**字符串**且由更早 step bound（归一到**根名**比对，故 `{var}` / `var.field` 形式都接受；非字符串记成校验错误而非崩）；`prompt_header` 的 `{var}` 必须已 bound。
 
-**Repair 回路**（`plan()` → `_repair`）：命中路由**或**校验错误时，把坏 plan + 错误清单喂回 LLM 要一份修正 plan（同 schema），再重路由 + 重校验——最多 `_REPAIR_ROUNDS`（3）轮。轮次用尽才由 `plan()` 抛 `PlanValidationError`（带完整 error list）。repair 轮也可能合法返回 `{"unsatisfiable": ...}`。（`validate_plan()` 单独作用于**缓存** plan 时仍直接硬失败、不 repair——缓存 plan 落盘时已校验过。）模型返回的坏 JSON（字符串里裹裸控制符）由 `_parse_fenced_json` 的 `json.loads(strict=False)` 容忍。
+**Repair 回路**（`plan()` → `_repair`）：命中路由**或**校验错误时，把坏 plan + 错误清单喂回 LLM 要一份修正 plan（同 schema），再重路由 + 重校验——最多 `_REPAIR_ROUNDS`（3）轮。轮次用尽才由 `plan()` 抛 `PlanValidationError`（带完整 error list）——且仅当 MW 兜底**关**时才抛；开着时改为整条转 MW leg，不抛（见 §10）。repair 轮也可能合法返回 `{"unsatisfiable": ...}`。（`validate_plan()` 单独作用于**缓存** plan 时仍直接硬失败、不 repair——缓存 plan 落盘时已校验过。）模型返回的坏 JSON（字符串里裹裸控制符）由 `_parse_fenced_json` 的 `json.loads(strict=False)` 容忍。
 
 路由阶段还会清理：`_drop_unused_no_reply_binds`（no-reply step 上下游没人引用的装饰性 `bind`/`extract` 去掉）、`_refresh_apps_required`（按实际路由结果重建 `apps_required`）。
 
@@ -187,8 +188,9 @@ RA 的路由建立在**人工维护的 manifest + capability matrix**上。当�
 
 **触发（planner，所有 unsatisfiable）**：
 
-- **coverage gap**（命中 capability 但 matrix 无授权 app，`NoRunnableAppForCapability`）：`_route_one_step` 在该 step 打标 `x_coverage_gap`，**仍走完修复轮**（repair 可能把缺口重路由到真 capability，如 `foundation_llm`——优先于 MW）。修复用尽仍有缺口时，`_apply_mw_fallback_to_gaps` 把**带标记的那几条 step**就地转成 MW leg（`_to_mw_leg`），复验后返回**可满足**的 plan，而不是 `{"unsatisfiable"}`。
+- **coverage gap**（命中 capability 但 matrix 无授权 app，`NoRunnableAppForCapability`；或 **stage-3 判设备动作非 foundation 任务**，`FoundationNotApplicable`）：`_route_one_step` 在该 step 打标 `x_coverage_gap`，**仍走完修复轮**（repair 可能把缺口重路由到真 capability，如 `foundation_llm`——优先于 MW）。修复用尽仍有缺口时，`_apply_mw_fallback_to_gaps` 把**带标记的那几条 step**就地转成 MW leg（`_to_mw_leg`），复验后返回**可满足**的 plan，而不是 `{"unsatisfiable"}`。gap 转 MW 后若复验仍失败（如下游 `{var}` 只有被丢的 capability 能 bind），也整条转 MW（`_mw_whole_request_plan`），不再返回 `{"unsatisfiable"}`。
 - **LLM 判整条不可满足**（`plan()`/`_repair` 返回 `{"unsatisfiable"}`，此时**无 steps**）：退化为「整条请求 = 一条 MW leg」，`_mw_whole_request_plan` 返回单 leg plan（`prompt = 原始 NL 请求`）。
+- **repair 用尽仍 invalid**（非 coverage-gap 的校验错误，如模板槽位抽不出、handoff 结构 RA 给不了）：`_REPAIR_ROUNDS` 轮用尽后，MW 兜底开着时**不再抛 `PlanValidationError`**，而是整条转 MW（`_mw_whole_request_plan`）；关掉才抛。
 
 **MW leg 形态**（新 step type `type: mobileworld`）：保留 `id`/`prompt`/`bind`/`extract`；`app` 仅作**预启动提示**（无 capability 可路由）；带 `x_fallback_reason`。`_validate` 用 `_validate_mw_leg`：只要 `prompt` 非空 + `{var}` 引用已被上游 bound，跳过 app/capability/handoff 校验。`resolve_app_routes` 跳过 MW leg（缓存命中复跑同样跳过）。
 

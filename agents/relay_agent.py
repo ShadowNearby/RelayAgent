@@ -72,6 +72,15 @@ _DISMISS_PERMS_ENV = "RELAY_DISMISS_PERMISSIONS"  # set to "0" to disable system
 # baseline vs optimized token/time can be measured — see CLAUDE.md §6/§8).
 _PRECHECK_ENV = "RELAY_PRECHECK"  # set to "0" to disable the wait_for_reply two-stage precheck (baseline = VLM-poll every tick)
 _SCRAPE_ENV = "RELAY_SCRAPE"  # set to "0" to disable uiautomator reply-text scrape (baseline = VLM-only extraction)
+# Fairness gate vs the MobileWorld baseline. The baseline (general_e2e) has no
+# scroll-to-capture: once the on-screen reply looks settled it just reads the
+# visible frame and `answer`s. RelayAgent's manifests opt into full-reply
+# capture (x_capture_full_reply -> capture_full), which scrolls offscreen reply
+# chunks into view and stitches them. For an apples-to-apples A/B we let the
+# benchmark force that off: set to "0" and wait_for_reply stops at "screen
+# stable" and returns the first visible frame's text, never entering the
+# scrolling capture phase. Default on (full capture). See CLAUDE.md §6.
+_CAPTURE_FULL_ENV = "RELAY_CAPTURE_FULL_REPLY"
 # Manifest-isolation ablation (§8.9). When "1", the adapter loads NO card and
 # drives the same *delegation skeleton* — fresh conversation, type the whole
 # user request, wait, accept-defaults advance, hand off before the irreversible
@@ -888,6 +897,7 @@ class RelayAgent(_MCPAgentBase):
         self.dismiss_permissions: bool = os.getenv(_DISMISS_PERMS_ENV, "1") != "0"
         self.precheck_enabled: bool = os.getenv(_PRECHECK_ENV, "1") != "0"
         self.scrape_enabled: bool = os.getenv(_SCRAPE_ENV, "1") != "0"
+        self.capture_full_enabled: bool = os.getenv(_CAPTURE_FULL_ENV, "1") != "0"
         self.no_manifest: bool = os.getenv(_NO_MANIFEST_ENV, "0") == "1"
         self.skip_step_screenshot: bool = os.getenv(_SKIP_STEP_SCREENSHOT_ENV, "0") == "1"
         self._permission_dismissed_count: int = 0
@@ -1373,7 +1383,11 @@ class RelayAgent(_MCPAgentBase):
             )
 
         if kind == "wait_for_reply":
-            capture_full = bool(p.get("capture_full"))
+            # Fairness gate: RELAY_CAPTURE_FULL_REPLY=0 (baseline A/B) forces the
+            # scroll-capture off so we stop at "screen stable" and return the
+            # first visible frame's text — matching the MobileWorld baseline,
+            # which only reads the on-screen reply with no scroll-to-capture.
+            capture_full = bool(p.get("capture_full")) and self.capture_full_enabled
             max_capture_scrolls = int(p.get("max_capture_scrolls", 6))
 
             # Phase 2: after done, walk through the rest of the reply by
