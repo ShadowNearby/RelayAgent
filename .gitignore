@@ -17,6 +17,13 @@ build/
 # IDE / editor
 .vscode/
 .idea/
+.claude/
+
+# MobileWorld runtime: machine-local symlink to the sibling checkout
+# (third_party/MobileWorld -> ../../MobileWorld). run_mobileworld.py resolves
+# the MW runtime here, so the benchmark uses the dev's live editable source
+# instead of the pinned-git venv snapshot. Not portable, so not committed.
+third_party/
 
 # Cache
 .mypy_cache/
@@ -24,3 +31,4 @@ build/
 traj_logs/
 artifacts/
 recordings/
+eval_figs/
