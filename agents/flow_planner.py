@@ -34,6 +34,7 @@ from loguru import logger
 from openai import OpenAI
 
 from agents.capability_matrix_router import (
+    FoundationNotApplicable,
     NoRunnableAppForCapability,
     route as route_app_capability,
 )
@@ -384,6 +385,16 @@ class FlowPlanner:
                         return self._apply_mw_fallback_to_gaps(data, nl_request, reason)
                     logger.info(f"planner: unsatisfiable (coverage gap) — {reason}")
                     return {"unsatisfiable": True, "reason": reason}
+                # No coverage gap, but the plan still fails validation after all
+                # repair rounds (e.g. an unfillable prompt template, a handoff
+                # structure RA can't satisfy). With MW fallback on, don't give
+                # up: hand the whole request to MobileWorld rather than failing.
+                if self.mw_fallback:
+                    reason = "plan failed validation after repair: " + "; ".join(errors)
+                    logger.info(
+                        f"planner: unrepairable plan — {reason!r}; MobileWorld fallback (whole request)"
+                    )
+                    return _mw_whole_request_plan(nl_request, reason)
                 raise PlanValidationError(nl_request, data, errors)
             logger.info(
                 f"planner: {len(errors)} error(s); repair round {attempt + 1}/{_REPAIR_ROUNDS}: {errors}"
@@ -425,13 +436,16 @@ class FlowPlanner:
         self._refresh_apps_required(plan)
         errors = self._validate(plan)
         if errors:
-            # The fallback itself produced an invalid plan (e.g. a downstream
-            # {var} that only the dropped capability could have bound). Fall back
-            # to reporting unsatisfiable rather than running a broken plan.
+            # The gap-leg fallback itself produced an invalid plan (e.g. a
+            # downstream {var} that only the dropped capability could have
+            # bound). This method only runs with MW fallback on, so don't give
+            # up: hand the whole request to MobileWorld rather than running a
+            # broken plan or reporting unsatisfiable.
             logger.warning(
-                f"planner: MobileWorld fallback plan still invalid: {errors}; reporting unsatisfiable"
+                f"planner: MobileWorld gap-fallback plan still invalid: {errors}; "
+                "MobileWorld fallback (whole request)"
             )
-            return {"unsatisfiable": True, "reason": reason}
+            return _mw_whole_request_plan(nl_request, reason)
         return plan
 
     def validate_plan(self, plan: dict, nl_request: str) -> None:
@@ -530,6 +544,17 @@ class FlowPlanner:
             # repair never closes the gap, `_apply_mw_fallback_to_gaps` can turn
             # exactly these steps into MobileWorld legs.
             msg = f"step {step.get('id') or i!r}: route failed: {e}"
+            errors.append(msg)
+            gaps.append(msg)
+            step["x_coverage_gap"] = str(e)
+            return
+        except FoundationNotApplicable as e:
+            # The request needs a concrete on-device action a chat assistant
+            # can't perform, and no vertical capability matched either. This is
+            # NOT a foundation task: treat it as a coverage gap so repair can
+            # retry and, failing that, `_apply_mw_fallback_to_gaps` routes it to
+            # MobileWorld instead of force-fitting it into foundation_llm.
+            msg = f"step {step.get('id') or i!r}: not a foundation task: {e}"
             errors.append(msg)
             gaps.append(msg)
             step["x_coverage_gap"] = str(e)

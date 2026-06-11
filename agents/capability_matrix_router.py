@@ -45,6 +45,22 @@ class NoRunnableAppForCapability(RuntimeError):
             "authorizes no runnable app/capability pairs for them"
         )
 
+
+class FoundationNotApplicable(RuntimeError):
+    """Stage 3 judged the request needs a concrete on-device action that a
+    foundation (chat) assistant cannot perform — so it is NOT a foundation task.
+
+    A foundation_llm capability produces a text answer; tasks with a device /
+    OS side-effect (file management, system settings, on-device automation)
+    cannot be stood in for by a chat assistant. Bubbled up so the flow planner
+    routes it to MobileWorld fallback / unsatisfiable rather than force-fitting
+    it into foundation_llm.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason or "request needs a device action no chat assistant can perform")
+
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _HEADER_APPID_RE = re.compile(r"\(([^)]+)\)\s*$")
 
@@ -303,6 +319,14 @@ capability fit.
 Pick the single best app from the options below and write the goal sentence to
 hand to its assistant (rewrite the request if it helps).
 
+A foundation assistant only produces a TEXT answer (knowledge, Q&A,
+summarization, drafting, reasoning, translation). It CANNOT carry out a
+concrete on-device action that has a side-effect outside the chat — e.g.
+managing files on the device, renaming/moving/deleting files, changing system
+settings, or driving another app's UI. If the request REQUIRES such a device
+action (not just describing or explaining it), return {"kind": "none"} so it
+can be routed elsewhere — do NOT force-fit it into a chat assistant.
+
 Locale policy for the goal sentence typed into the in-app agent:
 - Default to the selected app's first locale language.
 - If the user's request explicitly asks for a different language, honor that
@@ -310,8 +334,10 @@ Locale policy for the goal sentence typed into the in-app agent:
 - Preserve proper nouns, addresses, product names, code, URLs, emails, ids,
   and quoted literal text in their original language.
 
-Return ONE JSON object inside a ```json``` fence:
+Return ONE JSON object inside a ```json``` fence, either:
   {"kind": "app", "app_id": "<id>", "capability_id": "foundation_llm", "goal": "<sentence>", "reason": "..."}
+or:
+  {"kind": "none", "reason": "<why a chat assistant cannot do this>"}
 """
 
 
@@ -349,6 +375,10 @@ def _stage3_foundation(
         "Return the routing JSON now."
     )
     data = _llm_json(llm, model, _STAGE3_SYSTEM, user)
+    if data.get("kind") == "none":
+        reason = data.get("reason") or "request needs a device action a chat assistant cannot perform"
+        logger.info(f"stage-3 foundation -> none (reason: {reason})")
+        raise FoundationNotApplicable(reason)
     if data.get("kind") != "app":
         raise RuntimeError(f"stage-3 returned unsupported kind: {data!r}")
     data["capability_id"] = FOUNDATION_CAP

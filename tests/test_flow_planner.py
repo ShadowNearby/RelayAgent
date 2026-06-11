@@ -28,6 +28,19 @@ def _minimal_catalog() -> dict:
     }
 
 
+def _unrepairable_plan() -> dict:
+    """A plan that never validates: a handoff capability that is not the final
+    step and is not followed by an ask_user, plus a downstream unbound var."""
+    return {
+        "steps": [
+            {"id": "s1", "app": "com.example.app", "capability": "handoff_cap",
+             "prompt": "do thing"},
+            {"id": "s2", "app": "com.example.app", "capability": "foundation_llm",
+             "prompt": "follow up {choice}"},
+        ]
+    }
+
+
 def _llm_response(plan: dict) -> MagicMock:
     body = f"```json\n{json.dumps(plan, ensure_ascii=False)}\n```"
     return MagicMock(choices=[MagicMock(message=MagicMock(content=body))])
@@ -143,6 +156,38 @@ class FlowPlannerMwFallbackTests(unittest.TestCase):
         self.assertEqual(self.planner._validate(out), [])
 
 
+class FlowPlannerFoundationFallbackTests(unittest.TestCase):
+    """A device action a chat assistant can't do must not be forced into
+    foundation_llm: stage-3 raises FoundationNotApplicable, which the planner
+    turns into a coverage gap -> MobileWorld leg."""
+
+    def setUp(self) -> None:
+        self.planner = FlowPlanner(
+            _minimal_catalog(), MagicMock(), "test-model", mw_fallback=True
+        )
+
+    def test_route_step_marks_foundation_not_applicable_as_gap(self) -> None:
+        from agents.capability_matrix_router import FoundationNotApplicable
+
+        step = {
+            "id": "rename",
+            "prompt": "rename bid_ files in Download by creation date",
+        }
+        errors: list[str] = []
+        gaps: list[str] = []
+        with patch(
+            "agents.flow_planner.route_app_capability",
+            side_effect=FoundationNotApplicable("file rename is a device action"),
+        ):
+            self.planner._route_one_step(step, 0, "rename files", set(), errors, gaps)
+        self.assertIn("x_coverage_gap", step)
+        self.assertTrue(gaps)
+        # the gap then resolves to a MobileWorld leg
+        out = self.planner._apply_mw_fallback_to_gaps({"steps": [step]}, "rename files", "reason")
+        self.assertEqual(out["steps"][0]["type"], MW_STEP_TYPE)
+        self.assertEqual(self.planner._validate(out), [])
+
+
 class FlowPlannerRepairTests(unittest.TestCase):
     def test_plan_repairs_validation_error(self) -> None:
         bad = {
@@ -189,6 +234,33 @@ class FlowPlannerRepairTests(unittest.TestCase):
             result = planner.plan("test request")
         self.assertEqual(planner._validate(result), [])
         self.assertEqual(len(result["steps"]), 3)
+
+    def test_unrepairable_plan_with_mw_fallback_becomes_whole_request_mw_leg(self) -> None:
+        # A plan that stays invalid through every repair round (here: a handoff
+        # capability that is NOT the final step and is never followed by an
+        # ask_user, plus a downstream unbound var) must NOT raise
+        # PlanValidationError when MW fallback is on — it falls back to a
+        # whole-request MobileWorld leg instead of giving up.
+        bad = _unrepairable_plan()
+        # planner.plan: 1 synth + _REPAIR_ROUNDS repairs, all returning `bad`.
+        responses = [_llm_response(bad)] * 8
+        with patch("agents.flow_planner.create_with_retry", side_effect=responses):
+            planner = FlowPlanner(
+                _minimal_catalog(), MagicMock(), "test-model", mw_fallback=True
+            )
+            result = planner.plan("do an unrepairable thing")
+        self.assertEqual(result["steps"][0]["type"], MW_STEP_TYPE)
+        self.assertEqual(result["steps"][0]["prompt"], "do an unrepairable thing")
+
+    def test_unrepairable_plan_without_mw_fallback_still_raises(self) -> None:
+        bad = _unrepairable_plan()
+        responses = [_llm_response(bad)] * 8
+        with patch("agents.flow_planner.create_with_retry", side_effect=responses):
+            planner = FlowPlanner(
+                _minimal_catalog(), MagicMock(), "test-model", mw_fallback=False
+            )
+            with self.assertRaises(PlanValidationError):
+                planner.plan("do an unrepairable thing")
 
     def test_unsatisfiable_with_mw_fallback_becomes_whole_request_mw_leg(self) -> None:
         payload = {"unsatisfiable": True, "reason": "needs camera"}

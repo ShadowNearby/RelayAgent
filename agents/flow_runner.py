@@ -123,10 +123,16 @@ class _RecordingLLM:
 
     `purpose` is a caller-set label (e.g. "leg_judge", "bind_extract") stamped
     onto each recorded call; single-threaded flow so a plain attribute is enough.
+
+    `retry=True` (FlowRunner's callers invoke `.chat.completions.create`
+    directly, so the recorder owns the retry). Set `retry=False` when the
+    caller already wraps the proxy in `create_with_retry` (e.g. the planner /
+    capability router), so the gateway isn't retried twice over.
     """
 
-    def __init__(self, client: OpenAI) -> None:
+    def __init__(self, client: OpenAI, retry: bool = True) -> None:
         self._client = client
+        self._retry = retry
         self.calls: list[dict] = []
         self.purpose = "flow"
         self.chat = _RecChat(self)
@@ -155,7 +161,13 @@ class _RecCompletions:
         try:
             # Retry transient gateway failures (timeout/5xx/rate-limit) before
             # giving up — one flaky call shouldn't sink the whole flow leg.
-            resp = create_with_retry(rec._client, *args, **kwargs)
+            # Skip when the caller already retries (rec._retry=False) so we
+            # don't nest create_with_retry over itself.
+            resp = (
+                create_with_retry(rec._client, *args, **kwargs)
+                if rec._retry
+                else rec._client.chat.completions.create(*args, **kwargs)
+            )
         except Exception as e:  # best-effort logging — record then re-raise
             record["elapsed_s"] = round(time.monotonic() - started, 3)
             record["response"] = None
