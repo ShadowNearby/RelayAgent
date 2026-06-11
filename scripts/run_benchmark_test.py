@@ -2,7 +2,7 @@
 """One-click A/B benchmark driver: run the SAME tasks through multiple agent systems.
 
 Default benchmark is the **MobileWorld** task suite, pulled from the HuggingFace
-dataset ``Tongyi-MAI/MobileWorld`` (``task_info.csv``, 201 tasks). Each task is a
+dataset ``Tongyi-MAI/MobileWorld`` (``mobileworld_benchmark_task_info.csv``, 201 tasks). Each task is a
 natural-language goal; this driver runs it through both systems on one real device:
 
   relay : RelayAgent's NL cross-app flow via ``scripts/run_plan.py`` — it
@@ -17,7 +17,11 @@ Per (task, system) it records:
     (``agents/leg_judge.py``) reading the goal + a fresh post-run screenshot — so
     both systems are held to the same yardstick;
   - wall-clock duration of the run (whole-task subprocess time);
-  - LLM token usage (prompt / completion / total).
+  - LLM token usage (prompt / completion / total);
+  - per-LLM-call records (latency + prompt/completion/cached tokens) under
+    ``llm_calls``. For ``mw`` these come from a non-invasive probe
+    (``agents.mw_llm_probe``) injected into the mw test subprocess, since
+    MobileWorld's own logger persists only the run-level aggregate.
 
 Time/token aggregates are reported over the COMPLETED tasks only.
 
@@ -25,7 +29,8 @@ EXTENSIBILITY — two registries let this grow without surgery:
   * BENCHMARKS  — a benchmark is a task source: how to load + how to pick a smoke
                   subset (``--benchmark``). Tasks are normalized to the contract in
                   ``_normalize_task`` so every system + the judge consume them the
-                  same way. ``mobileworld`` (HF) and ``single_app`` (local yaml) ship.
+                  same way. ``mobileworld`` + ``androiddaily`` (HF) and ``relaybench``
+                  (local yaml) ship.
   * SYSTEMS     — a system is one agent runner ``(task, sys_dir, ctx) -> metrics``
                   (``--systems``). Add an entry to A/B a third agent.
 
@@ -35,9 +40,12 @@ Maps/MCP-Amap overlaps (高德). Expect many tasks to fail for BOTH systems on a
 device — that is an honest, same-device, same-judge comparison. ``--filter-supported``
 trims to the tasks whose apps RelayAgent can actually attempt.
 
-CAVEAT on relay tokens: we sum every leg's in-app tokens + its flow-process tokens
-(leg judge / bind extraction). The one-shot plan-synthesis call in run_plan.py is
-NOT yet captured, so relay token totals slightly under-count planning overhead.
+Relay tokens are read from run_plan's authoritative ``<flow_root>/token_usage.json``
+(``total`` includes the plan-synthesis phase; ``by_phase`` splits plan/flow/agent).
+Per-call latency+tokens land in each row's ``llm_calls``: for ``relay`` from that
+file, for ``mw`` from a non-invasive probe (``agents.mw_llm_probe``). Full per-call
+text (messages/response) is persisted on disk for both — relay in each leg's
+``traj.json``, mw in ``<sys>/user_task/llm_calls.json`` — not in the lean results row.
 
 Real device + USB debugging required (see CLAUDE.md). ``.env`` must hold
 ``LLM_BASE_URL`` / ``LLM_API_KEY`` / ``LLM_MODEL`` — the judge and both systems read it.
@@ -52,7 +60,10 @@ Examples:
     uv run python scripts/run_benchmark_test.py --all                # full 201
     uv run python scripts/run_benchmark_test.py --filter-supported   # RA-attemptable subset
     uv run python scripts/run_benchmark_test.py --systems relay --no-judge
-    uv run python scripts/run_benchmark_test.py --benchmark single_app
+    uv run python scripts/run_benchmark_test.py --benchmark relaybench
+    uv run python scripts/run_benchmark_test.py --benchmark androiddaily --plan-only --all
+    uv run python scripts/run_benchmark_test.py --skip-mcp --plan-only --all      # MobileWorld w/o MCP
+    uv run python scripts/run_benchmark_test.py --benchmark relaybench --systems relay
     uv run python scripts/run_benchmark_test.py --only-id AddBusinessTripAskUserTask
 """
 from __future__ import annotations
@@ -62,6 +73,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -84,6 +96,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from openai import OpenAI  # noqa: E402
 
 from agents import leg_judge  # noqa: E402
+from agents._adb import adb_base, force_stop, kill_all_apps  # noqa: E402
 from agents._adb import screencap as adb_screencap  # noqa: E402
 from agents.runtime_config import ensure_llm_env  # noqa: E402
 
@@ -97,6 +110,10 @@ RUN_PLAN = SCRIPTS_DIR / "run_plan.py"
 RUN_MOBILEWORLD = SCRIPTS_DIR / "run_mobileworld.py"
 
 MW_DATASET = "Tongyi-MAI/MobileWorld"
+MW_TASK_INFO = REPO_ROOT / "benchmark" / "mobileworld_benchmark_task_info.csv"
+RELAYBENCH_TASKS = REPO_ROOT / "benchmark" / "relaybench_tasks.yaml"
+AD_DATASET = "stepfun-ai/AndroidDaily"
+AD_TASK_INFO = REPO_ROOT / "benchmark" / "androiddaily_task_info.csv"
 
 # MobileWorld app name -> RelayAgent manifest app id. Used by --filter-supported
 # and for display; extend this as RelayAgent gains manifests for more apps.
@@ -104,6 +121,63 @@ MW_APP_TO_RA = {
     "Maps": "com.autonavi.minimap",
     "MCP-Amap": "com.autonavi.minimap",
 }
+
+# Token-throughput model constants for re-pricing per-call LLM time, so each
+# results.jsonl row carries a gateway-queue-free wall-clock the moment it lands
+# (instead of only after a batch normalize pass). Same formula/constants as
+# scripts/normalize_wall_clock.py + phaseB_summary.py:
+#   model_time = gamma + alpha*(prompt-cached) + beta*completion
+# Default file is the calibrated/rounded fit dropped under traj_logs/phaseB.
+NORM_FIT_FILE = TRAJ_LOGS / "phaseB" / "wall_norm_rounded.json"
+
+
+def _load_norm_const(fit_path: Path) -> tuple[float, float, float] | None:
+    """(gamma, alpha, beta) from a fit file, or None if missing/malformed."""
+    try:
+        fit = json.loads(fit_path.read_text(encoding="utf-8"))
+        return (float(fit.get("gamma_s_per_call") or 0.0),
+                float(fit["alpha_s_per_prefill_tok"]),
+                float(fit["beta_s_per_decode_tok"]))
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _norm_llm_time(llm_calls: list[dict[str, Any]] | None,
+                   const: tuple[float, float, float] | None,
+                   elapsed_s: float | None) -> dict[str, float | None]:
+    """Per-case LLM-time accounting from this row's own ``llm_calls``.
+
+    Returns ``llm_time_actual_s`` (measured, queue-tainted), ``llm_time_norm_s``
+    (re-priced by the token model), and ``elapsed_s_norm`` (wall-clock with the
+    LLM portion swapped). Column names AND call-selection mirror
+    normalize_wall_clock.py / phaseB_summary._usable_calls so the live value and
+    any later batch pass agree to the digit: only calls carrying BOTH a latency
+    and prompt+completion tokens contribute (the rest stay in the device
+    remainder). const=None (no fit file) → actual only, norm fields left None."""
+    usable: list[tuple[float, int, int, int]] = []
+    for c in llm_calls or []:
+        if c.get("error"):
+            continue
+        v = c.get("elapsed_s")
+        v = c.get("latency_s") if v is None else v
+        p, comp = c.get("prompt_tokens"), c.get("completion_tokens")
+        if v is None or p is None or comp is None:
+            continue
+        usable.append((float(v), int(p), int(comp), int(c.get("cached_tokens") or 0)))
+    actual = sum(t for t, _, _, _ in usable)
+    out: dict[str, float | None] = {
+        "llm_time_actual_s": round(actual, 3),
+        "llm_time_norm_s": None, "elapsed_s_norm": None,
+    }
+    if const is None:
+        return out
+    gamma, alpha, beta = const
+    norm = sum(gamma + alpha * (p - cached) + beta * comp for _, p, comp, cached in usable)
+    out["llm_time_norm_s"] = round(norm, 3)
+    if elapsed_s is not None:
+        wall = float(elapsed_s) - actual + norm
+        out["elapsed_s_norm"] = round(norm if wall < 0 else wall, 3)
+    return out
 
 
 # ───────────────────────────── small io helpers ─────────────────────────────
@@ -185,11 +259,17 @@ def _normalize_task(raw: dict[str, Any]) -> dict[str, Any]:
 # ---- benchmark: mobileworld (HuggingFace Tongyi-MAI/MobileWorld) ----
 def _load_mobileworld(path: Path | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if path is None:
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError as e:
-            raise SystemExit("huggingface_hub is required to load the MobileWorld dataset") from e
-        path = Path(hf_hub_download(MW_DATASET, "task_info.csv", repo_type="dataset"))
+        if MW_TASK_INFO.is_file():
+            path = MW_TASK_INFO
+        else:
+            try:
+                from huggingface_hub import hf_hub_download
+            except ImportError as e:
+                raise SystemExit("huggingface_hub is required to load the MobileWorld dataset") from e
+            hf_path = Path(hf_hub_download(MW_DATASET, "task_info.csv", repo_type="dataset"))
+            MW_TASK_INFO.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(hf_path, MW_TASK_INFO)
+            path = MW_TASK_INFO
     rows = list(csv.DictReader(path.open(encoding="utf-8")))
     if not rows:
         raise SystemExit(f"No tasks in {path}")
@@ -221,23 +301,91 @@ def _smoke_mobileworld(tasks: list[dict[str, Any]], per_app: int) -> list[int]:
     return _smoke_by_app(tasks, per_app, rank)
 
 
-# ---- benchmark: single_app (local RelayAgent yaml) ----
-def _load_single_app(path: Path | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    path = path or (REPO_ROOT / "benchmark" / "single_app_tasks.yaml")
+
+# ---- benchmark: relaybench (balanced single + cross-app yaml) ----
+def _load_relaybench(path: Path | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    path = path or RELAYBENCH_TASKS
     doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw = doc.get("tasks") or []
     if not isinstance(raw, list) or not raw:
         raise SystemExit(f"No tasks found in {path}")
-    meta = {"suite": doc.get("suite"), "version": doc.get("version")}
-    return meta, [_normalize_task(t) for t in raw]
+    meta = {
+        "suite": doc.get("suite"),
+        "version": doc.get("version"),
+        "total_tasks": doc.get("total_tasks"),
+        "single_app_tasks": doc.get("single_app_tasks"),
+        "cross_app_tasks": doc.get("cross_app_tasks"),
+    }
+    tasks = []
+    for t in raw:
+        caps = t.get("capabilities") or []
+        if caps and not t.get("capability"):
+            t = {**t, "capability": caps[0]}
+        tasks.append(_normalize_task(t))
+    return meta, tasks
 
 
-def _smoke_single_app(tasks: list[dict[str, Any]], per_app: int) -> list[int]:
-    """Up to `per_app` tasks per app, preferring read-only easy ones."""
-    def rank(t: dict[str, Any]) -> tuple[int, int]:
+def _smoke_relaybench(tasks: list[dict[str, Any]], per_app: int) -> list[int]:
+    """One task per manifest app; prefer single-app, easy, non-handoff."""
+
+    def rank(t: dict[str, Any]) -> tuple[int, int, int]:
+        single = 0 if t.get("category") != "cross_app" and len(t.get("apps") or []) <= 1 else 1
         ro = 0 if (t.get("category") == "info_qa" and not t.get("handoff_required")) else 1
         easy = {"easy": 0, "medium": 1, "hard": 2}.get(t.get("difficulty"), 3)
-        return (ro, easy)
+        return (single, ro, easy)
+
+    return _smoke_by_app(tasks, per_app, rank)
+
+
+# ---- benchmark: androiddaily (HuggingFace stepfun-ai/AndroidDaily) ----
+# Chinese daily-app suite; columns are Chinese. AndroidDaily's native metric is
+# step-action-accuracy against logged ground-truth traces — RelayAgent routes to
+# in-app agents and produces no comparable step sequence, so we reuse only its
+# task INSTRUCTIONS and score both systems with the uniform e2e VLM judge.
+_AD_HANDOFF_SCENES = {"出行交通", "购物消费", "生活服务", "本地生活"}
+
+
+def _load_androiddaily(path: Path | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if path is None:
+        if AD_TASK_INFO.is_file():
+            path = AD_TASK_INFO
+        else:
+            try:
+                from huggingface_hub import hf_hub_download
+            except ImportError as e:
+                raise SystemExit("huggingface_hub is required to load the AndroidDaily dataset") from e
+            hf_path = Path(hf_hub_download(AD_DATASET, "Android Daily.csv", repo_type="dataset"))
+            AD_TASK_INFO.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(hf_path, AD_TASK_INFO)
+            path = AD_TASK_INFO
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    if not rows:
+        raise SystemExit(f"No tasks in {path}")
+    tasks: list[dict[str, Any]] = []
+    for i, r in enumerate(rows, 1):
+        instruction = (r.get("任务") or "").strip()
+        if not instruction:
+            continue
+        app = (r.get("APP名称") or "").strip()
+        scene = (r.get("场景") or "").strip()
+        tasks.append(_normalize_task({
+            "id": f"AD-{i:03d}",
+            "instruction": instruction,
+            "apps": [app] if app else [],
+            "category": scene,
+            "difficulty": (r.get("综合难度") or "").strip() or None,
+            "handoff_required": scene in _AD_HANDOFF_SCENES,
+            "lang": "cn",
+            "tags": [t for t in [r.get("task_tag"), r.get("信息处理类型")] if t],
+        }))
+    meta = {"suite": "AndroidDaily", "source": AD_DATASET, "n_tasks": len(tasks)}
+    return meta, tasks
+
+
+def _smoke_androiddaily(tasks: list[dict[str, Any]], per_app: int) -> list[int]:
+    """Per app, prefer easy atomic tasks for a quick representative subset."""
+    def rank(t: dict[str, Any]) -> tuple[int, int]:
+        return ({"easy": 0, "medium": 1, "hard": 2}.get(t.get("difficulty"), 3), 0)
 
     return _smoke_by_app(tasks, per_app, rank)
 
@@ -255,15 +403,37 @@ def _smoke_by_app(tasks: list[dict[str, Any]], per_app: int,
 
 BENCHMARKS: dict[str, Benchmark] = {
     "mobileworld": Benchmark("mobileworld", _load_mobileworld, _smoke_mobileworld, mw_prelaunch=False),
-    "single_app": Benchmark("single_app", _load_single_app, _smoke_single_app, mw_prelaunch=True),
+    "relaybench": Benchmark("relaybench", _load_relaybench, _smoke_relaybench, mw_prelaunch=False),
+    "androiddaily": Benchmark("androiddaily", _load_androiddaily, _smoke_androiddaily, mw_prelaunch=False),
 }
 DEFAULT_BENCHMARK = "mobileworld"
+
+
+_CATALOG_APP_IDS: frozenset[str] | None = None
+
+
+def _catalog_app_ids() -> frozenset[str]:
+    global _CATALOG_APP_IDS
+    if _CATALOG_APP_IDS is None:
+        from agents.card_catalog import build_catalog
+        _CATALOG_APP_IDS = frozenset(a["app_id"] for a in build_catalog()["apps"])
+    return _CATALOG_APP_IDS
 
 
 def _supported(task: dict[str, Any]) -> bool:
     """True if RelayAgent has a manifest for every app the task touches."""
     apps = task.get("apps") or []
-    return bool(apps) and all(a in MW_APP_TO_RA for a in apps)
+    if not apps:
+        return False
+    catalog = _catalog_app_ids()
+    if all(a in catalog for a in apps):
+        return True
+    return all(a in MW_APP_TO_RA for a in apps)
+
+
+def _touches_mcp(task: dict[str, Any]) -> bool:
+    """True if any app the task touches is an MCP-* tool source (not a real GUI app)."""
+    return any((a or "").startswith("MCP-") for a in (task.get("apps") or []))
 
 
 def _select(
@@ -275,6 +445,7 @@ def _select(
     per_app: int,
     limit: int | None,
     filter_supported: bool,
+    skip_mcp: bool = False,
 ) -> list[tuple[int, dict[str, Any]]]:
     if only_ids:
         indexed = [(i, t) for i, t in enumerate(tasks, 1) if t.get("id") in only_ids]
@@ -283,6 +454,8 @@ def _select(
     else:
         keep = set(smoke(tasks, per_app))
         indexed = [(i, t) for i, t in enumerate(tasks, 1) if i in keep]
+    if skip_mcp:
+        indexed = [(i, t) for i, t in indexed if not _touches_mcp(t)]
     if filter_supported:
         indexed = [(i, t) for i, t in indexed if _supported(t)]
     if limit is not None:
@@ -325,6 +498,53 @@ def _handoff_stop_hint(task: dict[str, Any]) -> str:
     return "重要：" + _STOP_HINTS.get(task.get("category"), generic)
 
 
+def _foreground_package() -> str | None:
+    """Best-effort: the package of the app currently in the foreground (adb)."""
+    import re
+    try:
+        res = subprocess.run(
+            adb_base() + ["shell", "dumpsys", "activity", "activities"],
+            check=False, capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    # `ResumedActivity` / `mResumedActivity` line carries `pkg/.Activity`.
+    for pat in (r"ResumedActivity.*?\s([\w.]+)/", r"mCurrentFocus.*?\s([\w.]+)/"):
+        m = re.search(pat, res.stdout)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _reset_device() -> None:
+    """Clean the device between A/B systems so neither inherits the other's
+    leftover screen (a system that runs *after* another would otherwise read the
+    previous one's result/answer surface and "succeed"/finish in ~1 step). We
+    force-stop whatever app is foregrounded — package-agnostic, so it works for
+    AndroidDaily where the task `app` is a Chinese label, not a package — then
+    press HOME so the next system starts from the launcher and must navigate
+    itself. Best-effort: failures only warn, never abort the run."""
+    try:
+        pkg = _foreground_package()
+        if pkg and pkg not in ("com.android.systemui", "com.android.launcher",
+                               "com.google.android.apps.nexuslauncher"):
+            force_stop(pkg)
+        subprocess.run(adb_base() + ["shell", "input", "keyevent", "KEYCODE_HOME"],
+                       check=False, capture_output=True, timeout=10)
+        # a task may leave airplane mode ON (e.g. OpenFlightModeTask), which cuts
+        # network for every task after it — turn it back off here
+        out = subprocess.run(adb_base() + ["shell", "settings", "get", "global",
+                                           "airplane_mode_on"],
+                             check=False, capture_output=True, timeout=10)
+        if out.stdout.decode(errors="replace").strip() == "1":
+            print("      [reset] airplane mode left ON — disabling", flush=True)
+            subprocess.run(adb_base() + ["shell", "cmd", "connectivity",
+                                         "airplane-mode", "disable"],
+                           check=False, capture_output=True, timeout=10)
+    except (subprocess.TimeoutExpired, OSError) as exc:  # pragma: no cover
+        print(f"      [reset] device reset skipped: {exc}", flush=True)
+
+
 def _run_subprocess(cmd: list[str], sys_dir: Path, *, env: dict[str, str] | None,
                     timeout_s: float | None) -> tuple[int, bool, float]:
     sys_dir.mkdir(parents=True, exist_ok=True)
@@ -357,6 +577,9 @@ def _run_mw(task: dict[str, Any], sys_dir: Path, ctx: RunCtx) -> dict[str, Any]:
         "--max-round", str(ctx.mw_max_round),
         "--timeout", str(int(ctx.timeout_s) if ctx.timeout_s else 600),
         "--output", str(sys_dir),           # forwarded to `mw test` → <sys_dir>/user_task/
+        # Per-call latency + prompt/completion tokens, written beside traj.json by the
+        # non-invasive probe (agents.mw_llm_probe) injected into the mw test subprocess.
+        "--llm-calls-out", str(sys_dir / "user_task" / "llm_calls.json"),
     ]
     if ctx.mw_prelaunch and task.get("app"):
         cmd += ["--app", task["app"]]
@@ -364,10 +587,19 @@ def _run_mw(task: dict[str, Any], sys_dir: Path, ctx: RunCtx) -> dict[str, Any]:
         cmd += ["--no-prelaunch"]
     rc, timed_out, elapsed = _run_subprocess(cmd, sys_dir, env=None, timeout_s=ctx.timeout_s)
 
-    # MobileWorld's TrajLogger writes <sys_dir>/user_task/traj.json with token_usage.
+    # MobileWorld's TrajLogger writes <sys_dir>/user_task/traj.json with aggregate
+    # token_usage; the probe writes per-call records (latency + token split) to
+    # llm_calls.json. token_usage falls back to the probe's summed total.
     traj = _read_json(sys_dir / "user_task" / "traj.json") or {}
     node = traj.get("0") if isinstance(traj.get("0"), dict) else {}
-    tokens = node.get("token_usage") or traj.get("token_usage") or {}
+    calls_doc = _read_json(sys_dir / "user_task" / "llm_calls.json") or {}
+    # Full per-call text (messages/response) stays in llm_calls.json on disk; the
+    # results.jsonl row carries only the per-call METRICS (kept symmetric with
+    # relay's token_usage.json projection, and keeps the appended jsonl small).
+    _METRIC_KEYS = ("index", "purpose", "model", "elapsed_s", "ok",
+                    "prompt_tokens", "completion_tokens", "cached_tokens", "total_tokens")
+    llm_calls = [{k: c.get(k) for k in _METRIC_KEYS} for c in (calls_doc.get("llm_calls") or [])]
+    tokens = node.get("token_usage") or traj.get("token_usage") or calls_doc.get("total") or {}
     steps_list = node.get("traj") if isinstance(node.get("traj"), list) else []
     terminal_action = None
     if steps_list:
@@ -376,6 +608,7 @@ def _run_mw(task: dict[str, Any], sys_dir: Path, ctx: RunCtx) -> dict[str, Any]:
         "returncode": rc, "timed_out": timed_out, "elapsed_s": elapsed,
         "tokens": _norm_tokens(tokens), "steps": len(steps_list) or None,
         "terminal_action": terminal_action,
+        "llm_calls": llm_calls,
         "reply": "",  # mw test persists no textual reply; the judge reads the screen
         "goal_sent": goal,
     }
@@ -402,7 +635,14 @@ def _find_flow_root(stderr_log: Path, before: set[Path]) -> Path | None:
 
 
 def _harvest_relay_legs(flow_root: Path) -> dict[str, Any]:
-    """Sum in-app + flow-process tokens across a flow's legs; collect leg verdicts."""
+    """Per-leg verdicts/reply/steps + the whole-run token accounting.
+
+    Tokens come from run_plan's authoritative ``<flow_root>/token_usage.json`` when
+    present: its ``total`` includes the **plan-synthesis** phase (which per-leg
+    summaries omit — the old undercount), ``by_phase`` splits plan/flow/agent, and
+    ``calls`` carries per-call latency+tokens (parity with the mw probe). Only when
+    that file is missing do we fall back to summing per-leg summary + flow_llm_calls.
+    """
     prompt = completion = total = steps = 0
     legs: list[dict[str, Any]] = []
     last_reply = ""
@@ -426,8 +666,19 @@ def _harvest_relay_legs(flow_root: Path) -> dict[str, Any]:
         reply_doc = _read_json(leg / "agent_reply.json")
         if isinstance(reply_doc, dict):
             last_reply = reply_doc.get("reply") or reply_doc.get("text") or last_reply
+
+    # Authoritative whole-run accounting (includes the plan-synthesis phase).
+    tu = _read_json(flow_root / "token_usage.json") or {}
+    if tu.get("total"):
+        tokens = _norm_tokens(tu["total"])
+    else:  # fallback: per-leg sum (undercounts plan-synthesis — logged below)
+        tokens = {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+        print(f"      [warn] no token_usage.json in {flow_root.name}; "
+              f"relay tokens undercount the plan-synthesis phase", flush=True)
     return {
-        "tokens": {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total},
+        "tokens": tokens,
+        "token_by_phase": tu.get("by_phase"),
+        "llm_calls": tu.get("calls") or [],
         "steps": steps or None, "legs": legs, "reply": last_reply, "terminal_action": last_terminal,
     }
 
@@ -454,6 +705,8 @@ def _run_relay(task: dict[str, Any], sys_dir: Path, ctx: RunCtx) -> dict[str, An
         "tokens": harvested["tokens"], "steps": harvested["steps"],
         "terminal_action": harvested["terminal_action"], "reply": harvested["reply"],
         "relay_legs": harvested["legs"], "flow_root": flow_root_str,
+        "llm_calls": harvested.get("llm_calls"),          # per-call latency+tokens (parity with mw)
+        "token_by_phase": harvested.get("token_by_phase"),  # plan / flow / agent split
     }
 
 
@@ -464,25 +717,35 @@ SYSTEMS: dict[str, Callable[[dict[str, Any], Path, RunCtx], dict[str, Any]]] = {
 
 
 # ───────────────────────────── uniform VLM judge ─────────────────────────────
-def _judge(llm: OpenAI, model: str, task: dict[str, Any], metrics: dict[str, Any],
-           final_png: Path) -> dict[str, Any]:
-    """Score one finished run with leg_judge against a fresh post-run screenshot.
-
-    The goal handed to the judge is the user instruction (PLUS the task's explicit
-    `success` rubric when the benchmark provides one), so both systems are held to
-    the same definition of done. A run the judge calls `loading` is re-shot once
-    and re-judged (settle retry).
-    """
-    goal = task["instruction"]
-    if task.get("success"):
-        goal = f"{goal}\n\n[完成判定标准] {task['success']}"
-
+def _capture_final(final_png: Path):
+    """Snap + persist the post-run screen. Always run (even with --no-judge) so a
+    human can eyeball <sys>_final.png later via manual_judge.py. Returns the PIL
+    image (or None) for an optional in-line LLM verdict."""
     shot = adb_screencap()
     if shot is not None:
         try:
             shot.save(final_png)
         except OSError:
             pass
+    return shot
+
+
+def _judge(llm: OpenAI, model: str, task: dict[str, Any], metrics: dict[str, Any],
+           final_png: Path, shot=None) -> dict[str, Any]:
+    """Score one finished run with leg_judge against a post-run screenshot.
+
+    The goal handed to the judge is the user instruction (PLUS the task's explicit
+    `success` rubric when the benchmark provides one), so both systems are held to
+    the same definition of done. A run the judge calls `loading` is re-shot once
+    and re-judged (settle retry). `shot` may be a pre-captured frame (from
+    _capture_final); when None it is captured here.
+    """
+    goal = task["instruction"]
+    if task.get("success"):
+        goal = f"{goal}\n\n[完成判定标准] {task['success']}"
+
+    if shot is None:
+        shot = _capture_final(final_png)
 
     common = dict(
         llm=llm, model=model, goal=goal, app=task.get("app", ""),
@@ -503,13 +766,123 @@ def _judge(llm: OpenAI, model: str, task: dict[str, Any], metrics: dict[str, Any
 
 
 # ───────────────────────── RA routing / planning only ─────────────────────────
+def _leg_kind(step: dict[str, Any]) -> str | None:
+    """Classify one plan step as a leg kind, or None if it is not a leg.
+
+    `ask_user` steps are control flow, not legs. A `mobileworld` step is an MW
+    fallback leg. An app step on the generic foundation_llm route is
+    `foundation`; on a real vertical capability it is `specialized`.
+    """
+    if not isinstance(step, dict):
+        return None
+    stype = step.get("type")
+    if stype == "ask_user":
+        return None
+    if stype == "mobileworld":  # agents.flow_planner.MW_STEP_TYPE
+        return "mw"
+    cap = step.get("capability")
+    if cap == "foundation_llm":
+        return "foundation"
+    if cap or step.get("app"):
+        return "specialized"
+    return None
+
+
 def _plan_legs(plan: dict[str, Any]) -> list[dict[str, str]]:
-    """App legs (app + resolved capability) of a synthesized plan, in order."""
+    """Legs of a synthesized plan, in order, each tagged with its kind.
+
+    Kinds: `specialized` (real vertical capability), `foundation`
+    (foundation_llm generic route), `mw` (MobileWorld fallback leg).
+    """
     legs: list[dict[str, str]] = []
     for step in plan.get("steps") or []:
-        if isinstance(step, dict) and (step.get("app") or step.get("capability")):
-            legs.append({"app": step.get("app", ""), "capability": step.get("capability", "")})
+        kind = _leg_kind(step)
+        if kind is None:
+            continue
+        legs.append({
+            "app": step.get("app", ""),
+            "capability": step.get("capability", ""),
+            "kind": kind,
+        })
     return legs
+
+
+def _plan_tier(legs: list[dict[str, str]]) -> str:
+    """Whole-plan tier from its leg kinds.
+
+    - `covered`: every leg routes to a specialized in-app capability.
+    - `mw`: every leg is a MobileWorld fallback leg.
+    - `mixed`: some legs are MW fallback, some are not.
+    - `foundation_fallback`: no MW leg, but at least one generic foundation_llm
+      leg (i.e. leans on a chat assistant rather than a vertical capability).
+    """
+    kinds = [l["kind"] for l in legs]
+    if not kinds:
+        return "foundation_fallback"
+    has_mw = "mw" in kinds
+    has_non_mw = any(k != "mw" for k in kinds)
+    if has_mw and has_non_mw:
+        return "mixed"
+    if has_mw:
+        return "mw"
+    if all(k == "specialized" for k in kinds):
+        return "covered"
+    return "foundation_fallback"
+
+
+def _plan_only_aggregate(rows: list[dict[str, Any]], report_path: Path | str) -> dict[str, Any]:
+    """Aggregate plan-only rows into the plan_summary schema. Reusable so a merge
+    (old-covered rows + a rerun of the rest) can re-derive the summary identically."""
+    by_status: dict[str, int] = {}
+    by_tier: dict[str, int] = {}
+    app_use: dict[str, int] = {}
+    spec_app_hits: dict[str, int] = {}
+    spec_cap_hits: dict[str, int] = {}
+    total_legs = 0
+    total_mw_legs = 0
+    mixed_mw_ratios: dict[str, float] = {}
+    for r in rows:
+        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+        by_tier[r.get("tier", "?")] = by_tier.get(r.get("tier", "?"), 0) + 1
+        for a in r.get("ra_apps") or []:
+            app_use[a] = app_use.get(a, 0) + 1
+        for a in r.get("spec_apps") or []:
+            spec_app_hits[a] = spec_app_hits.get(a, 0) + 1
+        for c in r.get("spec_caps") or []:
+            spec_cap_hits[c] = spec_cap_hits.get(c, 0) + 1
+        total_legs += r.get("n_legs", 0)
+        total_mw_legs += r.get("n_mw_legs", 0)
+        if r.get("tier") == "mixed":
+            mixed_mw_ratios[r["id"]] = r.get("mw_ratio", 0.0)
+    n = len(rows) or 1
+    covered = by_tier.get("covered", 0)
+    mw_tasks = by_tier.get("mw", 0)
+    mixed_tasks = by_tier.get("mixed", 0)
+    return {
+        "mode": "plan_only", "n_tasks": len(rows),
+        "by_status": by_status,
+        # Leg-kind tiers: covered = every leg routes to a specialized in-app
+        # capability; foundation_fallback = no MW leg but ≥1 generic foundation_llm
+        # leg; mw = every leg is a MobileWorld fallback (== baseline substrate);
+        # mixed = some MW legs + some non-MW legs; invalid/error.
+        "by_tier": dict(sorted(by_tier.items(), key=lambda kv: -kv[1])),
+        "covered_rate": round(covered / n, 3),
+        # MobileWorld fallback proportion, at both task and leg granularity.
+        "mw_fallback": {
+            "tasks_fully_mw": mw_tasks,
+            "tasks_mixed": mixed_tasks,
+            "tasks_touching_mw": mw_tasks + mixed_tasks,
+            "task_touch_rate": round((mw_tasks + mixed_tasks) / n, 3),
+            "total_legs": total_legs,
+            "total_mw_legs": total_mw_legs,
+            "mw_leg_rate": round(total_mw_legs / total_legs, 3) if total_legs else 0.0,
+            "mixed_task_mw_ratios": dict(sorted(mixed_mw_ratios.items(), key=lambda kv: -kv[1])),
+        },
+        "covered_app_hits": dict(sorted(spec_app_hits.items(), key=lambda kv: -kv[1])),
+        "covered_capability_hits": dict(sorted(spec_cap_hits.items(), key=lambda kv: -kv[1])),
+        "ra_app_usage": dict(sorted(app_use.items(), key=lambda kv: -kv[1])),
+        "report": str(report_path),
+    }
 
 
 def _run_plan_only(selected: list[tuple[int, dict[str, Any]]], env: dict[str, str],
@@ -559,17 +932,31 @@ def _run_plan_only(selected: list[tuple[int, dict[str, Any]]], env: dict[str, st
             try:
                 plan = _plan_with_retry(task["instruction"])
                 if plan.get("unsatisfiable"):
-                    rec.update(status="unsatisfiable", reason=plan.get("reason"))
+                    # MW fallback off: the whole request would run on MobileWorld
+                    # (general_e2e) at runtime — i.e. RA reduces to the baseline
+                    # substrate. Count it as one fully-MW plan.
+                    rec.update(status="unsatisfiable", tier="mw",
+                               n_legs=0, legs=[], n_mw_legs=0, mw_ratio=1.0,
+                               reason=plan.get("reason"))
                 else:
                     legs = _plan_legs(plan)
+                    spec = [l for l in legs if l["kind"] == "specialized"]
+                    n_mw = sum(1 for l in legs if l["kind"] == "mw")
                     rec.update(
-                        status="planned", n_legs=len(legs), legs=legs,
+                        status="planned",
+                        tier=_plan_tier(legs),
+                        n_legs=len(legs), legs=legs,
+                        n_mw_legs=n_mw,
+                        mw_ratio=round(n_mw / len(legs), 3) if legs else 0.0,
                         ra_apps=sorted({leg["app"] for leg in legs if leg["app"]}),
+                        spec_apps=sorted({l["app"] for l in spec if l["app"]}),
+                        spec_caps=sorted({l["capability"] for l in spec}),
                     )
             except PlanValidationError as e:
-                rec.update(status="invalid", reason="; ".join(getattr(e, "errors", []) or [str(e)])[:300])
+                rec.update(status="invalid", tier="invalid",
+                           reason="; ".join(getattr(e, "errors", []) or [str(e)])[:300])
             except Exception as e:  # network / parse — record, keep going
-                rec.update(status="error", reason=f"{type(e).__name__}: {e}"[:300])
+                rec.update(status="error", tier="error", reason=f"{type(e).__name__}: {e}"[:300])
             rows.append(rec)
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
             fh.flush()
@@ -577,17 +964,7 @@ def _run_plan_only(selected: list[tuple[int, dict[str, Any]]], env: dict[str, st
             print(f"[{idx:03d}] {task['id'][:40]:40s} {rec['status']:13s} {extra}", flush=True)
 
     # ---- aggregate ----
-    by_status: dict[str, int] = {}
-    app_use: dict[str, int] = {}
-    for r in rows:
-        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
-        for a in r.get("ra_apps") or []:
-            app_use[a] = app_use.get(a, 0) + 1
-    summary = {
-        "mode": "plan_only", "n_tasks": len(rows), "by_status": by_status,
-        "ra_app_usage": dict(sorted(app_use.items(), key=lambda kv: -kv[1])),
-        "report": str(report_path),
-    }
+    summary = _plan_only_aggregate(rows, report_path)
     _write_json(out_root / "plan_summary.json", summary)
     print("\n" + json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"\nreport: {report_path}")
@@ -648,6 +1025,36 @@ def _aggregate(rows: list[dict[str, Any]], systems: list[str]) -> dict[str, Any]
     return out
 
 
+def _aggregate_by_app(rows: list[dict[str, Any]], systems: list[str]) -> dict[str, Any]:
+    """Per-app × per-system metrics (group by task['app']) for the per-app figure.
+
+    success_rate is over that app's tasks; time/tokens over its COMPLETED tasks
+    (same completed-only convention as ``_aggregate``). Feeds the dumbbell
+    (fig4) — RA wins concentrate on its manifest apps; on the rest RA ≈ baseline.
+    """
+    out: dict[str, Any] = {}
+    for app in sorted({(r.get("app") or "?") for r in rows}):
+        per_sys: dict[str, Any] = {}
+        for sysname in systems:
+            srows = [r for r in rows if r["system"] == sysname and (r.get("app") or "?") == app]
+            total = len(srows)
+            success = [r for r in srows if r.get("verdict", {}).get("status") == leg_judge.SUCCESS]
+            secs = [float(r["elapsed_s"]) for r in success if isinstance(r.get("elapsed_s"), (int, float))]
+            toks = [float(r["total_tokens"]) for r in success if isinstance(r.get("total_tokens"), (int, float))]
+            per_sys[sysname] = {
+                "n": total,
+                "success_rate": round(len(success) / total, 3) if total else None,
+                "completed_time_s": {
+                    "mean": round(mean(secs), 1) if secs else None,
+                    "median": round(median(secs), 1) if secs else None},
+                "completed_total_tokens": {
+                    "mean": round(mean(toks)) if toks else None,
+                    "median": round(median(toks)) if toks else None},
+            }
+        out[app] = per_sys
+    return out
+
+
 def _write_markdown(path: Path, agg: dict[str, Any], systems: list[str],
                     benchmark: str, n_tasks: int) -> None:
     lines = [
@@ -694,9 +1101,14 @@ def main(argv: list[str] | None = None) -> int:
     sel.add_argument("--all", action="store_true", help="Run the full suite (default: smoke set)")
     sel.add_argument("--per-app", type=int, default=1, help="Smoke tasks per app (default 1)")
     sel.add_argument("--only-id", action="append", default=None, help="Run only these task id(s)")
+    sel.add_argument("--ids-file", type=Path, default=None,
+                     help="Run only the task ids listed in this file (one per line; "
+                          "'#' comments and blanks ignored). Unions with --only-id.")
     sel.add_argument("--limit", type=int, default=None)
     sel.add_argument("--filter-supported", action="store_true",
                      help="Keep only tasks whose apps RelayAgent has a manifest for")
+    sel.add_argument("--skip-mcp", action="store_true",
+                     help="Drop tasks touching an MCP-* tool source (MobileWorld: 40 -> 161 kept)")
     sel.add_argument("--dry-list", action="store_true", help="List selected tasks and exit")
 
     run = p.add_argument_group("run knobs")
@@ -709,6 +1121,23 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--server-url", default=mw_driver.DEFAULT_SERVER_URL)
     run.add_argument("--keep-server", action="store_true",
                      help="Do not stop a server this driver started")
+    run.add_argument("--route-overlay", action="store_true",
+                     help="Keep the route-solidification overlay ON (default OFF: every task "
+                          "routes through the real planner, no 0-LLM table-lookup short-circuit, "
+                          "no cross-task cache leakage — clean per-task measurement)")
+    run.add_argument("--step-log", action="store_true",
+                     help="Keep RelayAgent per-step screenshot logging ON (default OFF: the "
+                          "per-step PNG + marked-frame re-encode is real per-step cost that "
+                          "pollutes wall-clock; traj.json action trace is kept either way)")
+    run.add_argument("--full-reply", action="store_true",
+                     help="Keep RelayAgent full-reply scroll-capture ON (default OFF for "
+                          "fairness vs the MobileWorld baseline, which has no scroll-to-capture "
+                          "and only reads the on-screen reply: wait_for_reply stops at "
+                          "'screen stable' and returns the first visible frame's text)")
+    run.add_argument("--no-device-reset", action="store_true",
+                     help="Do NOT force-stop the foreground app + HOME before each system "
+                          "(default: reset, so mw --no-prelaunch can't inherit relay's "
+                          "leftover result screen and finish in ~1 step)")
 
     jg = p.add_argument_group("judging")
     jg.add_argument("--no-judge", action="store_true",
@@ -721,6 +1150,26 @@ def main(argv: list[str] | None = None) -> int:
 
     args = p.parse_args(argv)
 
+    # Route-solidification overlay OFF by default for benchmarking: it would let
+    # later tasks short-circuit the planner via 0-LLM table lookups, leaking warm
+    # state across tasks and making token/time order-dependent + unfair. The
+    # in-process plan-only planner and every relay subprocess (which inherits
+    # os.environ) both honor this. Re-enable with --route-overlay for an ablation.
+    if not args.route_overlay:
+        os.environ["RELAY_ROUTE_OVERLAY"] = "0"
+    # Per-step screenshot logging OFF by default: it writes a PNG (+ marked frame
+    # for tap/swipe) every step — real wall-clock cost that biases the timing
+    # metric. The relay subprocess inherits os.environ; traj.json is unaffected.
+    if not args.step_log:
+        os.environ["RELAY_STEP_LOG"] = "0"
+    # Full-reply scroll-capture OFF by default for fairness: the MobileWorld
+    # baseline (general_e2e) has no scroll-to-capture — it reads the on-screen
+    # reply and `answer`s. Letting RelayAgent scroll offscreen reply chunks into
+    # view would give it strictly more reply content for the same goal. Off ⇒
+    # wait_for_reply stops at "screen stable". Re-enable with --full-reply.
+    if not args.full_reply:
+        os.environ["RELAY_CAPTURE_FULL_REPLY"] = "0"
+
     systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     bad = [s for s in systems if s not in SYSTEMS]
     if bad:
@@ -728,11 +1177,15 @@ def main(argv: list[str] | None = None) -> int:
 
     bench = BENCHMARKS[args.benchmark]
     meta, tasks = bench.load(args.tasks)
+    only_ids: set[str] = set(args.only_id) if args.only_id else set()
+    if args.ids_file:
+        only_ids |= {ln.strip() for ln in args.ids_file.read_text(encoding="utf-8").splitlines()
+                     if ln.strip() and not ln.lstrip().startswith("#")}
     selected = _select(
         tasks, bench.smoke,
-        only_ids=set(args.only_id) if args.only_id else None,
+        only_ids=only_ids or None,
         run_all=args.all, per_app=args.per_app, limit=args.limit,
-        filter_supported=args.filter_supported,
+        filter_supported=args.filter_supported, skip_mcp=args.skip_mcp,
     )
     if not selected:
         raise SystemExit("No tasks selected")
@@ -782,6 +1235,10 @@ def main(argv: list[str] | None = None) -> int:
         server_proc, server_fh = _ensure_mw_server(args.server_url, out_root / "mobileworld_server.log")
 
     results_path = out_root / "results.jsonl"
+    norm_const = _load_norm_const(NORM_FIT_FILE)
+    if norm_const is None:
+        print(f"   (no norm fit at {NORM_FIT_FILE} — rows get llm_time_actual_s only)",
+              flush=True)
     rows: list[dict[str, Any]] = []
     try:
         with results_path.open("a", encoding="utf-8") as results_fh:
@@ -794,23 +1251,43 @@ def main(argv: list[str] | None = None) -> int:
                 for sysname in systems:
                     sys_dir = task_dir / sysname
                     print(f"   ── {sysname} ──", flush=True)
+                    # clean slate per system: no inheriting the prior system's
+                    # leftover screen (relay cold-launches its own apps anyway;
+                    # this matters most for mw --no-prelaunch, which would else
+                    # read relay's result surface and finish in ~1 step).
+                    if not args.no_device_reset:
+                        _reset_device()
                     metrics = SYSTEMS[sysname](task, sys_dir, ctx)
 
-                    verdict = {"status": leg_judge.UNKNOWN, "score": -1.0, "reason": "judging skipped"}
+                    # Always snap the final frame (manual_judge.py reads it);
+                    # only the LLM verdict is gated by --no-judge.
+                    final_png = task_dir / f"{sysname}_final.png"
+                    shot = _capture_final(final_png)
+                    verdict = {"status": leg_judge.UNKNOWN, "score": -1.0,
+                               "reason": "judging skipped — manual"}
                     if not args.no_judge:
-                        verdict = _judge(llm, judge_model, task, metrics, task_dir / f"{sysname}_final.png")
+                        verdict = _judge(llm, judge_model, task, metrics, final_png, shot=shot)
 
                     tok = metrics.get("tokens") or {}
+                    # re-price this case's LLM time off its own per-call records,
+                    # so the row lands with a queue-free wall-clock immediately
+                    norm = _norm_llm_time(metrics.get("llm_calls"), norm_const,
+                                          metrics.get("elapsed_s"))
                     row = {
                         "id": task["id"], "app": task.get("app"), "apps": task.get("apps"),
                         "category": task.get("category"), "lang": task.get("lang"),
                         "handoff_required": task.get("handoff_required"), "system": sysname,
                         "returncode": metrics.get("returncode"), "timed_out": metrics.get("timed_out"),
                         "elapsed_s": metrics.get("elapsed_s"),
+                        "llm_time_actual_s": norm["llm_time_actual_s"],
+                        "llm_time_norm_s": norm["llm_time_norm_s"],
+                        "elapsed_s_norm": norm["elapsed_s_norm"],
                         "steps": metrics.get("steps"), "terminal_action": metrics.get("terminal_action"),
                         "prompt_tokens": tok.get("prompt_tokens"),
                         "completion_tokens": tok.get("completion_tokens"),
                         "total_tokens": tok.get("total_tokens"),
+                        "llm_calls": metrics.get("llm_calls"),  # per-call: mw probe / relay token_usage.json
+                        "token_by_phase": metrics.get("token_by_phase"),  # relay: plan/flow/agent split
                         "relay_legs": metrics.get("relay_legs"), "flow_root": metrics.get("flow_root"),
                         "verdict": verdict,
                     }
@@ -818,13 +1295,26 @@ def main(argv: list[str] | None = None) -> int:
                     rows.append(row)
                     results_fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                     results_fh.flush()
+                    _norm_s = row["elapsed_s_norm"]
                     print(
                         f"      rc={row['returncode']} timeout={row['timed_out']} "
-                        f"elapsed={row['elapsed_s']}s steps={row['steps']} "
+                        f"elapsed={row['elapsed_s']}s"
+                        f"{f' norm={_norm_s}s' if _norm_s is not None else ''} "
+                        f"steps={row['steps']} "
                         f"tokens(total)={row['total_tokens']} "
                         f"verdict={verdict['status'].upper()} ({verdict.get('reason', '')[:60]})",
                         flush=True,
                     )
+
+                # between-task hard reset: force-stop every running app so no
+                # state (chat thread, half-finished flow, session sheet) survives
+                # into the next task. Shares the --no-device-reset gate with the
+                # per-system reset above.
+                if not args.no_device_reset:
+                    try:
+                        kill_all_apps()
+                    except Exception as exc:  # best-effort; never abort the suite
+                        print(f"      [kill-all] skipped: {exc}", flush=True)
     finally:
         if server_proc is not None and not args.keep_server:
             print("\nStopping MobileWorld server...", flush=True)
@@ -839,7 +1329,8 @@ def main(argv: list[str] | None = None) -> int:
 
     agg = _aggregate(rows, systems)
     final = {"benchmark": args.benchmark, "out_root": str(out_root),
-             "n_tasks": len(selected), "systems": systems, "by_system": agg}
+             "n_tasks": len(selected), "systems": systems, "by_system": agg,
+             "by_app": _aggregate_by_app(rows, systems)}
     _write_json(out_root / "summary.json", final)
     _write_markdown(out_root / "summary.md", agg, systems, args.benchmark, len(selected))
     print("\n" + json.dumps(agg, ensure_ascii=False, indent=2))
