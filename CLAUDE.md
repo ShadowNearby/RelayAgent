@@ -22,7 +22,9 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 - 旧的测试入口 / NL 入口 / 单 App 脚本入口已删除；新代码直接用 `python -m agents.native_runner`（指定 app）或 `run_plan.py --yes` / `run_plan.py --dry-run`（NL flow）。
 - **NL 跨 App Flow 架构**（合成 / 三段式路由 / 校验 / 执行 / leg judge / handoff）详见 [`docs/nl_flow.zh.md`](docs/nl_flow.zh.md)（English: [`docs/nl_flow.md`](docs/nl_flow.md)）；pipeline / CLI 用法 / 缓存 / 真机示例见 [`docs/cross_app_planner.zh.md`](docs/cross_app_planner.zh.md)。
-- **capability 不覆盖 → MobileWorld 兜底**：任何 unsatisfiable（coverage gap 修复用尽 / LLM 判整条不可满足）不再放弃，而是把那条 leg（或整条请求）转成 `type: mobileworld` leg，交给 MobileWorld 无 manifest 的 `general_e2e` 执行（经 `scripts/run_mobileworld.py`，answer 文本回灌 blackboard）。默认开，`RELAY_MW_FALLBACK=0` / `run_plan.py --no-mw-fallback` 关；`RELAY_MW_MAX_ROUND`(25)/`RELAY_MW_TIMEOUT`(600)。详见 nl_flow §10。
+- **capability 不覆盖 → MobileWorld 兜底**：任何 unsatisfiable（coverage gap 修复用尽 / LLM 判整条不可满足 / **repair 用尽仍 invalid** / **stage-3 判设备动作非 foundation 任务**）不再放弃，而是把那条 leg（或整条请求）转成 `type: mobileworld` leg，交给 MobileWorld 无 manifest 的 `general_e2e` 执行（经 `scripts/run_mobileworld.py`，answer 文本回灌 blackboard）。默认开，`RELAY_MW_FALLBACK=0` / `run_plan.py --no-mw-fallback` 关；`RELAY_MW_MAX_ROUND`(25)/`RELAY_MW_TIMEOUT`(600)。详见 nl_flow §10。
+  - **stage-3 逃生口**：三段式 router 的 foundation 兜底不再是无条件 catch-all——若任务要求聊天助手做不了的设备/OS 副作用动作（文件管理、改系统设置、驱动别的 App），`_stage3_foundation` 返回 `none` → 抛 `FoundationNotApplicable` → 当 coverage gap → MW，而不是硬塞进 `foundation_llm`。
+  - **plan-only tier 用 leg-kind 分档**（`run_benchmark_test.py`）：`covered`（每条 leg 都是真垂类 capability）/ `foundation_fallback`（无 MW leg 但有 `foundation_llm` leg）/ `mw`（全是 MW leg）/ `mixed`（MW + 非 MW 混合）。`plan_summary.json` 的 `mw_fallback` 块给 task 级 + leg 级 MW 占比（`task_touch_rate`/`mw_leg_rate`/`mixed_task_mw_ratios`）。
 - 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.5）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
 
 需要 adb + 真机 USB 调试。**`agents.native_runner` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
@@ -83,6 +85,8 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 - **Skip**（短 CTA：高德 navigate_to、WPS ai_ppt、携程 plan_trip）。
 
 **Scroll 幅度** `swipe_down(ratio=0.5)`（clamp `[0.1, 0.5]`），`RELAY_CAPTURE_SCROLL_RATIO` 覆写（同样被 clamp 到 ≤0.5）。大→省 VLM 但 seam 丢词；小→重叠多更稳。chunks 按捕获顺序拼接。
+
+**公平开关 `RELAY_CAPTURE_FULL_REPLY`（默认 1 开）**：MW 基线 `general_e2e` 无滚动捕获——回复看着稳了就读**当前可见帧**文本然后 `answer`。所以 A/B 时把它设 `0`：`wait_for_reply` 在"屏幕文本 hash 稳定"判 done 后**直接返回首帧可见文本**，不进 scrolling 捕获相（`_materialize` 里 `capture_full = p["capture_full"] and self.capture_full_enabled`）。`run_benchmark_test.py` **默认 OFF**（同 `RELAY_ROUTE_OVERLAY`/`RELAY_STEP_LOG`），`--full-reply` 才开回。
 
 **卡片 `swipe` → scroll 动作（含方向反转）**：manifest 里的 `swipe: <direction>` 按 **scroll/内容移动方向** 写，不按手指滑动方向写。它经 `action_planner` 编成逻辑 `swipe` step，`_materialize` 发成 `scroll` 动作，于是 `NativeEnv._dispatch` 对 up/down 做反转后再落到底层 adb 手势：
 
