@@ -1,0 +1,488 @@
+# RelayBench v1 — RelayAgent 均衡基准（30 条：15 single-app + 15 cross-app）
+#
+# 设计要点：
+#   - 10 个 manifest App 出现次数均衡（single 1–2 + cross 3 ≈ 4–5 次/App）
+#   - 多 App 共享 capability 时，instruction 必须点名 App（见 app_labels）
+#   - 不从 single_app_tasks.yaml 迁移；全部为本套件原创
+#
+# 跑法：
+#   uv run python scripts/run_benchmark_test.py --benchmark relaybench --dry-list
+#   uv run python scripts/run_benchmark_test.py --benchmark relaybench --all --systems relay
+#   uv run python scripts/validate_relaybench.py
+
+suite: relaybench
+version: 1
+generated: 2026-06-09
+total_tasks: 30
+single_app_tasks: 15
+cross_app_tasks: 15
+apps_covered: 10
+
+tasks:
+
+  - id: rb-sa-tongyi-llm-01
+    task_type: single_app
+    apps: [com.aliyun.tongyi]
+    capabilities: [foundation_llm]
+    app: com.aliyun.tongyi
+    capability: foundation_llm
+    category: info_qa
+    difficulty: easy
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "用通义千问通俗解释一下什么是量子纠缠，200字左右"
+    success: "通义千问返回连贯科普文字，无下单/跳转副作用"
+
+  - id: rb-sa-tongyi-shop-01
+    task_type: single_app
+    apps: [com.aliyun.tongyi]
+    capabilities: [search_product]
+    app: com.aliyun.tongyi
+    capability: search_product
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "用通义千问帮我找三台适合学生用的平板电脑，预算每台2000元以内，比较性能和续航"
+    success: "通义千问返回多款平板推荐或对比卡片，未进入支付"
+
+  - id: rb-sa-amap-poi-01
+    task_type: single_app
+    apps: [com.autonavi.minimap]
+    capabilities: [poi_nearby_search]
+    app: com.autonavi.minimap
+    capability: poi_nearby_search
+    category: info_qa
+    difficulty: easy
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "用高德地图找人民广场附近3家适合安静办公的咖啡店，列出店名和地址"
+    success: "高德返回至少3家咖啡店名称与地址"
+
+  - id: rb-sa-amap-route-01
+    task_type: single_app
+    apps: [com.autonavi.minimap]
+    capabilities: [route_planning]
+    app: com.autonavi.minimap
+    capability: route_planning
+    category: navigation
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "用高德地图查从人民广场到虹桥火车站的驾车路线，估算距离和大概时间"
+    success: "高德给出驾车路线方案及距离/时间估算，未点开始导航"
+
+  - id: rb-sa-ctrip-flight-01
+    task_type: single_app
+    apps: [ctrip.android.view]
+    capabilities: [book_flight]
+    app: ctrip.android.view
+    capability: book_flight
+    category: transaction
+    difficulty: hard
+    lang: cn
+    side_effects: [payment]
+    handoff_required: true
+    instruction: "用携程旅行查下周一上海虹桥飞北京首都的下午出发航班，按价格从低到高排"
+    success: "携程列出符合日期/航线的航班；停在订票/支付 CTA 前交还"
+
+  - id: rb-sa-ctrip-trip-01
+    task_type: single_app
+    apps: [ctrip.android.view]
+    capabilities: [plan_trip]
+    app: ctrip.android.view
+    capability: plan_trip
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: true
+    instruction: "用携程旅行规划一个成都3日游行程，包含景点、餐饮和住宿区域建议"
+    success: "携程返回多日行程建议卡片；若出现预订 CTA 则停在前交还"
+
+  - id: rb-sa-gemini-llm-01
+    task_type: single_app
+    apps: [com.google.android.apps.bard]
+    capabilities: [foundation_llm]
+    app: com.google.android.apps.bard
+    capability: foundation_llm
+    category: info_qa
+    difficulty: easy
+    lang: en
+    side_effects: []
+    handoff_required: false
+    instruction: "Use Gemini to explain the difference between RAG and fine-tuning in three short paragraphs."
+    success: "Gemini returns a coherent English explanation with no side effects"
+
+  - id: rb-sa-gemini-route-01
+    task_type: single_app
+    apps: [com.google.android.apps.bard]
+    capabilities: [route_planning]
+    app: com.google.android.apps.bard
+    capability: route_planning
+    category: navigation
+    difficulty: medium
+    lang: en
+    side_effects: []
+    handoff_required: false
+    instruction: "Use Gemini to estimate driving distance and time from Shanghai Hongqiao Railway Station to the Bund."
+    success: "Gemini gives distance/time estimate or route guidance; live navigation CTA not started"
+
+  - id: rb-sa-wechat-search-01
+    task_type: single_app
+    apps: [com.tencent.mm]
+    capabilities: [search_vertical_content]
+    app: com.tencent.mm
+    capability: search_vertical_content
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "用微信搜索上海有什么值得一去的小众咖啡馆，推荐5家"
+    success: "微信返回至少5家咖啡馆相关结果或摘要"
+
+  - id: rb-sa-wechat-poi-01
+    task_type: single_app
+    apps: [com.tencent.mm]
+    capabilities: [poi_nearby_search]
+    app: com.tencent.mm
+    capability: poi_nearby_search
+    category: info_qa
+    difficulty: easy
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "用微信查找徐家汇地铁站14号口附近24小时便利店，列出2家"
+    success: "微信返回附近便利店名称或位置信息"
+
+  - id: rb-sa-xhs-search-01
+    task_type: single_app
+    apps: [com.xingin.xhs]
+    capabilities: [search_vertical_content]
+    app: com.xingin.xhs
+    capability: search_vertical_content
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "用小红书搜索上海适合周末逛的小众书店，列出3家并简述特色"
+    success: "小红书返回至少3家书店及相关笔记摘要"
+
+  - id: rb-sa-wps-slides-01
+    task_type: single_app
+    apps: [cn.wps.moffice_eng]
+    app_labels:
+      cn.wps.moffice_eng: "WPS"
+    capabilities: [generate_slides]
+    app: cn.wps.moffice_eng
+    capability: generate_slides
+    category: content_gen
+    difficulty: hard
+    lang: cn
+    side_effects: []
+    handoff_required: true
+    instruction: "用 WPS 做一份5页关于「端侧AI助手的机会与风险」的 PPT 大纲"
+    success: "WPS 生成演示大纲或进入生成/确认页；在最终导出/打开文档 CTA 前交还"
+
+  - id: rb-sa-booking-hotel-01
+    task_type: single_app
+    apps: [com.booking]
+    capabilities: [book_hotel]
+    app: com.booking
+    capability: book_hotel
+    category: transaction
+    difficulty: hard
+    lang: en
+    side_effects: [payment]
+    handoff_required: true
+    instruction: "Use Booking.com to find hotels near the Louvre in Paris for next weekend under €150 per night."
+    success: "Booking.com lists matching hotels; stops before payment/reservation CTA"
+
+  - id: rb-sa-copilot-llm-01
+    task_type: single_app
+    apps: [com.microsoft.copilot]
+    capabilities: [foundation_llm]
+    app: com.microsoft.copilot
+    capability: foundation_llm
+    category: info_qa
+    difficulty: easy
+    lang: en
+    side_effects: []
+    handoff_required: false
+    instruction: "Use Copilot to summarize three pros and three cons of standing desks for home offices."
+    success: "Copilot returns a structured English summary with no side effects"
+
+  - id: rb-sa-reddit-search-01
+    task_type: single_app
+    apps: [com.reddit.frontpage]
+    capabilities: [search_vertical_content]
+    app: com.reddit.frontpage
+    capability: search_vertical_content
+    category: info_qa
+    difficulty: medium
+    lang: en
+    side_effects: []
+    handoff_required: false
+    instruction: "Use Reddit to find beginner tips for sourdough baking from r/Breadit and list the top three themes."
+    success: "Reddit returns relevant posts or a summarized list of themes"
+
+  - id: rb-x-tongyi-reddit-01
+    task_type: cross_app
+    apps: [com.aliyun.tongyi, com.reddit.frontpage]
+    capabilities: [foundation_llm, search_vertical_content]
+    app: com.aliyun.tongyi
+    capability: foundation_llm
+    app_labels:
+      com.aliyun.tongyi: "通义千问"
+      com.reddit.frontpage: "Reddit"
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "先用通义千问总结2026年选购学生平板要看哪五个参数；再用 Reddit 搜 r/android 里同等预算下的推荐讨论，归纳三点"
+    success: "通义千问给出参数要点；Reddit 返回相关帖子或归纳；全程无支付"
+
+  - id: rb-x-amap-copilot-01
+    task_type: cross_app
+    apps: [com.autonavi.minimap, com.microsoft.copilot]
+    capabilities: [route_planning, foundation_llm]
+    app: com.autonavi.minimap
+    capability: route_planning
+    app_labels:
+      com.autonavi.minimap: "高德地图"
+      com.microsoft.copilot: "Copilot"
+    category: navigation
+    difficulty: medium
+    lang: en
+    side_effects: []
+    handoff_required: false
+    instruction: "First use Copilot to list three safety tips for cycling in urban China. Then use 高德地图 to estimate cycling distance and time from 西溪国家湿地公园周家村入口 to 阿里巴巴西溪园区C区."
+    success: "Copilot 给出英文安全提示；高德给出骑行距离与时间估算；未开始实时导航"
+
+  - id: rb-x-ctrip-booking-01
+    task_type: cross_app
+    apps: [ctrip.android.view, com.booking]
+    capabilities: [book_flight, book_hotel]
+    app: ctrip.android.view
+    capability: book_flight
+    app_labels:
+      ctrip.android.view: "携程旅行"
+      com.booking: "Booking.com"
+    category: transaction
+    difficulty: hard
+    lang: cn
+    side_effects: [payment]
+    handoff_required: true
+    instruction: "先用携程旅行查下周二上海浦东飞巴黎戴高乐的直飞航班参考价；再用 Booking.com 查戴高乐机场附近一晚住宿，预算每晚120欧元以内"
+    success: "携程列出航班选项；Booking 列出酒店；任一定票/预订支付 CTA 前 handoff"
+
+  - id: rb-x-gemini-wps-01
+    task_type: cross_app
+    apps: [com.google.android.apps.bard, cn.wps.moffice_eng]
+    capabilities: [foundation_llm, generate_slides]
+    app: com.google.android.apps.bard
+    capability: foundation_llm
+    app_labels:
+      com.google.android.apps.bard: "Gemini"
+      cn.wps.moffice_eng: "WPS"
+    category: content_gen
+    difficulty: hard
+    lang: en
+    side_effects: []
+    handoff_required: true
+    instruction: "First use Gemini to outline five slides on edge-AI privacy risks. Then use WPS 按该提纲生成一份5页 PPT 大纲。"
+    success: "Gemini 给出英文提纲；WPS 进入 PPT 生成或大纲页；在最终导出 CTA 前交还"
+
+  - id: rb-x-wechat-xhs-01
+    task_type: cross_app
+    apps: [com.tencent.mm, com.xingin.xhs]
+    capabilities: [search_vertical_content, search_vertical_content]
+    app: com.xingin.xhs
+    capability: search_vertical_content
+    app_labels:
+      com.tencent.mm: "微信"
+      com.xingin.xhs: "小红书"
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "先用小红书搜上海静安寺附近适合独自看书的咖啡馆5家；再用微信搜索同区域哪家有近期团购或优惠"
+    success: "小红书返回咖啡馆列表；微信补充团购/优惠信息；无支付"
+
+  - id: rb-x-tongyi-copilot-01
+    task_type: cross_app
+    apps: [com.aliyun.tongyi, com.microsoft.copilot]
+    capabilities: [search_product, foundation_llm]
+    app: com.microsoft.copilot
+    capability: foundation_llm
+    app_labels:
+      com.aliyun.tongyi: "通义千问"
+      com.microsoft.copilot: "Copilot"
+    category: info_qa
+    difficulty: medium
+    lang: en
+    side_effects: []
+    handoff_required: false
+    instruction: "First use Copilot to compare mechanical vs membrane keyboards for typing comfort. Then use 通义千问找三款200元以内的有线机械键盘并比较轴体。"
+    success: "Copilot 给出英文对比；通义千问返回商品推荐；未下单"
+
+  - id: rb-x-reddit-booking-01
+    task_type: cross_app
+    apps: [com.reddit.frontpage, com.booking]
+    capabilities: [search_vertical_content, book_hotel]
+    app: com.reddit.frontpage
+    capability: search_vertical_content
+    app_labels:
+      com.reddit.frontpage: "Reddit"
+      com.booking: "Booking.com"
+    category: transaction
+    difficulty: hard
+    lang: en
+    side_effects: [payment]
+    handoff_required: true
+    instruction: "First use Reddit to find which Tokyo neighborhoods first-time visitors recommend for hotels. Then use Booking.com to list three hotels in Shinjuku under $120 per night next month."
+    success: "Reddit 归纳区域建议；Booking 列出酒店；预订支付 CTA 前 handoff"
+
+  - id: rb-x-amap-wps-01
+    task_type: cross_app
+    apps: [com.autonavi.minimap, cn.wps.moffice_eng]
+    capabilities: [poi_nearby_search, generate_slides]
+    app: com.autonavi.minimap
+    capability: poi_nearby_search
+    app_labels:
+      com.autonavi.minimap: "高德地图"
+      cn.wps.moffice_eng: "WPS"
+    category: content_gen
+    difficulty: hard
+    lang: cn
+    side_effects: []
+    handoff_required: true
+    instruction: "先用高德地图找西湖周边适合拍照的3个景点及地址；再用 WPS 做一份「西湖摄影打卡点」5页 PPT 大纲"
+    success: "高德返回3个景点；WPS 生成 PPT 大纲或进入生成流程；导出前 handoff"
+
+  - id: rb-x-ctrip-xhs-01
+    task_type: cross_app
+    apps: [ctrip.android.view, com.xingin.xhs]
+    capabilities: [plan_trip, search_vertical_content]
+    app: ctrip.android.view
+    capability: plan_trip
+    app_labels:
+      ctrip.android.view: "携程旅行"
+      com.xingin.xhs: "小红书"
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: true
+    instruction: "先用携程旅行规划成都3日游行程含景点和住宿区域；再用小红书搜宽窄巷子必吃小吃攻略"
+    success: "携程给出行程卡片；小红书给出小吃攻略；预订 CTA 前 handoff"
+
+  - id: rb-x-gemini-wechat-01
+    task_type: cross_app
+    apps: [com.google.android.apps.bard, com.tencent.mm]
+    capabilities: [foundation_llm, search_vertical_content]
+    app: com.google.android.apps.bard
+    capability: foundation_llm
+    app_labels:
+      com.google.android.apps.bard: "Gemini"
+      com.tencent.mm: "微信"
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "First use Gemini to summarize today's top three AI industry headlines in English. Then use 微信搜索相关中文解读或公众号文章各找一篇。"
+    success: "Gemini 给出英文摘要；微信返回中文相关内容；无发送/支付"
+
+  - id: rb-x-tongyi-booking-01
+    task_type: cross_app
+    apps: [com.aliyun.tongyi, com.booking]
+    capabilities: [book_flight, book_hotel]
+    app: com.booking
+    capability: book_hotel
+    app_labels:
+      com.aliyun.tongyi: "通义千问"
+      com.booking: "Booking.com"
+    category: transaction
+    difficulty: hard
+    lang: cn
+    side_effects: [payment]
+    handoff_required: true
+    instruction: "先用 Booking.com 查苏黎世湖畔下周五入住一晚的酒店，预算每晚200瑞士法郎以内；再用通义千问查上海到苏黎世下周直飞航班大致价格"
+    success: "Booking 列出酒店；通义千问列出航班参考；支付/订票 CTA 前 handoff"
+
+  - id: rb-x-copilot-wps-01
+    task_type: cross_app
+    apps: [com.microsoft.copilot, cn.wps.moffice_eng]
+    capabilities: [foundation_llm, generate_slides]
+    app: com.microsoft.copilot
+    capability: foundation_llm
+    app_labels:
+      com.microsoft.copilot: "Copilot"
+      cn.wps.moffice_eng: "WPS"
+    category: content_gen
+    difficulty: hard
+    lang: en
+    side_effects: []
+    handoff_required: true
+    instruction: "First use Copilot to draft six bullet points for a Q1 sales review deck. Then use WPS 生成一份对应主题的演示文稿大纲。"
+    success: "Copilot 给出英文要点；WPS 进入 PPT 生成；导出前 handoff"
+
+  - id: rb-x-reddit-xhs-01
+    task_type: cross_app
+    apps: [com.reddit.frontpage, com.xingin.xhs]
+    capabilities: [search_vertical_content, search_vertical_content]
+    app: com.xingin.xhs
+    capability: search_vertical_content
+    app_labels:
+      com.reddit.frontpage: "Reddit"
+      com.xingin.xhs: "小红书"
+    category: info_qa
+    difficulty: medium
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "先用小红书搜京都岚山赏枫拍照机位推荐3处；再用 Reddit search Kyoto autumn photo spots 补充英文社区里的机位建议"
+    success: "小红书与 Reddit 各返回赏枫机位信息；无支付"
+
+  - id: rb-x-amap-wechat-01
+    task_type: cross_app
+    apps: [com.autonavi.minimap, com.tencent.mm]
+    capabilities: [poi_nearby_search, search_vertical_content]
+    app: com.autonavi.minimap
+    capability: poi_nearby_search
+    app_labels:
+      com.autonavi.minimap: "高德地图"
+      com.tencent.mm: "微信"
+    category: info_qa
+    difficulty: easy
+    lang: cn
+    side_effects: []
+    handoff_required: false
+    instruction: "先用高德地图找阿里巴巴西溪园区C区1公里内的药店，列出2家；再用微信搜索附近24小时药店哪家还在营业"
+    success: "高德返回药店列表；微信补充营业信息；无支付"
+
+  - id: rb-x-ctrip-gemini-01
+    task_type: cross_app
+    apps: [ctrip.android.view, com.google.android.apps.bard]
+    capabilities: [book_flight, route_planning]
+    app: ctrip.android.view
+    capability: book_flight
+    app_labels:
+      ctrip.android.view: "携程旅行"
+      com.google.android.apps.bard: "Gemini"
+    category: transaction
+    difficulty: hard
+    lang: cn
+    side_effects: [payment]
+    handoff_required: true
+    instruction: "先用携程旅行查后天下午上海虹桥飞成都双流的经济舱航班；再用 Gemini 估算成都双流机场到春熙路酒店的驾车时间"
+    success: "携程列出航班；Gemini 给出驾车时间估算；订票支付 CTA 前 handoff"

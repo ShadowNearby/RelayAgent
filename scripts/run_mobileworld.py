@@ -194,6 +194,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Record device screen. Optional DIR overrides recordings/mobileworld_<ts>/.")
     p.add_argument("--record-dir", default=None,
                    help="Record device screen into DIR. Equivalent to --record DIR.")
+    p.add_argument("--llm-calls-out", "--llm_calls_out", dest="llm_calls_out", default=None,
+                   metavar="PATH",
+                   help="Write per-LLM-call records (latency + prompt/completion/cached tokens) "
+                        "as JSON to PATH. Activates a non-invasive probe (agents.mw_llm_probe) in "
+                        "the mw test subprocess; MobileWorld's own source is left untouched.")
     return p
 
 
@@ -288,8 +293,19 @@ def main(argv: list[str] | None = None) -> int:
             str(args.timeout),
             *extra,
         ]
+        child_env = os.environ.copy()
+        if args.llm_calls_out:
+            calls_out = _resolve_repo_path(Path(args.llm_calls_out))
+            child_env["RELAY_MW_LLM_CALLS_OUT"] = str(calls_out)
+            probe_dir = str(Path(__file__).resolve().parent / "_mw_probe")
+            existing_pp = child_env.get("PYTHONPATH", "")
+            child_env["PYTHONPATH"] = (
+                os.pathsep.join([probe_dir, existing_pp]) if existing_pp else probe_dir
+            )
+            print(f"Per-call LLM probe active -> {calls_out}", flush=True)
+
         print(f"Running MobileWorld goal: {args.goal}", flush=True)
-        rc = subprocess.run(cmd, cwd=mw_cwd, check=False).returncode
+        rc = subprocess.run(cmd, cwd=mw_cwd, check=False, env=child_env).returncode
         return rc
     finally:
         if rec is not None:

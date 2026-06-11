@@ -14,8 +14,35 @@
 | 文件 | 内容 |
 | --- | --- |
 | [`single_app_tasks.yaml`](single_app_tasks.yaml) | **50 条单 App 任务**（单 app + 单 capability，1-step 即可完成） |
+| [`relaybench_tasks.yaml`](relaybench_tasks.yaml) | **30 条 RelayBench**（15 single + 15 cross，10 App 均衡） |
 
 > 单 App 任务用于验证每张 manifest card 的 capability 是否能稳定到达预期终态。
+
+## RelayBench（`relaybench_tasks.yaml`）
+
+**30 条**均衡基准：15 single-app + 15 cross-app，覆盖 **10 个 manifest App**（每 App 全库出现 4–5 次；cross 段每 App 恰好 3 次）。
+
+| 类型 | 条数 | 用途 |
+| --- | --- | --- |
+| single-app | 15 | 单 leg 能力到达终态（5 App×2 + 5 App×1） |
+| cross-app | 15 | NL flow 跨 App 编排（`run_plan.py`） |
+
+**App 消歧**：多 App 共享 capability 时，`instruction` 必须点名 App（cross 任务用 `app_labels` 校验）。不从 `single_app_tasks.yaml` 迁移。
+
+```bash
+# 校验任务集结构 / 均衡 / 消歧
+uv run python scripts/validate_relaybench.py
+
+# 冒烟（每 App 1 条，默认 10 条）
+uv run python scripts/run_benchmark_test.py --benchmark relaybench --dry-list
+
+# 全量（建议仅 relay）
+uv run python scripts/run_benchmark_test.py --benchmark relaybench --all --systems relay
+
+# 只看规划
+uv run python scripts/run_benchmark_test.py --benchmark relaybench --plan-only
+```
+
 
 ## single_app_tasks.yaml 一览
 
