@@ -8,7 +8,7 @@ OQ ids are stable once assigned and never reused. Gaps in numbering (e.g. OQ-13 
 
 ## OQ-1 — Structured parameter schemas for capabilities
 
-**Status:** open. **Likely target:** v0.2.
+**Status:** partially resolved in v0.1 by `prompt_template` / `prompt_slots` (SPEC §8.3): flat name/required/desc slots pin the submitted wording while keeping value extraction LLM-side. Full JSON-Schema parameters (typed/nested, non-LLM routers) remain open. **Likely target:** v0.2.
 
 Today a capability describes itself with `description` + `example_prompts` and trusts an LLM router to extract parameters from the user's utterance. Should we additionally allow a JSON Schema for parameters, a la MCP tools?
 

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      # Skip the `mw` extra: MobileWorld is a git dependency only the on-device
+      # A/B baseline needs; nothing in CI imports it.
+      - name: Sync dependencies
+        run: uv sync --no-install-project --extra dev
+
+      - name: Unit tests (device-less)
+        run: uv run python -m unittest discover -s tests -v
+
+      - name: Validate manifests against spec/schema.json
+        run: uv run python scripts/validate_manifests.py
+
+      - name: Validate RelayBench task suite
+        run: uv run python scripts/validate_relaybench.py
+
+      - name: Entry-point import smoke
+        run: |
+          uv run python - <<'EOF'
+          import importlib
+          for mod in (
+              "agents.native_runner",
+              "agents.relay_agent",
+              "agents.flow_planner",
+              "agents.flow_runner",
+              "agents.capability_matrix_router",
+          ):
+              importlib.import_module(mod)
+              print(f"ok: {mod}")
+          EOF

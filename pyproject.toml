@@ -24,7 +24,6 @@ dependencies = [
     # kept conservative so validator behaviour matches the resolved lock.
     "pydantic<2.11",
     "socksio>=1.0.0",
-    "mobile-world",
 ]
 
 classifiers = [
@@ -35,6 +34,15 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+
+[project.optional-dependencies]
+# Only the A/B baseline (scripts/run_mobileworld.py) and MW-fallback legs use
+# MobileWorld, and nothing imports it at entry-point load (run_mobileworld
+# resolves a third_party/MobileWorld checkout first, the installed module
+# second). Install with: uv sync --no-install-project --extra mw
+mw = ["mobile-world"]
+# Manifest schema validation (scripts/validate_manifests.py, CI).
+dev = ["jsonschema>=4.17"]
 
 [project.urls]
 Homepage = "https://github.com/ShadowNearby/RelayAgent"

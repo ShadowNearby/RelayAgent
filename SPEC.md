@@ -185,6 +185,29 @@ Two distinct reasons to set this `true`:
 
 Either reason is sufficient. Card authors are encouraged to explain *why* `true` in the capability's `description`.
 
+### 8.3 `prompt_template` / `prompt_slots` (optional)
+
+Structured capabilities (navigation, booking, messaging, …) MAY pin the wording of the prompt sent to the in-app agent, so an LLM router only extracts slot values instead of free-composing the prompt (which can derail the app's intent routing):
+
+```yaml
+prompt_template: "Navigate to {place}[ by {mode}]."   # `{slot}` placeholders; optional segments in `[...]`
+prompt_slots:
+  - name: place                       # required: snake_case slot name
+    desc: "destination name/address"  # optional: hint for the slot extractor
+    required: true                    # default true
+  - name: mode
+    required: false                   # optional slots MUST sit inside a `[...]` segment
+```
+
+Rules (validated at load time by conforming routers):
+
+- Every `{placeholder}` MUST be a declared slot; every declared slot MUST be referenced.
+- A **required** slot MUST appear outside any `[...]` segment; missing value = hard failure.
+- An **optional** slot MUST appear only inside `[...]`; an empty value drops the whole segment (including surrounding wording).
+- Brackets MUST be balanced and non-nested.
+
+The guarantee boundary: the template fixes *wording/intent routing*; slot **values** are still LLM-extracted and not guaranteed correct. Full conventions and worked examples: `docs/prompt_template.md`.
+
 ## 9. `provenance` block
 
 ```yaml
@@ -248,7 +271,7 @@ A **conforming router** MUST:
 SPEC §1 (Conformance) reserves the `x_` prefix for vendor/implementation
 extensions that conforming SDKs MAY ignore. The reference adapter
 (`agents/relay_agent.py`) + planner (`agents/action_planner.py`) consume
-the following extensions in the eight shipped reference cards. They are
+the following extensions in the ten shipped reference cards. They are
 **not normative** — a v0.1-conforming router is free to ignore any of them
 — but card authors targeting our adapter rely on them. Promotion to first-
 class fields is tracked in `SPEC-OPEN-QUESTIONS.md`.
@@ -256,9 +279,11 @@ class fields is tracked in `SPEC-OPEN-QUESTIONS.md`.
 ### Step kinds (extend §6.1)
 
 - **`wait_for_reply: { max_seconds?, poll_interval_seconds? }`** — wait for
-  the in-app agent to finish responding. The adapter polls a VLM with the
-  current screenshot until it returns `{done: true, text: "..."}` or the
-  wall-clock budget elapses. `max_seconds` defaults to
+  the in-app agent to finish responding. The adapter decides doneness
+  deterministically — the a11y-tree text hash must hold byte-identical
+  across consecutive dumps — within a wall-clock budget; the reply text is
+  scraped from the a11y tree (a VLM only reads the frame when the scrape
+  comes up empty). `max_seconds` defaults to
   `max(5 × capability.typical_latency_seconds, 60)`; override per capability
   with `x_max_wait_seconds`.
 

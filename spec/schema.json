@@ -232,7 +232,26 @@
         },
         "executable":               { "type": "boolean" },
         "handoff_to_user_required": { "type": "boolean" },
-        "typical_latency_seconds":  { "type": "number", "minimum": 0 }
+        "typical_latency_seconds":  { "type": "number", "minimum": 0 },
+        "prompt_template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Templated submit prompt; `{slot}` placeholders must be declared in prompt_slots, optional segments wrapped in `[...]`. See SPEC §8.3."
+        },
+        "prompt_slots": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name":     { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "desc":     { "type": "string", "minLength": 1 },
+              "required": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "patternProperties": { "^x_": {} },
       "additionalProperties": false

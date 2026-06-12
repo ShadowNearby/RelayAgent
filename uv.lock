@@ -1898,7 +1898,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "loguru" },
-    { name = "mobile-world" },
     { name = "openai" },
     { name = "pillow" },
     { name = "pydantic" },
@@ -1906,16 +1905,26 @@ dependencies = [
     { name = "socksio" },
 ]
 
+[package.optional-dependencies]
+dev = [
+    { name = "jsonschema" },
+]
+mw = [
+    { name = "mobile-world" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.17" },
     { name = "loguru", specifier = ">=0.7" },
-    { name = "mobile-world", git = "https://github.com/ShadowNearby/MobileWorld?rev=12306ff9795f6b94bfffac8e9667c9eb4f8349f3" },
+    { name = "mobile-world", marker = "extra == 'mw'", git = "https://github.com/ShadowNearby/MobileWorld?rev=12306ff9795f6b94bfffac8e9667c9eb4f8349f3" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pydantic", specifier = "<2.11" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "socksio", specifier = ">=1.0.0" },
 ]
+provides-extras = ["mw", "dev"]
 
 [[package]]
 name = "requests"
