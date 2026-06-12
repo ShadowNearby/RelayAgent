@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/RelayAgent/spec/v0.1/schema.json",
+  "$id": "https://raw.githubusercontent.com/ShadowNearby/RelayAgent/main/spec/schema.json",
   "title": "RelayAgent Manifest",
-  "description": "Normative JSON Schema for the RelayAgent SPEC v0.1. Cards are authored in YAML; this schema describes the equivalent JSON structure after parse.",
+  "description": "Normative JSON Schema for the RelayAgent SPEC v0.1. Cards are authored in YAML; this schema describes the equivalent JSON structure after parse. Enforcement layers (SPEC §12): this schema is layer 1 (structure); the load-time catalog build is layer 2 (prompt_template consistency, capability-id uniqueness); scripts/validate_manifests.py is layer 3 (cross-field CI checks: filename matches app_id, platforms cover verified_os). `x_`-prefixed extension keys are allowed inside every nested object (SPEC §3) and MAY be ignored by conforming SDKs; where this schema pins an `x_` key's shape, it validates the extensions the reference adapter consumes (SPEC §13.1) without constraining unknown ones.",
 
   "type": "object",
   "additionalProperties": false,
@@ -30,8 +30,8 @@
     },
     "app_id": {
       "type": "string",
-      "minLength": 1,
-      "description": "Android package name or iOS bundle id."
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+$",
+      "description": "Android package name or iOS bundle id (reverse-DNS). Must match the manifest filename: manifests/<app_id>.yaml (checked by validate_manifests.py)."
     },
     "app_name": {
       "type": "string",
@@ -60,36 +60,47 @@
 
   "definitions": {
 
-    "selector": {
-      "description": "Reaches a single UI node. v0.1 selectors are single-field. See SPEC §6.1 and SPEC-OPEN-QUESTIONS OQ-10/11.",
+    "screen_fraction": {
+      "description": "Screen-relative tap point, measured against the visible screenshot width/height of the verified device (see provenance.x_device_metrics). Last-resort locator.",
       "type": "object",
-      "minProperties": 1,
+      "required": ["x_ratio", "y_ratio"],
+      "properties": {
+        "x_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y_ratio": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "patternProperties": { "^x_": {} },
+      "additionalProperties": false
+    },
+
+    "selector": {
+      "description": "Reaches a single UI node. Normally single-field; multiple fields are allowed only as alternative anchors for the same node, resolved by priority (screen_fraction, when present, is the authoritative tap point). AND-composite matching is NOT v0.1. See SPEC §6.1 and SPEC-OPEN-QUESTIONS OQ-10/11.",
+      "type": "object",
+      "anyOf": [
+        { "required": ["accessibility_id"] },
+        { "required": ["resource_id"] },
+        { "required": ["text"] },
+        { "required": ["text_contains"] },
+        { "required": ["screen_fraction"] }
+      ],
       "properties": {
         "accessibility_id": { "type": "string" },
         "resource_id":      { "type": "string" },
         "text":             { "type": "string" },
         "text_contains":    { "type": "string" },
-        "screen_fraction": {
-          "description": "Last-resort selector by screen-relative tap point.",
-          "type": "object",
-          "required": ["x_ratio", "y_ratio"],
-          "properties": {
-            "x_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
-            "y_ratio": { "type": "number", "minimum": 0, "maximum": 1 }
-          },
-          "additionalProperties": false
-        }
+        "screen_fraction":  { "$ref": "#/definitions/screen_fraction" }
       },
+      "patternProperties": { "^x_": {} },
       "additionalProperties": false
     },
 
     "step": {
-      "description": "One step of a tap_sequence. Exactly one of `tap`, `tap_label`, `tap_unless_present`, `swipe`, or `wait`.",
+      "description": "One step of a tap_sequence. Exactly one of `tap`, `tap_label`, `tap_unless_present`, `swipe`, `wait`, or `wait_for_reply`.",
       "type": "object",
       "oneOf": [
         {
           "required": ["tap"],
           "properties": { "tap": { "$ref": "#/definitions/selector" } },
+          "patternProperties": { "^x_": {} },
           "additionalProperties": false
         },
         {
@@ -110,6 +121,7 @@
               "additionalProperties": false
             }
           },
+          "patternProperties": { "^x_": {} },
           "additionalProperties": false
         },
         {
@@ -127,6 +139,7 @@
               "additionalProperties": false
             }
           },
+          "patternProperties": { "^x_": {} },
           "additionalProperties": false
         },
         {
@@ -137,6 +150,7 @@
               "description": "Scroll direction. action_planner compiles this to a scroll action; NativeEnv reverses up/down (card up == content moves up). See CLAUDE.md."
             }
           },
+          "patternProperties": { "^x_": {} },
           "additionalProperties": false
         },
         {
@@ -145,21 +159,83 @@
             "wait": {
               "type": "object",
               "oneOf": [
-                { "required": ["ms"],    "properties": { "ms":    { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
-                { "required": ["until"], "properties": { "until": { "$ref": "#/definitions/selector" }, "timeout_seconds": { "type": "number", "minimum": 0 } }, "additionalProperties": false }
+                {
+                  "required": ["ms"],
+                  "properties": { "ms": { "type": "integer", "minimum": 0 } },
+                  "patternProperties": { "^x_": {} },
+                  "additionalProperties": false
+                },
+                {
+                  "required": ["until"],
+                  "properties": {
+                    "until": {
+                      "description": "Presence poll. Needs a text-bearing anchor: the router polls the a11y dump for the text, so coordinate or id-only selectors are not pollable here. Best-effort: on timeout the router warns and proceeds (SPEC §6.1).",
+                      "type": "object",
+                      "anyOf": [
+                        { "required": ["text"] },
+                        { "required": ["text_contains"] }
+                      ],
+                      "properties": {
+                        "text":          { "type": "string" },
+                        "text_contains": { "type": "string" }
+                      },
+                      "patternProperties": { "^x_": {} },
+                      "additionalProperties": false
+                    },
+                    "timeout_seconds": { "type": "number", "minimum": 0 }
+                  },
+                  "patternProperties": { "^x_": {} },
+                  "additionalProperties": false
+                }
               ]
             }
           },
+          "patternProperties": { "^x_": {} },
+          "additionalProperties": false
+        },
+        {
+          "required": ["wait_for_reply"],
+          "properties": {
+            "wait_for_reply": {
+              "description": "Wait for the in-app agent to finish responding before continuing. Doneness detection is implementation-defined; max_seconds defaults to max(5 × typical_latency_seconds, 60). A bare `wait_for_reply:` key (YAML null) is equivalent to `{}`. See SPEC §6.1.",
+              "type": ["object", "null"],
+              "properties": {
+                "max_seconds":           { "type": "number", "minimum": 0 },
+                "poll_interval_seconds": { "type": "number", "minimum": 0 }
+              },
+              "patternProperties": { "^x_": {} },
+              "additionalProperties": false
+            }
+          },
+          "patternProperties": { "^x_": {} },
           "additionalProperties": false
         }
       ]
+    },
+
+    "described_steps": {
+      "description": "A named sub-flow: optional prose `description` plus an ordered list of steps. Used by the x_post_result_flow and x_prepare_fresh_conversation extensions (SPEC §13.1).",
+      "type": "object",
+      "required": ["steps"],
+      "properties": {
+        "description": { "type": "string" },
+        "steps": { "type": "array", "items": { "$ref": "#/definitions/step" } },
+        "stop_before": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Author-declared safety boundary: UI labels this flow must stop before and never tap (e.g. a payment button). Documentation for reviewers; the steps themselves simply end before reaching these."
+        }
+      },
+      "patternProperties": { "^x_": {} },
+      "additionalProperties": false
     },
 
     "entry": {
       "type": "object",
       "required": ["primary"],
       "properties": {
-        "primary": { "$ref": "#/definitions/entry_method" }
+        "primary": { "$ref": "#/definitions/entry_method" },
+        "x_prepare_fresh_conversation": { "$ref": "#/definitions/described_steps" }
       },
       "patternProperties": { "^x_": {} },
       "additionalProperties": false
@@ -207,7 +283,22 @@
       "type": "object",
       "required": ["method"],
       "properties": {
-        "method": { "enum": ["none", "screen_text_extract", "accessibility_tree", "copy_button"] }
+        "method": {
+          "enum": ["none", "copy_button"],
+          "description": "v0.1 set. `screen_text_extract` / `accessibility_tree` are reserved for the OQ-5 read-back standardization and intentionally NOT valid in v0.1."
+        },
+        "x_copy_button": {
+          "description": "Locator details for method: copy_button (SPEC §13.1). Locator priority: VLM grounding via `text`, then `screen_fraction`; `valid_x`/`valid_y` are pixel sanity ranges against VLM mis-grounding.",
+          "type": "object",
+          "properties": {
+            "text":            { "type": "string" },
+            "screen_fraction": { "$ref": "#/definitions/screen_fraction" },
+            "valid_x": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } },
+            "valid_y": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } }
+          },
+          "patternProperties": { "^x_": {} },
+          "additionalProperties": false
+        }
       },
       "patternProperties": { "^x_": {} },
       "additionalProperties": false
@@ -222,12 +313,16 @@
         "executable",
         "handoff_to_user_required"
       ],
+      "dependencies": {
+        "prompt_slots": ["prompt_template"]
+      },
       "properties": {
         "id":              { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
         "description":     { "type": "string", "minLength": 1 },
         "example_prompts": {
           "type": "array",
           "minItems": 2,
+          "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
         },
         "executable":               { "type": "boolean" },
@@ -249,8 +344,40 @@
               "desc":     { "type": "string", "minLength": 1 },
               "required": { "type": "boolean" }
             },
+            "patternProperties": { "^x_": {} },
             "additionalProperties": false
           }
+        },
+        "x_max_wait_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Per-capability override of the implicit wait_for_reply budget (SPEC §13.1)."
+        },
+        "x_skip_wait_for_reply": {
+          "type": "boolean",
+          "description": "Skip the implicit wait_for_reply after submit; for CTA/handoff capabilities with no text reply (SPEC §13.1)."
+        },
+        "x_pre_invocation_steps": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/step" },
+          "description": "Extra steps run after entry, before focusing the input field (SPEC §13.1)."
+        },
+        "x_post_result_flow": {
+          "$ref": "#/definitions/described_steps",
+          "description": "Extra steps run after wait_for_reply returns (SPEC §13.1)."
+        },
+        "x_capture_full_reply": {
+          "description": "Scroll-capture the full reply after doneness; `true` or `{max_scrolls: N}` (default 6). See SPEC §13.1.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "required": ["max_scrolls"],
+              "properties": { "max_scrolls": { "type": "integer", "minimum": 1 } },
+              "patternProperties": { "^x_": {} },
+              "additionalProperties": false
+            }
+          ]
         }
       },
       "patternProperties": { "^x_": {} },
@@ -280,8 +407,17 @@
       "type": "object",
       "required": ["last_verified", "verified_app_version", "verified_os", "verification_method"],
       "properties": {
-        "last_verified":        { "type": "string", "format": "date" },
-        "verified_app_version": { "type": "string", "minLength": 1 },
+        "last_verified": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "ISO 8601 date. The pattern is asserted even when the validator does not enforce `format`."
+        },
+        "verified_app_version": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d+)*$",
+          "description": "Dotted numeric app version, comparable for the SPEC §9 staleness rule."
+        },
         "verified_os":          { "type": "string", "pattern": "^(android|ios|harmonyos)-[0-9]+(?:\\.[0-9]+)*$" },
         "verified_device":      { "type": "string" },
         "verification_method":  { "enum": ["manual", "scripted", "community_reported"] },
@@ -305,6 +441,7 @@
         },
         "density_dpi": { "type": "integer", "minimum": 1 }
       },
+      "patternProperties": { "^x_": {} },
       "additionalProperties": false
     },
 
@@ -312,8 +449,16 @@
       "type": "object",
       "required": ["app_version_min", "network_required"],
       "properties": {
-        "app_version_min": { "type": "string", "description": "Minimum supported app version; empty string means unspecified." },
-        "app_version_max": { "type": "string" },
+        "app_version_min": {
+          "type": "string",
+          "pattern": "^$|^\\d+(?:\\.\\d+)*$",
+          "description": "Minimum supported app version (dotted numeric); empty string means unspecified."
+        },
+        "app_version_max": {
+          "type": "string",
+          "pattern": "^$|^\\d+(?:\\.\\d+)*$",
+          "description": "Exclusive upper bound (dotted numeric); empty string means unspecified."
+        },
         "region": {
           "type": "array",
           "items": { "type": "string", "pattern": "^[A-Z]{2}$" },

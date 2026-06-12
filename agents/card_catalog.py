@@ -85,7 +85,7 @@ def _validate_prompt_template(
 def build_catalog(manifest_dir: Path = MANIFEST_DIR) -> dict[str, Any]:
     """Compact JSON-able view of available apps for router/planner LLMs."""
     apps: list[dict[str, Any]] = []
-    template_errors: list[str] = []
+    errors: list[str] = []
     # Single manifest reader: load_all_cards handles `_`-prefix skipping,
     # app_id validation, and per-file error isolation. Every manifest consumer
     # routes through it, so a learned overlay merged there is seen everywhere
@@ -94,7 +94,16 @@ def build_catalog(manifest_dir: Path = MANIFEST_DIR) -> dict[str, Any]:
     for doc in load_all_cards(manifest_dir):
         agent = doc.get("embedded_agent") or {}
         caps = []
+        seen_cap_ids: set[str] = set()
         for c in agent.get("capabilities") or []:
+            # SPEC §8: capability ids are unique within a card. Duplicates would
+            # make build_plan's `next(c for c ...)` silently pick the first.
+            cid = c.get("id") or "?"
+            if cid in seen_cap_ids:
+                errors.append(
+                    f"{doc.get('app_id') or '?'}: duplicate capability id {cid!r}"
+                )
+            seen_cap_ids.add(cid)
             cap = {
                 "id": c.get("id"),
                 "description": clean_text(c.get("description")),
@@ -109,7 +118,7 @@ def build_catalog(manifest_dir: Path = MANIFEST_DIR) -> dict[str, Any]:
             if c.get("prompt_template"):
                 cap["prompt_template"] = c["prompt_template"]
                 cap["prompt_slots"] = c.get("prompt_slots") or []
-                template_errors.extend(
+                errors.extend(
                     _validate_prompt_template(
                         doc.get("app_id") or "?",
                         c.get("id") or "?",
@@ -127,9 +136,9 @@ def build_catalog(manifest_dir: Path = MANIFEST_DIR) -> dict[str, Any]:
             "capabilities": caps,
         })
 
-    if template_errors:
+    if errors:
         raise ManifestValidationError(
-            "invalid prompt_template(s):\n  - " + "\n  - ".join(template_errors)
+            "invalid manifest(s):\n  - " + "\n  - ".join(errors)
         )
 
     return {"apps": apps}

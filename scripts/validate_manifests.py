@@ -1,12 +1,16 @@
 """Validate every card in manifests/ against the normative spec.
 
-Two layers, both device-less and LLM-less (CI-safe):
+Three layers, all device-less and LLM-less (CI-safe):
 
 1. JSON-Schema validation against `spec/schema.json` (the normative mirror of
    SPEC.md — unknown top-level keys, missing required fields, bad selector
-   shapes all fail here).
-2. Catalog build (`agents.card_catalog.build_catalog`), which adds the
-   load-time `prompt_template` / `prompt_slots` consistency checks.
+   shapes all fail here). Runs with a FormatChecker so `format: date` asserts.
+2. Cross-field checks JSON Schema cannot express: manifest filename matches
+   `<app_id>.yaml`, and `provenance.verified_os` names a platform listed in
+   `platforms`.
+3. Catalog build (`agents.card_catalog.build_catalog`), which adds the
+   load-time `prompt_template` / `prompt_slots` consistency checks and
+   capability-id uniqueness.
 
 Usage:
     uv run python scripts/validate_manifests.py [manifest.yaml ...]
@@ -29,12 +33,35 @@ SCHEMA_PATH = ROOT / "spec" / "schema.json"
 MANIFEST_DIR = ROOT / "manifests"
 
 
+def cross_field_errors(path: Path, doc: dict) -> list[str]:
+    """Card-level consistency rules JSON Schema cannot express (layer 2)."""
+    errs = []
+    app_id = doc.get("app_id")
+    if app_id and path.name != f"{app_id}.yaml":
+        errs.append(
+            f"filename {path.name!r} does not match app_id ({app_id}.yaml expected)"
+        )
+    verified_os = (doc.get("provenance") or {}).get("verified_os") or ""
+    platforms = doc.get("platforms") or []
+    os_name = verified_os.split("-", 1)[0]
+    if os_name and platforms and os_name not in platforms:
+        errs.append(
+            f"provenance.verified_os {verified_os!r} names a platform "
+            f"not listed in platforms {platforms!r}"
+        )
+    return errs
+
+
 def main(argv: list[str]) -> int:
     import jsonschema
 
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    # Honor the draft the schema itself declares (draft-07 today).
-    validator = jsonschema.validators.validator_for(schema)(schema)
+    # Honor the draft the schema itself declares (draft-07 today). The
+    # FormatChecker makes `format: date` assert instead of being annotation-only
+    # (the schema also carries a pattern as a belt-and-suspenders fallback).
+    validator = jsonschema.validators.validator_for(schema)(
+        schema, format_checker=jsonschema.FormatChecker()
+    )
 
     if argv:
         files = [Path(a) for a in argv]
@@ -48,16 +75,20 @@ def main(argv: list[str]) -> int:
     for path in files:
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
         errors = sorted(validator.iter_errors(doc), key=lambda e: list(e.absolute_path))
-        if errors:
+        extra = cross_field_errors(path, doc) if isinstance(doc, dict) else []
+        if errors or extra:
             failures += 1
             print(f"✗ {path.name}")
             for e in errors:
                 loc = "/".join(str(p) for p in e.absolute_path) or "<root>"
                 print(f"    {loc}: {e.message}")
+            for msg in extra:
+                print(f"    {msg}")
         else:
             print(f"✓ {path.name}")
 
-    # Layer 2: catalog build (prompt_template consistency, app_id checks).
+    # Layer 3: catalog build (prompt_template consistency, capability-id
+    # uniqueness).
     from agents.card_catalog import ManifestValidationError, build_catalog
 
     try:
