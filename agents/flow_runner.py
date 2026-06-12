@@ -194,6 +194,61 @@ class _RecCompletions:
 
 
 # --------------------------------------------------------------------------- #
+# Leg executors — how one app leg's native run is invoked
+# --------------------------------------------------------------------------- #
+
+
+class SubprocessLegExecutor:
+    """Host default: one fresh `python -m agents.native_runner` per leg
+    (crash isolation; per-leg env via the child process env). Byte-identical
+    to the pre-seam inline subprocess.call.
+
+    stdin is fed empty so the final ask_user handoff (when present) closes
+    cleanly with EOF rather than blocking the flow."""
+
+    def run(self, app: str, prompt: str, child_env: dict[str, str],
+            extra_args: list[str]) -> int:
+        cmd = [sys.executable, "-m", NATIVE_RUNNER_MODULE, app, prompt, *extra_args]
+        return subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
+
+
+class InProcessLegExecutor:
+    """Android / no-subprocess mode: swap os.environ to the leg env, run the
+    leg in this process via native_runner.main (same argparse path as the
+    CLI), restore env in a finally. Legs are sequential, so a plain swap is
+    safe; the agent module is re-executed per leg by _load_agent_class, so
+    module-level env reads re-resolve.
+
+    Unlike the subprocess executor, stdin is NOT detached — the in-task
+    ask_user handoff goes through the InteractionProvider instead of EOF."""
+
+    def run(self, app: str, prompt: str, child_env: dict[str, str],
+            extra_args: list[str]) -> int:
+        from agents import native_runner
+
+        snapshot = dict(os.environ)
+        os.environ.clear()
+        os.environ.update(child_env)
+        try:
+            return int(native_runner.main([app, prompt, *extra_args]) or 0)
+        except SystemExit as e:  # native_runner maps config errors to sys.exit
+            logger.warning(f"in-process leg exited: {e.code}")
+            return e.code if isinstance(e.code, int) else 1
+        except Exception:
+            logger.exception(f"in-process leg crashed for app={app}")
+            return 1
+        finally:
+            os.environ.clear()
+            os.environ.update(snapshot)
+
+
+def _default_leg_executor():
+    if os.getenv("RELAY_LEG_EXECUTOR", "subprocess") == "inprocess":
+        return InProcessLegExecutor()
+    return SubprocessLegExecutor()
+
+
+# --------------------------------------------------------------------------- #
 # FlowRunner
 # --------------------------------------------------------------------------- #
 
@@ -204,6 +259,7 @@ class FlowRunner:
         flow_path: Path,
         env_overrides: dict[str, str] | None = None,
         extra_args: list[str] | None = None,
+        leg_executor: Any | None = None,
     ) -> None:
         self.flow_path = flow_path
         self.flow = yaml.safe_load(flow_path.read_text(encoding="utf-8"))
@@ -213,6 +269,7 @@ class FlowRunner:
         self.env = ensure_llm_env(ENV_FILE, env_overrides)
 
         self.extra_args = extra_args or []
+        self._leg_executor = leg_executor or _default_leg_executor()
         # Wrapped so every flow-process LLM call (leg judge, bind extraction)
         # is recorded and later folded into each leg's traj.json — see
         # `_RecordingLLM` / `_fold_flow_llm_calls`.
@@ -348,18 +405,12 @@ class FlowRunner:
                 "RELAY_TRAJ_DIR": str(step_log_root),
                 "RELAY_WALL_OUT": str(step_log_root / "wall_clock.json"),
             }
-            # The native runner reads LLM_* + RELAY_* from the child env.
-            cmd = [
-                sys.executable, "-m", NATIVE_RUNNER_MODULE, app, prompt,
-                *self.extra_args,
-            ]
+            # The native runner reads LLM_* + RELAY_* from the leg env.
             logger.info(
                 f"→ native runner for app={app} capability={capability!r} prompt={prompt!r}"
             )
-            # Feed empty stdin so the final ask_user handoff (when present)
-            # closes cleanly with EOF rather than blocking the flow.
             # The framework-excluded per-leg wall_clock.json is written by the
-            # agent (RELAY_WALL_OUT) at subprocess exit; here we only print the
+            # agent (RELAY_WALL_OUT) at leg end; here we only print the
             # gross leg time for reference when RELAY_TIMING=1.
             #
             # TODO(phase-B): same-session handoff round-trip. When this leg
@@ -370,10 +421,11 @@ class FlowRunner:
             # answer and resumes predict() in the SAME conversation instead of
             # terminating. Phase A handles handoff at flow granularity (a fresh
             # leg after a flow-level ask_user), which loses in-app state; phase B
-            # preserves it.
+            # preserves it. (The InteractionProvider in the in-process executor
+            # already gives the channel; the subprocess executor needs the fifo.)
             timing = os.getenv("RELAY_TIMING", "0") == "1"
             t0 = time.monotonic()
-            rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
+            rc = self._leg_executor.run(app, prompt, child_env, self.extra_args)
             if timing:
                 logger.info(f"leg gross wall_s={round(time.monotonic() - t0, 1)}")
             if rc != 0:
