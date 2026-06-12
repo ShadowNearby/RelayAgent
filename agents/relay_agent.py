@@ -58,7 +58,9 @@ from agents.action_model import JSONAction
 
 from agents._adb import adb_base, force_stop, swipe_down
 from agents._adb import cold_launch as _cold_launch
+from agents._adb import foreground_package as _adb_foreground_package
 from agents._adb import screencap as _adb_screencap
+from agents._adb import tap as _adb_tap
 from agents.action_planner import Step, build_plan
 from agents.capability_router import route_capability
 from agents.card_loader import load_card_by_app_id
@@ -423,38 +425,11 @@ _ALLOW_LABELS: tuple[str, ...] = (
     "允许",
     "Allow",
 )
-_FOCUS_PKG_RE = re.compile(r"\b([\w.]+)/[\w.$]+\b")
-
-
-def _foreground_package() -> str | None:
-    """Return the current foreground app's package id via `dumpsys window`.
-    Cheap (~100-300ms). Returns None on any failure."""
-    try:
-        # Note: some Android builds (observed on this lab's pixel-class
-        # device) emit nothing for `dumpsys window windows` — `dumpsys window`
-        # without the subcommand returns the full state and is portable.
-        r = subprocess.run(
-            adb_base() + ["shell", "dumpsys", "window"],
-            capture_output=True, text=True, timeout=3,
-        )
-        if r.returncode != 0:
-            return None
-        for line in r.stdout.splitlines():
-            if "mCurrentFocus" not in line and "mFocusedApp" not in line:
-                continue
-            m = _FOCUS_PKG_RE.search(line)
-            if m:
-                return m.group(1)
-        return None
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
-
-
 def _maybe_dismiss_permission_popup() -> str | None:
     """If a system permission/consent dialog is on top, tap the most-permissive
     Allow button. Returns the label tapped (for logging) or None when nothing
     was dismissed."""
-    pkg = _foreground_package()
+    pkg = _adb_foreground_package(timeout=3)
     if pkg is None or pkg not in _PERMISSION_PACKAGES:
         return None
     root = _dump_window_xml_root(dump_timeout=2, pull_timeout=1)
@@ -482,13 +457,7 @@ def _maybe_dismiss_permission_popup() -> str | None:
                 continue
             x1, y1, x2, y2 = (int(v) for v in m.groups())
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-            try:
-                subprocess.run(
-                    adb_base() + ["shell", "input", "tap", str(cx), str(cy)],
-                    capture_output=True, text=True, timeout=3,
-                )
-            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-                logger.warning(f"permission popup tap failed: {e}")
+            if not _adb_tap(cx, cy, timeout=3):
                 return None
             logger.info(
                 f"dismissed system permission popup: tapped {label!r} at "
