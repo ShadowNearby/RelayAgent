@@ -4,7 +4,7 @@
 
 - venv 在 `.venv/`，**Python 3.12**（`pyproject.toml` 锁 `>=3.12,<3.13`，匹配现有 lock）。
 - 装依赖（不装本项目，靠 `uv run` 跑源码）：`uv venv --python 3.12 && uv sync --no-install-project --extra dev --extra mw`。`mobile-world` 已移到 optional extra `mw`（只有 A/B baseline / MW 兜底用；入口 import 链不碰它），`jsonschema` 在 extra `dev`（manifest 校验）。CI（`.github/workflows/ci.yml`）只装 `--extra dev`。
-- 运行时是纯 Python over adb，无外部 runner、无 server（见下「Native 运行时」）。
+- 运行时是纯 Python，无外部 runner、无 server；设备 I/O 经 `agents/device/` 后端抽象（Android=直 adb，见下「Native 运行时」）。
 - pydantic 锁 `<2.11`：保守保留以对齐已解析的 lock，`action_model.py` 的 `JSONAction` 用它。
 
 ## LLM 端点
@@ -35,13 +35,16 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 ## Native 运行时
 
-运行时是纯 Python over adb，**无 server、无框架冷启动**，由以下模块组成：
+运行时是纯 Python，**无 server、无框架冷启动**；设备 I/O 全部走 **`agents/device/` 后端抽象层**（Android=直 adb），由以下模块组成：
 
+- `agents/device/` — **DeviceBackend 抽象层**：`base.py`（ABC + `UINode` 归一化 a11y 节点 + `Key`）、`android.py`（adb 实现，唯一真实后端；含 IME、`dump_ui_tree`、权限弹窗 `dismiss_permission_popup`）、`ios.py`/`harmony.py`（WDA/hdc 骨架，调用抛 NotImplementedError）、`factory.py`（`get_backend()` 按 `RELAY_PLATFORM`（默认 android）分发，serial 是实例属性）、`vendor_profiles.py`（厂商权限表 + `RELAY_VENDOR_PROFILE` JSON overlay）。多平台能力映射见 [`docs/device_backends.zh.md`](docs/device_backends.zh.md)。**`agents/_adb.py` 已退化为同名委托 shim**（旧 import 面兼容；新代码持 backend 实例）。
 - `agents/action_model.py` — `JSONAction` + action-type 常量（validator/`__eq__`/`model_dump`）。
 - `agents/agent_base.py` — `BaseAgent` + `MCPAgent`（OpenAI client、token 计数、`openai_chat_completions_create` 含 claude/gpt/o1/kimi 分支）。`relay_agent` 经 `from agents.agent_base import MCPAgent as _MCPAgentBase`（别名排序见文件头注释，让 loader 选 RelayAgent）。
 - `agents/_img.py` — `pil_to_base64`。
-- `agents/native_runtime.py` — **`NativeEnv`**（`JSONAction`→直 adb：swipe 几何、scroll 方向反转、`ADB_INPUT_B64` 键盘广播、`skip_screenshot` 复用上一帧）+ 进程内 `obs→predict→execute` 循环 + **AdbKeyboard IME 激活**。
+- `agents/native_runtime.py` — **`NativeEnv`**（`JSONAction`→backend 手势：swipe 几何、scroll 方向反转留在这层，tap/键盘/启动落到 backend；`skip_screenshot` 复用上一帧）+ 进程内 `obs→predict→execute` 循环 + **输入通道激活**（Android=AdbKeyboard；不可用时 ASCII 降级 `input text`，中文 loud fail，`native_runner` 对含中文 goal 直接 env_fail 早退）。
 - `agents/native_runner.py` — 单 app 模块入口；`run_plan` / `run_benchmark_test` 按 task spawn `python -m agents.native_runner` 子进程（无 server）。agent 经 `RELAY_WALL_OUT`/`RELAY_REPLY_OUT` 落 `wall_clock.json`/`reply.json`，这正是这些消费方读的。
+
+**平台化要点**：manifest 的 `platforms` 字段在 `card_loader.load_all_cards` 按 `RELAY_PLATFORM` 过滤（不含当前平台的卡对路由/规划不可见）；可选 `app_ids: {android, ios, harmonyos}` 映射同一逻辑 App 的多平台 id（`card_loader.resolve_app_id` 解析，fallback `app_id`）；`validate_manifests.py` 对声明 ios/harmonyos 但 selector 只有 `resource_id` 的卡发非致命 WARN。a11y 消费方（grounding/文本 hash/回复 scrape/权限弹窗/a11y baseline）一律吃 `UINode`，不碰 uiautomator XML。状态栏/输入栏裁剪比例 `RELAY_CROP_TOP`(0.08)/`RELAY_CROP_BOTTOM`(0.18) 可调。
 
 ## 性能旋钮
 

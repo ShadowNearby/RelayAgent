@@ -153,7 +153,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         file=sys.stderr,
     )
 
-    if not backend.setup_input_channel():
+    try:
+        input_channel_ok = backend.setup_input_channel()
+    except NotImplementedError as exc:
+        # ios / harmonyos skeleton backends: fail with the one-line pointer
+        # instead of a traceback from deep inside the run loop.
+        sys.exit(f"[native] {type(backend).__name__}: {exc}")
+    if not input_channel_ok:
         # Without AdbKeyboard there is no adb path for CJK input — a goal that
         # needs it WILL fail at the typing step, so fail fast here instead of
         # paying a doomed device run. ASCII goals can limp through `input text`.
