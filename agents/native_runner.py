@@ -9,6 +9,12 @@ the subprocess target used by the flow and benchmark drivers:
 
 The agent writes the task wall-clock to traj_logs/user_task/wall_clock.json,
 anchored at its first predict.
+
+`run_leg` is the importable equivalent of one CLI invocation — the Android
+build (no subprocess spawning under Chaquopy) and flow_runner's
+InProcessLegExecutor call it directly. All run state (trajectory dir, target
+app, LLM config) is read from env **per call**, never at import, so one
+process can run many legs with different env.
 """
 from __future__ import annotations
 
@@ -29,11 +35,6 @@ if str(REPO_ROOT) not in sys.path:
 
 ENV_FILE = REPO_ROOT / ".env"
 DEFAULT_AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
-# Where this run's trajectory (traj.json + steps/ + agent_reply.json) lands.
-# Defaults to the shared global dir; the flow runner pins it per leg via
-# RELAY_TRAJ_DIR so each leg writes straight into its own dir.
-_TRAJ_DIR_ENV = os.getenv("RELAY_TRAJ_DIR")
-TRAJ_DIR = Path(_TRAJ_DIR_ENV) if _TRAJ_DIR_ENV else REPO_ROOT / "traj_logs" / "user_task"
 SUMMARY_OUT_ENV = "RELAY_SUMMARY_OUT"
 
 from agents.runtime_config import resolve_llm_config  # noqa: E402
@@ -44,30 +45,47 @@ def _agent_file() -> Path:
     return Path(override).resolve() if override else DEFAULT_AGENT_FILE
 
 
-def _rotate_traj_dir() -> None:
+def _resolve_traj_dir() -> tuple[Path, bool]:
+    """This run's trajectory dir (traj.json + steps/ + agent_reply.json) and
+    whether it was pinned via RELAY_TRAJ_DIR. Defaults to the shared global
+    dir; the flow runner pins it per leg so each leg writes straight into its
+    own dir. Resolved per call (NOT at import) so in-process legs honor
+    per-leg env."""
+    env = os.getenv("RELAY_TRAJ_DIR")
+    if env:
+        return Path(env), True
+    return REPO_ROOT / "traj_logs" / "user_task", False
+
+
+def _rotate_traj_dir() -> Path:
     """Move a prior user_task/ aside so this run owns traj_logs/user_task/.
 
     When RELAY_TRAJ_DIR pins a per-run dir (e.g. a flow leg), there's no shared
     dir to reclaim — each leg dir is already unique — so skip the backup rename
     and just ensure the dir exists and seed an empty traj.json."""
-    if not _TRAJ_DIR_ENV and TRAJ_DIR.exists():
+    traj_dir, pinned = _resolve_traj_dir()
+    if not pinned and traj_dir.exists():
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup = TRAJ_DIR.parent / f"user_task_backup_{ts}"
+        backup = traj_dir.parent / f"user_task_backup_{ts}"
         try:
-            TRAJ_DIR.rename(backup)
+            traj_dir.rename(backup)
         except OSError:
             pass
-    TRAJ_DIR.mkdir(parents=True, exist_ok=True)
-    (TRAJ_DIR / "traj.json").write_text("{}", encoding="utf-8")
+    traj_dir.mkdir(parents=True, exist_ok=True)
+    (traj_dir / "traj.json").write_text("{}", encoding="utf-8")
+    return traj_dir
 
 
 def _load_agent_class(path: Path):
-    """Load the alphabetically first BaseAgent subclass from a Python file."""
+    """Load the alphabetically first BaseAgent subclass from a Python file.
+
+    Re-executes the module on every call (one call per leg): the agent module
+    reads RELAY_* env at module level, and per-leg env must re-resolve."""
     from agents.agent_base import BaseAgent
 
     spec = importlib.util.spec_from_file_location(path.stem, str(path))
     if spec is None or spec.loader is None:
-        sys.exit(f"Cannot load agent file: {path}")
+        raise RuntimeError(f"Cannot load agent file: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -77,9 +95,123 @@ def _load_agent_class(path: Path):
         if issubclass(obj, BaseAgent) and obj is not BaseAgent
     ]
     if not classes:
-        sys.exit(f"No BaseAgent subclass found in {path}")
+        raise RuntimeError(f"No BaseAgent subclass found in {path}")
     classes.sort(key=lambda item: item[0])
     return classes[0][1]
+
+
+def run_leg(
+    app: str,
+    goal: str,
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    max_step: int = -1,
+    step_wait_time: float | None = None,
+    keep_ime: bool = False,
+) -> dict:
+    """Run one single-app leg in this process. Returns the run summary.
+
+    Raises RuntimeError on config/agent-load failure (the CLI maps that to
+    sys.exit; in-process callers handle it). Mutates os.environ for the
+    duration of the run — in-process multi-leg callers snapshot/restore
+    around it (see flow_runner.InProcessLegExecutor)."""
+    agent_file = _agent_file()
+    if not agent_file.exists():
+        raise RuntimeError(f"agent file missing: {agent_file}")
+
+    env_vars, base_url, api_key, model = resolve_llm_config(
+        ENV_FILE,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+    )
+
+    # Populate env before loading the agent module. The agent owns deferred
+    # cold-launch, and the planner skips its own open_app step.
+    for key, value in env_vars.items():
+        os.environ.setdefault(key, value)
+    os.environ["RELAY_TARGET_APP"] = app
+    os.environ["RELAY_SKIP_OPEN_APP"] = "1"
+    os.environ["RELAY_AGENT_LAUNCH"] = "1"
+    os.environ.setdefault("RELAY_WAIT_SECONDS", "0.2")
+
+    traj_dir = _rotate_traj_dir()
+
+    from agents.native_runtime import NativeEnv, activate_adb_keyboard, reset_ime, run_task
+
+    step_wait = (
+        step_wait_time
+        if step_wait_time is not None
+        else float(os.getenv("RELAY_STEP_WAIT", "0.5"))
+    )
+    env = NativeEnv(step_wait_time=step_wait)
+
+    agent_cls = _load_agent_class(agent_file)
+    agent = agent_cls(model_name=model, llm_base_url=base_url, api_key=api_key, env=env)
+
+    print(
+        f"[native] RELAY_TARGET_APP={app} goal={goal!r} model={model} "
+        f"(direct adb)",
+        file=sys.stderr,
+    )
+
+    if not activate_adb_keyboard():
+        print("AdbKeyboard not active; input_text steps may fail.", file=sys.stderr)
+
+    start = time.monotonic()
+    summary: dict = {}
+    try:
+        summary = run_task(goal, agent, env, max_step=max_step)
+    finally:
+        finalize = getattr(agent, "_finalize_task", None)
+        if callable(finalize):
+            finalize()
+        if not keep_ime:
+            reset_ime()
+        # Always stamp the agent's accumulated token total onto the summary —
+        # even when run_task raised mid-leg, the agent has been counting usage,
+        # and a bare {} summary would silently drop it from the run_plan token
+        # accounting. On normal completion run_task already filled it; this only
+        # backfills the crash path. Best-effort: never mask the original error.
+        if not summary.get("token_usage"):
+            try:
+                get_usage = getattr(agent, "get_total_token_usage", None)
+                if callable(get_usage):
+                    summary["token_usage"] = get_usage()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[native] failed to read token usage: {exc}", file=sys.stderr)
+        summary_out = os.getenv(SUMMARY_OUT_ENV)
+        if summary_out:
+            try:
+                out_path = Path(summary_out)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(
+                    json.dumps(summary, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                print(f"[native] failed to write summary: {exc}", file=sys.stderr)
+
+    gross_s = round(time.monotonic() - start, 1)
+    wall_s = None
+    wall_path = traj_dir / "wall_clock.json"
+    if wall_path.exists():
+        try:
+            wall_s = json.loads(wall_path.read_text()).get("wall_s")
+        except (OSError, json.JSONDecodeError):
+            pass
+    usage = summary.get("token_usage", {})
+    print(
+        f"[native] done steps={summary.get('steps')} "
+        f"task_wall_s={wall_s} gross_s={gross_s} "
+        f"tokens(prompt/completion/total)="
+        f"{usage.get('prompt_tokens')}/{usage.get('completion_tokens')}/"
+        f"{usage.get('total_tokens')}",
+        file=sys.stderr,
+    )
+    return summary
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -108,103 +240,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if unknown:
         print(f"[native] ignoring unrecognized args: {unknown}", file=sys.stderr)
 
-    agent_file = _agent_file()
-    if not agent_file.exists():
-        sys.exit(f"agent file missing: {agent_file}")
-
     try:
-        env_vars, base_url, api_key, model = resolve_llm_config(
-            ENV_FILE,
+        run_leg(
+            args.app,
+            args.goal,
             model=args.model,
             base_url=args.base_url,
             api_key=args.api_key,
+            max_step=args.max_step,
+            step_wait_time=args.step_wait_time,
+            keep_ime=args.keep_ime,
         )
     except RuntimeError as exc:
         sys.exit(str(exc))
-
-    # Populate env before loading the agent module. The agent owns deferred
-    # cold-launch, and the planner skips its own open_app step.
-    for key, value in env_vars.items():
-        os.environ.setdefault(key, value)
-    os.environ["RELAY_TARGET_APP"] = args.app
-    os.environ["RELAY_SKIP_OPEN_APP"] = "1"
-    os.environ["RELAY_AGENT_LAUNCH"] = "1"
-    os.environ.setdefault("RELAY_WAIT_SECONDS", "0.2")
-
-    _rotate_traj_dir()
-
-    from agents.native_runtime import NativeEnv, activate_adb_keyboard, reset_ime, run_task
-
-    step_wait = (
-        args.step_wait_time
-        if args.step_wait_time is not None
-        else float(os.getenv("RELAY_STEP_WAIT", "0.5"))
-    )
-    env = NativeEnv(step_wait_time=step_wait)
-
-    agent_cls = _load_agent_class(agent_file)
-    agent = agent_cls(model_name=model, llm_base_url=base_url, api_key=api_key, env=env)
-
-    print(
-        f"[native] RELAY_TARGET_APP={args.app} goal={args.goal!r} model={model} "
-        f"(direct adb)",
-        file=sys.stderr,
-    )
-
-    if not activate_adb_keyboard():
-        print("AdbKeyboard not active; input_text steps may fail.", file=sys.stderr)
-
-    start = time.monotonic()
-    summary: dict = {}
-    try:
-        summary = run_task(args.goal, agent, env, max_step=args.max_step)
-    finally:
-        finalize = getattr(agent, "_finalize_task", None)
-        if callable(finalize):
-            finalize()
-        if not args.keep_ime:
-            reset_ime()
-        # Always stamp the agent's accumulated token total onto the summary —
-        # even when run_task raised mid-leg, the agent has been counting usage,
-        # and a bare {} summary would silently drop it from the run_plan token
-        # accounting. On normal completion run_task already filled it; this only
-        # backfills the crash path. Best-effort: never mask the original error.
-        if not summary.get("token_usage"):
-            try:
-                get_usage = getattr(agent, "get_total_token_usage", None)
-                if callable(get_usage):
-                    summary["token_usage"] = get_usage()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[native] failed to read token usage: {exc}", file=sys.stderr)
-        summary_out = os.getenv(SUMMARY_OUT_ENV)
-        if summary_out:
-            try:
-                out_path = Path(summary_out)
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_text(
-                    json.dumps(summary, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            except OSError as exc:
-                print(f"[native] failed to write summary: {exc}", file=sys.stderr)
-
-    gross_s = round(time.monotonic() - start, 1)
-    wall_s = None
-    wall_path = TRAJ_DIR / "wall_clock.json"
-    if wall_path.exists():
-        try:
-            wall_s = json.loads(wall_path.read_text()).get("wall_s")
-        except (OSError, json.JSONDecodeError):
-            pass
-    usage = summary.get("token_usage", {})
-    print(
-        f"[native] done steps={summary.get('steps')} "
-        f"task_wall_s={wall_s} gross_s={gross_s} "
-        f"tokens(prompt/completion/total)="
-        f"{usage.get('prompt_tokens')}/{usage.get('completion_tokens')}/"
-        f"{usage.get('total_tokens')}",
-        file=sys.stderr,
-    )
     return 0
 
 
