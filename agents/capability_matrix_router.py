@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from openai import OpenAI
 
 from agents.card_catalog import clean_text
 from agents.llm_retry import create_with_retry
@@ -110,7 +109,7 @@ def load_matrix(path: Path = MATRIX_CSV) -> dict[str, Any]:
     }
 
 
-def _llm_json(llm: OpenAI, model: str, system: str, user: str) -> dict[str, Any]:
+def _llm_json(llm: Any, model: str, system: str, user: str) -> dict[str, Any]:
     resp = create_with_retry(
         llm,
         model=model,
@@ -206,7 +205,7 @@ Return ONE JSON object inside a ```json``` fence:
 
 
 def _stage1_prefilter(
-    nl: str, matrix: dict[str, Any], llm: OpenAI, model: str
+    nl: str, matrix: dict[str, Any], llm: Any, model: str
 ) -> list[str]:
     menu = {
         cap_id: desc
@@ -265,7 +264,7 @@ def _stage2_rerank(
     cap_ids: list[str],
     matrix: dict[str, Any],
     cat_index: dict[tuple[str, str], dict[str, Any]],
-    llm: OpenAI,
+    llm: Any,
     model: str,
 ) -> dict[str, Any] | None:
     options: list[dict[str, Any]] = []
@@ -346,7 +345,7 @@ def _stage3_foundation(
     matrix: dict[str, Any],
     catalog: dict[str, Any],
     cat_index: dict[tuple[str, str], dict[str, Any]],
-    llm: OpenAI,
+    llm: Any,
     model: str,
 ) -> dict[str, Any]:
     foundation_apps = _candidate_apps_for_cap(
@@ -396,7 +395,7 @@ def route(
     nl: str,
     catalog: dict[str, Any],
     matrix: dict[str, Any],
-    llm: OpenAI,
+    llm: Any,
     model: str,
     *,
     preserve_goal: bool = False,
