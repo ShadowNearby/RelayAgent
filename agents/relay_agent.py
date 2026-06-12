@@ -228,6 +228,31 @@ def _dump_visible_text_hash(
     return hashlib.blake2b(joined.encode("utf-8", "replace"), digest_size=12).hexdigest()
 
 
+# Screen crop ratios shared by the reply scrape and the screenshot-region
+# hash: strip the status bar (top, default 8%) and the input/keyboard area
+# (bottom, default 18%). Device-profile knobs — punch-hole rows, taller nav
+# pills or unusual input bars move them via env.
+_CROP_TOP_ENV = "RELAY_CROP_TOP"
+_CROP_BOTTOM_ENV = "RELAY_CROP_BOTTOM"
+
+
+def _crop_cutoffs(h: int) -> tuple[int, int]:
+    """(top_cutoff, bottom_cutoff) in pixels for screen height `h`: content
+    rows above/below them are status bar / input area and get dropped."""
+    def _ratio(env: str, default: float) -> float:
+        raw = os.getenv(env)
+        if raw:
+            try:
+                return min(0.45, max(0.0, float(raw)))
+            except ValueError:
+                logger.warning(f"Invalid {env}={raw!r}, using {default}")
+        return default
+
+    top = _ratio(_CROP_TOP_ENV, 0.08)
+    bottom = _ratio(_CROP_BOTTOM_ENV, 0.18)
+    return int(h * top), int(h * (1.0 - bottom))
+
+
 # Chrome labels we never want to include in the extracted reply text.
 # Combined with the streaming-marker list at runtime.
 _REPLY_CHROME_LABELS: frozenset[str] = frozenset({
@@ -263,8 +288,7 @@ def _extract_reply_text_from_dump(
     tree = get_backend().dump_ui_tree(dump_timeout=3, pull_timeout=2)
     if tree is None:
         return None
-    top_cutoff = int(screen_h * 0.08)
-    bot_cutoff = int(screen_h * 0.82)
+    top_cutoff, bot_cutoff = _crop_cutoffs(screen_h)
     # (top_y, text)
     nodes: list[tuple[int, str]] = []
     for n in tree:
@@ -326,8 +350,7 @@ def _hash_screenshot_region(image) -> str:
     hash across ticks is essentially free, and lets us skip the expensive
     uiautomator dump (and the VLM call) while text is actively streaming."""
     w, h = image.size
-    top = int(h * 0.08)
-    bot = int(h * 0.82)
+    top, bot = _crop_cutoffs(h)
     crop = image.crop((0, top, w, bot))
     small = crop.convert("L").resize((48, 96))
     import hashlib

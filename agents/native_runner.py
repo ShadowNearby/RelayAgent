@@ -154,7 +154,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     if not backend.setup_input_channel():
-        print("Input channel not active; input_text steps may fail.", file=sys.stderr)
+        # Without AdbKeyboard there is no adb path for CJK input — a goal that
+        # needs it WILL fail at the typing step, so fail fast here instead of
+        # paying a doomed device run. ASCII goals can limp through `input text`.
+        if any(ord(ch) > 127 for ch in args.goal):
+            sys.exit(
+                "[native] input channel unavailable (AdbKeyboard missing?) and "
+                "the goal contains non-ASCII text — the typed invocation would "
+                "fail mid-run. Install ADBKeyboard.apk (env_fail)."
+            )
+        print(
+            "Input channel not active; falling back to ASCII `input text` (degraded).",
+            file=sys.stderr,
+        )
 
     start = time.monotonic()
     summary: dict = {}

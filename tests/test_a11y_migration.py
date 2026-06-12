@@ -146,6 +146,25 @@ class SerializeTreeTests(unittest.TestCase):
         self.assertIn("(list truncated)", listing)
 
 
+class CropCutoffTests(unittest.TestCase):
+    def test_defaults(self):
+        import os
+        from agents.relay_agent import _crop_cutoffs
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RELAY_CROP_TOP", None)
+            os.environ.pop("RELAY_CROP_BOTTOM", None)
+            self.assertEqual(_crop_cutoffs(2400), (192, 1968))  # 8% / 82%
+
+    def test_env_override_and_clamp(self):
+        import os
+        from agents.relay_agent import _crop_cutoffs
+        with mock.patch.dict(os.environ,
+                             {"RELAY_CROP_TOP": "0.10", "RELAY_CROP_BOTTOM": "0.9"}):
+            top, bot = _crop_cutoffs(1000)
+        self.assertEqual(top, 100)
+        self.assertEqual(bot, 550)  # 0.9 clamps to 0.45 → cutoff 1 - 0.45
+
+
 class PermissionDismissTests(unittest.TestCase):
     def _backend(self, foreground, nodes):
         b = AndroidBackend()
