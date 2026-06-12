@@ -41,11 +41,11 @@ from typing import Any
 
 import yaml
 from loguru import logger
-from openai import OpenAI
 
 from agents._adb import screencap
 from agents.action_model import ANSWER, ASK_USER, FINISHED
 from agents.leg_judge import LOADING, final_frames, judge_leg
+from agents.llm_client import make_llm_client
 from agents.llm_retry import create_with_retry
 from agents.route_overlay import RouteOverlay
 from agents.runtime_config import ensure_llm_env
@@ -130,7 +130,7 @@ class _RecordingLLM:
     capability router), so the gateway isn't retried twice over.
     """
 
-    def __init__(self, client: OpenAI, retry: bool = True) -> None:
+    def __init__(self, client: Any, retry: bool = True) -> None:
         self._client = client
         self._retry = retry
         self.calls: list[dict] = []
@@ -216,7 +216,7 @@ class FlowRunner:
         # is recorded and later folded into each leg's traj.json — see
         # `_RecordingLLM` / `_fold_flow_llm_calls`.
         self._llm = _RecordingLLM(
-            OpenAI(base_url=self.env["LLM_BASE_URL"], api_key=self.env["LLM_API_KEY"])
+            make_llm_client(self.env["LLM_BASE_URL"], self.env["LLM_API_KEY"])
         )
 
         # Each flow run gets its own traj root, with one dir per leg

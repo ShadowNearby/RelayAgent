@@ -40,7 +40,6 @@ from typing import Any
 
 import yaml
 from loguru import logger
-from openai import OpenAI
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -54,6 +53,7 @@ from agents.card_catalog import build_catalog  # noqa: E402
 from agents.capability_matrix_router import load_matrix  # noqa: E402
 from agents.flow_planner import FlowPlanner, PlanValidationError  # noqa: E402
 from agents.flow_runner import FlowRunner, _RecordingLLM  # noqa: E402
+from agents.llm_client import make_llm_client  # noqa: E402
 from agents.runtime_config import ensure_llm_env  # noqa: E402
 
 GENERATED_DIR = REPO_ROOT / "manifests" / "_generated"
@@ -441,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
     # retry=False because the planner / router already wrap calls in
     # create_with_retry — see _RecordingLLM.
     llm = _RecordingLLM(
-        OpenAI(base_url=env["LLM_BASE_URL"], api_key=env["LLM_API_KEY"]),
+        make_llm_client(env["LLM_BASE_URL"], env["LLM_API_KEY"]),
         retry=False,
     )
     llm.purpose = "plan"
