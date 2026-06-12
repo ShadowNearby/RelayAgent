@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RelayAgent</string>
+    <string name="a11y_service_description">RelayAgent 通过无障碍服务读取屏幕内容并代你操作其他 App（点击 / 滑动 / 输入），以完成你下达的自然语言任务。仅在你主动发起任务时工作。</string>
+    <string name="notif_channel_capture">屏幕采集</string>
+    <string name="notif_capture_text">RelayAgent 正在采集屏幕以驱动任务</string>
+</resources>

@@ -284,7 +284,11 @@ class FlowRunner:
         # subdir. Named with the timestamp first, then the apps it touches:
         # `<ts>_plan_<app1>_<app2>...`.
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.flow_traj_root = REPO_ROOT / "traj_logs" / f"{ts}_{self._traj_stem()}"
+        # RELAY_TRAJ_ROOT relocates the trajectory base dir (Android: REPO_ROOT
+        # lives inside the read-only APK, so the app points this at filesDir).
+        # Host default unchanged: <repo>/traj_logs/.
+        traj_base = Path(os.getenv("RELAY_TRAJ_ROOT") or (REPO_ROOT / "traj_logs"))
+        self.flow_traj_root = traj_base / f"{ts}_{self._traj_stem()}"
         self._step_idx = 0
         logger.info(f"flow traj root: {self.flow_traj_root}")
 
