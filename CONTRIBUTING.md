@@ -10,19 +10,24 @@ This project lives or dies on **card quality**, not card count — please read t
 
 ## What we do not accept (yet)
 
-- Cards for apps without a real, user-visible embedded agent. ("This app has a search box that calls an LLM" is not enough — see SPEC §5.1 `type`.)
+- Cards for apps without a real, user-visible embedded agent. ("This app has a search box that calls an LLM" is not enough — see SPEC §5 `embedded_agent`.)
 - Cards built from reverse-engineered private endpoints. Cards describe **GUI-mediated handoff**, not bypasses around it.
 - Bulk-generated cards without manual verification on a real device.
 
 ## Submitting a new card
 
-1. **Read [SPEC.md](SPEC.md).** Especially §8 (`executable`, `side_effects`, `handoff_to_user_required`) — getting these wrong has user-visible cost.
+1. **Read [SPEC.md](SPEC.md).** Especially §8 (`executable`, `handoff_to_user_required`) — getting these wrong has user-visible cost.
 2. **Copy a reference card** from `manifests/` as a starting template.
 3. **Verify on a real device.** Open the app, walk every `entry` path, send every `example_prompt` for every capability, watch what happens. Record:
    - App version (`provenance.verified_app_version`)
    - OS version (`provenance.verified_os`)
    - Date (`provenance.last_verified`)
-4. **Open a PR** with:
+4. **Validate locally** (CI runs the same check):
+   ```bash
+   uv run python scripts/validate_manifests.py manifests/<your-card>.yaml
+   ```
+   This validates against `spec/schema.json` and the load-time `prompt_template` consistency rules.
+5. **Open a PR** with:
    - The card file under `manifests/<reverse-dns-app-id>.yaml`.
    - A short note in the PR description: device + app version used to verify, anything you couldn't get to work, anything fragile.
 
@@ -30,14 +35,13 @@ This project lives or dies on **card quality**, not card count — please read t
 
 Reviewers will look for:
 
+- [ ] `scripts/validate_manifests.py` passes (schema + `prompt_template` rules; CI gate).
 - [ ] `spec_version` matches current SPEC.
 - [ ] All required fields present, no unknown top-level keys.
 - [ ] Every `capability` has ≥2 real example prompts (not paraphrased from the description).
 - [ ] `executable` honestly reflects whether the agent closes the loop or only suggests.
-- [ ] `side_effects` is complete — does this capability spend money? send messages? delete things?
-- [ ] `handoff_to_user_required: true` for any capability with `payment`, `data_delete`, or `external_communication` in `side_effects`.
-- [ ] `entry.primary` prefers `deep_link` or `intent` over `tap_sequence` when one exists.
-- [ ] Selectors prefer `accessibility_id` / `resource_id` over `text` / `xpath`.
+- [ ] `handoff_to_user_required: true` for any capability whose completion is irreversible — spends money, sends messages, deletes data, confirms a ride/booking/order (SPEC §8.2).
+- [ ] Selectors prefer, in order: `accessibility_id` > `resource_id` > `text` > `text_contains` (SPEC §6.1).
 - [ ] If an element is not exposed through accessibility, use `screen_fraction: { x_ratio, y_ratio }` measured from a real-device screenshot.
 - [ ] `screen_fraction` values are in `[0, 1]` and point at the visible center of the target affordance.
 - [ ] `provenance.last_verified` is within 30 days.

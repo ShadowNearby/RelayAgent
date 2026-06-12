@@ -3,7 +3,7 @@
 ## Python 环境
 
 - venv 在 `.venv/`，**Python 3.12**（`pyproject.toml` 锁 `>=3.12,<3.13`，匹配现有 lock）。
-- 装依赖（不装本项目，靠 `uv run` 跑源码）：`uv venv --python 3.12 && uv sync --no-install-project`。
+- 装依赖（不装本项目，靠 `uv run` 跑源码）：`uv venv --python 3.12 && uv sync --no-install-project --extra dev --extra mw`。`mobile-world` 已移到 optional extra `mw`（只有 A/B baseline / MW 兜底用；入口 import 链不碰它），`jsonschema` 在 extra `dev`（manifest 校验）。CI（`.github/workflows/ci.yml`）只装 `--extra dev`。
 - 运行时是纯 Python over adb，无外部 runner、无 server（见下「Native 运行时」）。
 - pydantic 锁 `<2.11`：保守保留以对齐已解析的 lock，`action_model.py` 的 `JSONAction` 用它。
 
@@ -27,7 +27,11 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
   - **plan-only tier 用 leg-kind 分档**（`run_benchmark_test.py`）：`covered`（每条 leg 都是真垂类 capability）/ `foundation_fallback`（无 MW leg 但有 `foundation_llm` leg）/ `mw`（全是 MW leg）/ `mixed`（MW + 非 MW 混合）。`plan_summary.json` 的 `mw_fallback` 块给 task 级 + leg 级 MW 占比（`task_touch_rate`/`mw_leg_rate`/`mixed_task_mw_ratios`）。
 - 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.5）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
 
-需要 adb + 真机 USB 调试。**`agents.native_runner` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
+需要 adb + 真机 USB 调试（或模拟器，见 `docs/emulator_testing.zh.md`）。**`agents.native_runner` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
+
+- **跑前体检**：`uv run python scripts/check_device_env.py [--benchmark ...]`（设备/IME/uiautomator/screencap/App 安装态，端侧需求文档见 `docs/device_setup.zh.md`）。
+- **manifest 校验**（schema + prompt_template 规则，CI gate）：`uv run python scripts/validate_manifests.py`。
+- **无设备单测**：`uv run python -m unittest discover -s tests -v`（unittest 风格，CI 跑同一条）。
 
 ## Native 运行时
 
@@ -61,7 +65,7 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 3. **Grounding 输出形态宽**：`_extract_xy()` 容忍 `{x,y}`/`{point:[x,y]}`/`[{x:[x,y]}]`/`{bbox:...}`/纯数字。坐标 `>999` 当像素，否则归一乘 `screen/999`。
 4. **冷启动 / deferred-launch**：脚本设 `RELAY_SKIP_OPEN_APP=1` + `RELAY_AGENT_LAUNCH=1`。agent 第一帧 `predict` 调 `_begin_task_once()`：记 `t0` → 起录屏（若 `RELAY_RECORD_DIR`）→ `cold_launch()`（`agents/_adb.py`：force-stop + monkey LAUNCHER + settle 1.0s）。deferred-launch 把启动放到 agent 首帧（native 无框架冷启动，但 IME 激活 / 子进程启动等仍在 t0 前），落在 wall_s 外。atexit 写 `wall_clock.json`（`{wall_s, phase:"task"}`）到 `RELAY_WALL_OUT` 或 `traj_logs/user_task/`。**agent 是 wall_s 唯一写者。** settle 1.0s 清品牌 splash。
 5. **fresh conversation**：`build_plan(fresh_conversation=True)` 在 open_app 后插清历史步。`RELAY_FRESH_CONV=0` 关。
-6. **`wait_for_reply` 文本-hash 判 done**：done 判定纯靠 uiautomator 文本 hash 稳定性（连续 3 拍 byte-identical），**不调 VLM 判 done**（见代码 `TODO(reply-done-vlm)`：qwen 当 judge 不可靠，对稳定回复反复返回 done=false 吊到超时）。VLM 仅在 scrape 落空时兜底**读回复文本**（prompt `_REPLY_WATCH_SYSTEM` 仍带 done 半段，但两个调用点都丢弃 `done`，属待清理的死意图）。超时按墙钟 `max_seconds = x_max_wait_seconds or max(5×typical_latency, 60)`。text 注入 handoff 的 `ask_user`。
+6. **`wait_for_reply` 文本-hash 判 done**：done 判定纯靠 uiautomator 文本 hash 稳定性（连续 3 拍 byte-identical），**不调 VLM 判 done**（见代码 `NOTE(no-vlm-done)`：qwen 当 judge 不可靠，对稳定回复反复返回 done=false 吊到超时）。VLM（`_poll_agent_reply`）仅在 scrape 落空时兜底**读回复文本**，只返回 `text`，不再带 `done` 字段。超时按墙钟 `max_seconds = x_max_wait_seconds or max(5×typical_latency, 60)`。text 注入 handoff 的 `ask_user`。
 7. **两段式 precheck 省 dump**：Stage 1(~25ms) 截图区域 hash（裁顶 8% 状态栏、底 18% 输入区），变了=streaming 跳过。Stage 2(~2.5s，仅屏稳定才跑) uiautomator 文本 hash，连续 `STABLE_DUMPS_FOR_DONE`(=3) 拍相等才判 done（**不调 VLM**）。熔断：连续 ≥`MAX_DUMP_FAILS`(2) 次 dump 失败关本次 dump。看门狗：连续 ≥`MAX_SKIPS_BEFORE_FORCE`(5) 次 skip 强跑一次文本 dump。
 8. **回复文本优先 scrape，VLM 只兜底读文本（不判 done）。** `_extract_reply_text_from_dump`：dump → 按用户气泡 y 切割（`self._last_input_text` 定位）→ 过滤 chrome（`_REPLY_CHROME_LABELS` + streaming markers）→ 丢短 chip（有长节点时剔 <`MIN_CHIP_LEN`(25)）。scrape 落空（如 WebView/canvas 不入 a11y 树，或 `RELAY_SCRAPE=0` 基线）才回落 VLM 读帧。`capture_full` scroll 阶段同样 scrape，失败才回落。
 9. **权限弹窗自动 dismiss**：`predict` 入口 `_maybe_dismiss_permission_popup`。先 `dumpsys window` 拿前台包，不在 `_PERMISSION_PACKAGES` 白名单即 fast-exit。命中才 dump，按 `_ALLOW_LABELS`（始终允许>允许>Always allow>...）点 Allow，**永不 Deny**。每 task 上限 8 次。`RELAY_DISMISS_PERMISSIONS=0` 关。

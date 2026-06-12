@@ -18,7 +18,7 @@
 
 每个 App 一张机器可读的**卡片（card）**。默认走 GUI 中介，厂商配合**可选不强制**。
 
-> **状态：** 早期，但已有实测。SPEC v0.1、9 张已验证的安卓参考卡片（51 个声明能力）、一个原生 Android 中继适配器，以及一组真机 A/B 基准测试。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
+> **状态：** 早期，但已有实测。SPEC v0.1、10 张已验证的安卓参考卡片（50 个声明能力）、一个原生 Android 中继适配器，以及一组真机 A/B 基准测试。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
 
 ---
 
@@ -107,7 +107,7 @@ RelayAgent/
 ├── SPEC.md                    # manifest 规范 (v0.1)
 ├── SPEC-OPEN-QUESTIONS.md     # 仍在讨论的设计问题
 ├── spec/schema.json           # SPEC 的 JSON Schema 镜像（规范性校验器）
-├── manifests/                 # 每个 App 一张 YAML 卡片；9 张安卓卡片
+├── manifests/                 # 每个 App 一张 YAML 卡片；10 张安卓卡片
 ├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、adb 辅助
 ├── scripts/                   # run_plan.py（NL flow）、benchmark runner、metrics
 ├── docs/                      # 设计文档 —— NL flow、manifest 约定、prompt 模板、能力分类法
@@ -120,7 +120,7 @@ RelayAgent/
 
 `agents/relay_agent.py` 在进程内 `obs → predict → execute` 循环里直 adb 驱动 RelayAgent（无 server）。VLM 对各家通用（Claude、Gemini、Qwen-VL、Kimi……）；卡片负责提供确定性的入口路径和 handoff 策略。
 
-需要 **Python 3.12**，以及一台装好 adb、开启 USB 调试、运行 `com.android.adbkeyboard/.AdbIME` 的手机，主机为 Linux/WSL。
+需要 **Python 3.12**，主机为 Linux/WSL 装好 adb，外加一台开启 USB 调试的手机（或模拟器——见[模拟器测试](docs/emulator_testing.zh.md)），设备上装好 `com.android.adbkeyboard/.AdbIME`。完整设备准备 + 各 benchmark 的 App 需求见[端侧环境](docs/device_setup.zh.md)；跑前体检：`uv run python scripts/check_device_env.py`。
 
 ```bash
 # 1. 建 venv（靠 `uv run` 跑源码，不安装本项目）
@@ -137,8 +137,8 @@ uv run python -m agents.native_runner com.aliyun.tongyi "帮我点三杯蜜雪�
 
 - 1 次纯文本 LLM 调用，从卡片里挑出能力。
 - 每个文本选择器先试 `uiautomator dump`（精确、零 token）；只有 miss 时才发一次小的 VLM grounding 调用。
-- `wait_for_reply` 在墙钟预算（`max(5×typical_latency, 60)` 秒）内轮询 VLM（`{done, text}`）。一个两阶段预检（截图感知哈希 → 无障碍树文本哈希）会在回复还在流式输出时直接跳过 VLM。
-- 回复文本**从无障碍 dump 抓取**，而不是从 VLM 回复里读；VLM 只判 `done`。对 `x_capture_full_reply` 能力，每一帧滚动抓取也是 scrape。
+- `wait_for_reply` **确定性**判定回复完成——无障碍树文本哈希连续多拍 byte-identical 才算 done——预算按墙钟（`max(5×typical_latency, 60)` 秒）。一个两阶段预检（截图感知哈希 → 无障碍树文本哈希）会在回复还在流式输出时跳过昂贵的 dump。**不用 VLM 判 done**。
+- 回复文本**从无障碍 dump 抓取**；只有 scrape 落空（WebView/canvas 回复）时才让 VLM 读帧。对 `x_capture_full_reply` 能力，每一帧滚动抓取也是 scrape。
 - 卡片里的 `screen_fraction` 坐标只在无障碍树暴露不出元素时作为最后兜底。
 
 可选环境变量（完整列表见 `.env.example`）：
@@ -169,25 +169,17 @@ uv run python scripts/run_plan.py --dry-run "把这段材料整理成一份中�
 ## 运行测试
 
 ```bash
-uv pip install .
-python -m unittest discover -s tests -v              # 无设备也能发现用例；没有 adb 时真机测试自动跳过
+uv sync --no-install-project
+uv run python -m unittest discover -s tests -v       # 无设备；planner/runner 单元测试，不需要 adb
 ```
 
-真机测试需要一台连好的安卓设备，装好目标 App，并启用 `com.android.adbkeyboard/.AdbIME`。通过 `tests/config_local.py`（已 gitignore）显式开启：
+真机运行（不是单元测试）直接走入口脚本——见[运行](#运行真机多-vlm)：单 App 用 `python -m agents.native_runner <pkg> "<goal>"`，NL flow 用 `scripts/run_plan.py --yes`，A/B 基准用 `scripts/run_benchmark_test.py`。需要连好的安卓设备、装好目标 App，`com.android.adbkeyboard/.AdbIME` 可用（runner 自己启用/复位输入法）。
 
-```python
-RUN_REAL_ADB_TESTS = True
-```
-
-```bash
-python -m unittest tests.test_manifest_real_adb -v
-```
-
-把 `.env.example` 复制成 `.env` 并填好（LLM endpoint 必填；`ADB` 路径可选）。真机相关旋钮（轨迹捕获、结果超时、录屏）见 `tests/config.py`。`test-results/` 已 gitignore —— 不要提交含用户数据的轨迹。
+把 `.env.example` 复制成 `.env` 并填好（LLM endpoint 必填）。`test-results/` 和 `traj_logs/` 已 gitignore —— 不要提交含用户数据的轨迹。
 
 ## MVP 范围（v0.1）
 
-当前目录有 9 张已验证的安卓参考卡片，共 **51 个声明能力**：
+当前目录有 10 张已验证的安卓参考卡片，共 **50 个声明能力**：
 
 | App | 包名 | 能力 | 卡片类型 |
 | --- | --- | --- | --- |
@@ -200,6 +192,7 @@ python -m unittest tests.test_manifest_real_adb -v
 | WPS Office | cn.wps.moffice_eng | AI 文档 / PPT / 写作辅助 | single-bubble |
 | Reddit | com.reddit.frontpage | Reddit Ask 垂类社区检索与总结 | multi-node |
 | Booking.com | com.booking | 旅行信息探索、行程规划、住宿搜索 | mixed |
+| Microsoft Copilot | com.microsoft.copilot | foundation_llm、附近 POI 搜索、商品搜索 | single-bubble |
 
 *卡片类型*（单气泡 TextView vs 多节点 RecyclerView）决定回复抽取策略——见技术报告 §4 / §5.4。
 

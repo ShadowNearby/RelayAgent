@@ -1,5 +1,7 @@
 # RelayAgent 评测设计（Evaluation）
 
+> English: [`evaluation.md`](evaluation.md)
+
 > 论文 Evaluation 章的设计与实现记录。决策日期 2026-06-09。
 > 配套代码：`scripts/run_benchmark_test.py`（A/B driver + plan-only）、`scripts/plot_eval_figs.py`（图）。
 

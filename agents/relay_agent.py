@@ -14,8 +14,9 @@ Design:
   `uiautomator dump` first (precise, free, robust to redraws); only fall
   back to a small VLM grounding call if the text is not in the a11y tree.
 - `wait_for_reply` decides the reply is done purely from uiautomator
-  text-hash stability (no VLM `done` judgement — see TODO(reply-done-vlm)),
-  on a WALL-CLOCK budget (`max(5×typical_latency, 60)` seconds), not a
+  text-hash stability (no VLM `done` judgement — see the note in
+  `wait_for_reply`), on a WALL-CLOCK budget (`max(5×typical_latency, 60)`
+  seconds), not a
   poll-count budget. The reply text is scraped from the a11y tree; a VLM
   only reads the frame verbatim when the scrape comes up empty.
 - Honors `handoff_to_user_required`: emits ask_user before the irreversible CTA.
@@ -154,15 +155,11 @@ _GROUNDING_SYSTEM = (
 )
 _REPLY_WATCH_SYSTEM = (
     "You watch an in-app AI assistant render its reply on a phone screen. "
-    "Decide whether the assistant has FINISHED responding to the user's most "
-    "recent message. Signals that it is still generating: a streaming "
-    "cursor, a 'Stop'/'停止生成'/'生成中' button near the input, animated "
-    "dots, or rapidly changing text. Signals that it is done: a static "
-    "reply with action buttons like 'Copy'/'复制', 'Regenerate'/'重新生成', "
-    "thumbs-up/down, or the input field showing 'Send'/the normal "
-    "placeholder again. "
+    "Read the assistant's reply to the user's most recent message off the "
+    "screenshot. Ignore UI chrome (input bar, suggestion chips, status bar) "
+    "and the user's own message bubbles. "
     "Reply with ONE ```json``` fenced object: "
-    '{"done": <true|false>, "text": "<the assistant\'s reply text verbatim, '
+    '{"text": "<the assistant\'s reply text verbatim, '
     'or null if you cannot read it>"} . '
     "Keep `text` short (<= 500 chars); summarize tail only if too long."
 )
@@ -1409,7 +1406,7 @@ class RelayAgent(_MCPAgentBase):
                     )
                     source = "scrape"
                 if not text:
-                    _, text = self._poll_agent_reply(screenshot)
+                    text = self._poll_agent_reply(screenshot)
                     source = "vlm_fallback" if self.scrape_enabled else "vlm"
                 # Substring dedup with normalization: a new VLM-extracted
                 # frame often repeats text from a previous frame but with
@@ -1477,16 +1474,14 @@ class RelayAgent(_MCPAgentBase):
             # Phase 1: decide when the in-app reply is COMPLETE, purely from
             # uiautomator text-hash stability. Budget is wall-clock seconds.
             #
-            # TODO(reply-done-vlm): we used to call the VLM here and trust its
-            # `done` flag. With qwen as the judge that was unreliable — it kept
-            # returning done=false on a stable, fully-rendered reply, so every
-            # long reply rode to the timeout ceiling. For now we do NOT ask the
-            # VLM at all: once the visible reply text stops changing for
-            # STABLE_DUMPS_FOR_DONE consecutive dumps we treat it as done and
-            # scrape the full text verbatim. The captured content always comes
-            # from the scrape (full node text), so this only changes WHEN we
-            # stop, never WHAT we return. Re-introduce a proper VLM
-            # confirmation later as an optional cross-check.
+            # NOTE(no-vlm-done): we used to ask the VLM for a `done` flag here.
+            # With qwen as the judge that was unreliable — it kept returning
+            # done=false on a stable, fully-rendered reply, so every long reply
+            # rode to the timeout ceiling. We do NOT ask the VLM at all: once
+            # the visible reply text stops changing for STABLE_DUMPS_FOR_DONE
+            # consecutive dumps we treat it as done and scrape the full text
+            # verbatim. The VLM (`_poll_agent_reply`) only READS text when the
+            # scrape comes up empty; it never decides doneness.
             if self._reply_start_ts is None:
                 self._reply_start_ts = time.monotonic()
             max_seconds = max(1, int(p.get("max_seconds", 30)))
@@ -1650,11 +1645,10 @@ class RelayAgent(_MCPAgentBase):
                 # hasn't rendered yet, (b) it lives in a non-a11y WebView/canvas
                 # we can't scrape — and RELAY_SCRAPE=0 (the VLM-only baseline)
                 # reaches here on EVERY reply by construction. Fall back to the
-                # VLM to read the frame verbatim. The text hash is already
-                # stable, so we don't trust the VLM's `done` flag (qwen is
-                # unreliable there — see TODO(reply-done-vlm)); we only use the
-                # text it scrapes off the screen.
-                _vlm_done, vlm_text = self._poll_agent_reply(screenshot)
+                # VLM to read the frame verbatim. Doneness was already decided
+                # by text-hash stability above (see NOTE(no-vlm-done)); the VLM
+                # only reads text off the screen.
+                vlm_text = self._poll_agent_reply(screenshot)
                 if vlm_text:
                     text = vlm_text
                     text_source = "vlm_fallback" if self.scrape_enabled else "vlm"
@@ -1958,16 +1952,17 @@ class RelayAgent(_MCPAgentBase):
             except OSError as e:
                 logger.warning(f"Failed to persist reply to {path}: {e}")
 
-    def _poll_agent_reply(self, screenshot) -> tuple[bool, str | None]:
-        """Ask the VLM whether the in-app assistant has finished replying,
-        and capture the reply text. Returns (done, text)."""
+    def _poll_agent_reply(self, screenshot) -> str | None:
+        """Ask the VLM to read the in-app assistant's reply text off the
+        screenshot. Doneness is decided elsewhere (text-hash stability, see
+        NOTE(no-vlm-done)); this is a text reader only."""
         b64 = pil_to_base64(screenshot)
         messages = [
             {"role": "system", "content": _REPLY_WATCH_SYSTEM},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Has the in-app assistant finished its reply?"},
+                    {"type": "text", "text": "Read the in-app assistant's reply text off this screen."},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{b64}"},
@@ -1985,8 +1980,8 @@ class RelayAgent(_MCPAgentBase):
             max_tokens=2000,
         )
         if not raw:
-            logger.warning("Reply-watch LLM returned empty; treating as 'not done'")
-            return False, None
+            logger.warning("Reply-watch LLM returned empty; no text read")
+            return None
 
         m = _JSON_FENCE.search(raw)
         payload = m.group(1) if m else raw
@@ -1999,16 +1994,15 @@ class RelayAgent(_MCPAgentBase):
                 data = ast.literal_eval(payload)
             except (ValueError, SyntaxError):
                 logger.warning(f"Reply-watch unparseable response: {raw!r}")
-                return False, None
+                return None
         if not isinstance(data, dict):
-            return False, None
-        done = bool(data.get("done"))
+            return None
         text = data.get("text")
         if isinstance(text, str):
             text = text.strip() or None
         else:
             text = None
-        return done, text
+        return text
 
     def _nm_probe_advance(self, screenshot) -> dict:
         """VLM probe for the manifest-free advance loop. Returns

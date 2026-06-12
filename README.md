@@ -18,7 +18,7 @@
 
 One machine-readable **card** per app. GUI-mediated by default. Vendor-cooperation-*optional*.
 
-> **Status:** early but measured. SPEC v0.1, nine verified Android reference cards (51 declared capabilities), a native Android relay adapter, and a real-device A/B benchmark. Full method and numbers: [**Tech Report**](report/RelayAgent-TechReport.md). Contributors welcome.
+> **Status:** early but measured. SPEC v0.1, ten verified Android reference cards (50 declared capabilities), a native Android relay adapter, and a real-device A/B benchmark. Full method and numbers: [**Tech Report**](report/RelayAgent-TechReport.md). Contributors welcome.
 
 ---
 
@@ -107,7 +107,7 @@ RelayAgent/
 ├── SPEC.md                    # manifest specification (v0.1)
 ├── SPEC-OPEN-QUESTIONS.md     # known design questions still in flight
 ├── spec/schema.json           # JSON Schema mirror of SPEC (normative validator)
-├── manifests/                 # one YAML card per app; 9 Android cards
+├── manifests/                 # one YAML card per app; 10 Android cards
 ├── agents/                    # relay adapter, planner, capability router, card loader, adb helper
 ├── scripts/                   # run_plan.py (NL flow), benchmark runner, metrics
 ├── docs/                      # design docs — NL flow, manifest conventions, prompt templates, capability taxonomy
@@ -121,7 +121,7 @@ RelayAgent/
 `agents/relay_agent.py` drives RelayAgent over direct adb in an in-process
 `obs → predict → execute` loop (no server). The VLM is provider-agnostic (Claude, Gemini, Qwen-VL, Kimi, …); the card supplies the deterministic entry path and handoff policy.
 
-Requires **Python 3.12** and a Linux/WSL host with adb + a USB-debugging phone running `com.android.adbkeyboard/.AdbIME`.
+Requires **Python 3.12** and a Linux/WSL host with adb + a USB-debugging phone (or an emulator — see [emulator testing](docs/emulator_testing.md)) with `com.android.adbkeyboard/.AdbIME` installed. Full device prep + per-benchmark app requirements: [device setup](docs/device_setup.md); pre-flight check: `uv run python scripts/check_device_env.py`.
 
 ```bash
 # 1. set up the venv (run the sources directly via `uv run`, don't install the project)
@@ -138,8 +138,8 @@ uv run python -m agents.native_runner com.aliyun.tongyi "帮我点三杯蜜雪�
 
 - 1 text-only LLM call to pick a capability from the card.
 - For each text selector, `uiautomator dump` is tried first (precise, zero-token); a small VLM grounding call only on miss.
-- `wait_for_reply` polls a VLM (`{done, text}`) on a wall-clock budget (`max(5×typical_latency, 60)` s). A two-stage precheck (screenshot perceptual hash → a11y-tree text hash) skips the VLM entirely while the reply is still streaming.
-- Reply text is **scraped from the a11y dump**, not read out of the VLM response; the VLM only judges `done`. For `x_capture_full_reply` capabilities every scroll-frame extract is a scrape too.
+- `wait_for_reply` decides the reply is complete **deterministically** — the a11y-tree text hash must hold byte-identical across consecutive dumps — on a wall-clock budget (`max(5×typical_latency, 60)` s). A two-stage precheck (screenshot perceptual hash → a11y-tree text hash) skips the expensive dump while the reply is still streaming. No VLM judges doneness.
+- Reply text is **scraped from the a11y dump**; a VLM is only asked to read the frame when the scrape comes up empty (WebView/canvas replies). For `x_capture_full_reply` capabilities every scroll-frame extract is a scrape too.
 - Card `screen_fraction` coordinates are a last-resort fallback when the a11y tree doesn't expose the element.
 
 Optional env vars (full list in `.env.example`):
@@ -170,25 +170,17 @@ Design docs:
 ## Run tests
 
 ```bash
-uv pip install .
-python -m unittest discover -s tests -v              # device-less discovery; real-device tests skip without adb
+uv sync --no-install-project
+uv run python -m unittest discover -s tests -v       # device-less; planner/runner unit tests, no adb needed
 ```
 
-Real-device tests require a connected Android device with target apps installed and `com.android.adbkeyboard/.AdbIME` enabled. Opt in via `tests/config_local.py` (gitignored):
+Real-device runs (not unit tests) go through the entry points directly — see [Run it](#run-it-real-device-multi-vlm): `python -m agents.native_runner <pkg> "<goal>"` for a single app, `scripts/run_plan.py --yes` for the NL flow, `scripts/run_benchmark_test.py` for the A/B benchmark. They require a connected Android device with the target apps installed and `com.android.adbkeyboard/.AdbIME` available (the runner enables/restores the IME itself).
 
-```python
-RUN_REAL_ADB_TESTS = True
-```
-
-```bash
-python -m unittest tests.test_manifest_real_adb -v
-```
-
-Copy `.env.example` to `.env` and fill in your values (LLM endpoint required; `ADB` path optional). See `tests/config.py` for real-device knobs (trajectory capture, result timeouts, screen recording). `test-results/` is gitignored — do not commit trajectories containing user data.
+Copy `.env.example` to `.env` and fill in your values (LLM endpoint required). `test-results/` and `traj_logs/` are gitignored — do not commit trajectories containing user data.
 
 ## MVP scope (v0.1)
 
-Nine verified Android reference cards, **51 declared capabilities** total in the current catalog:
+Ten verified Android reference cards, **50 declared capabilities** total in the current catalog:
 
 | App | Package | Capabilities | Card class |
 | --- | --- | --- | --- |
@@ -201,6 +193,7 @@ Nine verified Android reference cards, **51 declared capabilities** total in the
 | WPS Office | cn.wps.moffice_eng | AI doc / PPT / writing assist | single-bubble |
 | Reddit | com.reddit.frontpage | Reddit Ask vertical community search and summarization | multi-node |
 | Booking.com | com.booking | travel discovery, itinerary planning, accommodation search | mixed |
+| Microsoft Copilot | com.microsoft.copilot | foundation_llm, nearby POI search, product search | single-bubble |
 
 *Card class* (single-bubble TextView vs. multi-node RecyclerView) drives the reply-extraction strategy — see Tech Report §4 / §5.4.
 
