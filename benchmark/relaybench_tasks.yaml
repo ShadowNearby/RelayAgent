@@ -3,7 +3,7 @@
 # 设计要点：
 #   - 10 个 manifest App 出现次数均衡（single 1–2 + cross 3 ≈ 4–5 次/App）
 #   - 多 App 共享 capability 时，instruction 必须点名 App（见 app_labels）
-#   - 不从 single_app_tasks.yaml 迁移；全部为本套件原创
+#   - 全部为本套件原创任务
 #
 # 跑法：
 #   uv run python scripts/run_benchmark_test.py --benchmark relaybench --dry-list
