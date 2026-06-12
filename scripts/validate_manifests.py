@@ -6,8 +6,10 @@ Three layers, all device-less and LLM-less (CI-safe):
    SPEC.md — unknown top-level keys, missing required fields, bad selector
    shapes all fail here). Runs with a FormatChecker so `format: date` asserts.
 2. Cross-field checks JSON Schema cannot express: manifest filename matches
-   `<app_id>.yaml`, and `provenance.verified_os` names a platform listed in
-   `platforms`.
+   `<app_id>.yaml`, `provenance.verified_os` names a platform listed in
+   `platforms`, and `app_ids` is consistent with `app_id`/`platforms`.
+   Plus a NON-FATAL portability lint: a card declaring ios/harmonyos whose
+   selector carries only the Android-only `resource_id` prints a WARN.
 3. Catalog build (`agents.card_catalog.build_catalog`), which adds the
    load-time `prompt_template` / `prompt_slots` consistency checks and
    capability-id uniqueness.
@@ -49,7 +51,57 @@ def cross_field_errors(path: Path, doc: dict) -> list[str]:
             f"provenance.verified_os {verified_os!r} names a platform "
             f"not listed in platforms {platforms!r}"
         )
+    app_ids = doc.get("app_ids") or {}
+    if app_ids:
+        android = app_ids.get("android")
+        if android and app_id and android != app_id:
+            errs.append(
+                f"app_ids.android {android!r} must equal app_id {app_id!r}"
+            )
+        for platform in app_ids:
+            if platforms and platform not in platforms:
+                errs.append(
+                    f"app_ids declares {platform!r} which is not listed in "
+                    f"platforms {platforms!r}"
+                )
     return errs
+
+
+# Selector keys that work beyond Android. `resource_id` is Android-only
+# (uiautomator resource-id); a card claiming ios/harmonyos support whose
+# selector carries nothing else cannot be grounded there.
+_PORTABLE_SELECTOR_KEYS = (
+    "accessibility_id", "text", "text_contains",
+    "text_or_desc", "text_or_desc_contains", "screen_fraction",
+)
+
+
+def portability_warnings(doc: dict) -> list[str]:
+    """Non-fatal lint: selectors that would not resolve on a declared
+    non-Android platform (prints as WARN, does not fail CI)."""
+    non_android = [p for p in (doc.get("platforms") or []) if p != "android"]
+    if not non_android:
+        return []
+
+    warns: list[str] = []
+
+    def _walk(node, trail: str) -> None:
+        if isinstance(node, dict):
+            if "resource_id" in node and not any(
+                k in node for k in _PORTABLE_SELECTOR_KEYS
+            ):
+                warns.append(
+                    f"{trail}: selector has only `resource_id` (Android-only) "
+                    f"but the card declares platforms {non_android}"
+                )
+            for k, v in node.items():
+                _walk(v, f"{trail}/{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                _walk(v, f"{trail}[{i}]")
+
+    _walk(doc.get("embedded_agent") or {}, "embedded_agent")
+    return warns
 
 
 def main(argv: list[str]) -> int:
@@ -76,6 +128,7 @@ def main(argv: list[str]) -> int:
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
         errors = sorted(validator.iter_errors(doc), key=lambda e: list(e.absolute_path))
         extra = cross_field_errors(path, doc) if isinstance(doc, dict) else []
+        warns = portability_warnings(doc) if isinstance(doc, dict) else []
         if errors or extra:
             failures += 1
             print(f"✗ {path.name}")
@@ -86,6 +139,8 @@ def main(argv: list[str]) -> int:
                 print(f"    {msg}")
         else:
             print(f"✓ {path.name}")
+        for msg in warns:
+            print(f"    WARN {msg}")
 
     # Layer 3: catalog build (prompt_template consistency, capability-id
     # uniqueness).

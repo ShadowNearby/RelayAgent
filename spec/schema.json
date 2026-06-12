@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/ShadowNearby/RelayAgent/main/spec/schema.json",
   "title": "RelayAgent Manifest",
-  "description": "Normative JSON Schema for the RelayAgent SPEC v0.1. Cards are authored in YAML; this schema describes the equivalent JSON structure after parse. Enforcement layers (SPEC §12): this schema is layer 1 (structure); the load-time catalog build is layer 2 (prompt_template consistency, capability-id uniqueness); scripts/validate_manifests.py is layer 3 (cross-field CI checks: filename matches app_id, platforms cover verified_os). `x_`-prefixed extension keys are allowed inside every nested object (SPEC §3) and MAY be ignored by conforming SDKs; where this schema pins an `x_` key's shape, it validates the extensions the reference adapter consumes (SPEC §13.1) without constraining unknown ones.",
+  "description": "Normative JSON Schema for the RelayAgent SPEC v0.1. Cards are authored in YAML; this schema describes the equivalent JSON structure after parse. Enforcement layers (SPEC §12): this schema is layer 1 (structure); the load-time catalog build is layer 2 (prompt_template consistency, capability-id uniqueness); scripts/validate_manifests.py is layer 3 (cross-field CI checks: filename matches app_id, platforms cover verified_os, app_ids consistent with app_id/platforms). `x_`-prefixed extension keys are allowed inside every nested object (SPEC §3) and MAY be ignored by conforming SDKs; where this schema pins an `x_` key's shape, it validates the extensions the reference adapter consumes (SPEC §13.1) without constraining unknown ones.",
 
   "type": "object",
   "additionalProperties": false,
@@ -31,7 +31,18 @@
     "app_id": {
       "type": "string",
       "pattern": "^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+$",
-      "description": "Android package name or iOS bundle id (reverse-DNS). Must match the manifest filename: manifests/<app_id>.yaml (checked by validate_manifests.py)."
+      "description": "Primary app id (reverse-DNS; by convention the Android package name). Must match the manifest filename: manifests/<app_id>.yaml (checked by validate_manifests.py). Per-platform ids for the same logical app go in `app_ids`."
+    },
+    "app_ids": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Optional per-platform app ids for one logical app (Android package / iOS bundle id / HarmonyOS bundle). Cross-field rules (validate_manifests.py): `android`, when present, must equal `app_id`; every key must be listed in `platforms`. Consumers resolve via card_loader.resolve_app_id: app_ids[platform], falling back to app_id.",
+      "properties": {
+        "android":   { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+$" },
+        "ios":       { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+$" },
+        "harmonyos": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+$" }
+      },
+      "additionalProperties": false
     },
     "app_name": {
       "type": "string",
