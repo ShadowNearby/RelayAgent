@@ -261,7 +261,34 @@ class AndroidBackend(DeviceBackend):
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning(f"keyevent {code} failed: {exc}")
 
+    # `input text` reaches the device through a remote shell, so the fallback
+    # only accepts characters that survive that parse unquoted (space handled
+    # via %s). Anything else must go through the AdbKeyboard broadcast.
+    _INPUT_TEXT_SAFE_RE = re.compile(r"^[A-Za-z0-9 .,:/@_+=?-]*$")
+
     def input_text(self, text: str, *, timeout: float = 30.0) -> None:
+        """Type into the focused field.
+
+        Primary: AdbKeyboard ADB_INPUT_B64 broadcast (any text incl. CJK).
+        Fallback when setup_input_channel() reported the keyboard missing:
+        `input text` — shell-safe ASCII only, logged as degraded. Non-ASCII
+        without the keyboard raises (loud fail per surface-fallback-failures;
+        there is NO apk-free adb path for CJK input)."""
+        if self._input_channel_ok is False:
+            if self._INPUT_TEXT_SAFE_RE.match(text):
+                logger.warning(
+                    "input_text degraded: AdbKeyboard unavailable, using "
+                    f"`input text` for ASCII fallback ({len(text)} chars)"
+                )
+                self._run(
+                    ["shell", "input", "text", text.replace(" ", "%s")],
+                    timeout=timeout,
+                )
+                return
+            raise RuntimeError(
+                "input_text needs AdbKeyboard for non-ASCII/special text but "
+                "it is not installed/active (install ADBKeyboard.apk)"
+            )
         # AdbKeyboard ADB_INPUT_B64 broadcast. Clean base64 (no surrounding
         # b'...' quotes — we pass an argv list so the keyboard receives the
         # decoded bytes directly).
@@ -390,10 +417,12 @@ class AndroidBackend(DeviceBackend):
         most-permissive Allow button. Returns the label tapped (for logging)
         or None when nothing was dismissed. Vendor tables:
         agents/device/vendor_profiles.py."""
-        from agents.device.vendor_profiles import ALLOW_LABELS, PERMISSION_PACKAGES
+        from agents.device.vendor_profiles import allow_labels, permission_packages
 
+        pkgs = permission_packages()
+        labels = allow_labels()
         pkg = self.foreground_app(timeout=3)
-        if pkg is None or pkg not in PERMISSION_PACKAGES:
+        if pkg is None or pkg not in pkgs:
             return None
         nodes = self.dump_ui_tree(dump_timeout=2, pull_timeout=1)
         if nodes is None:
@@ -405,9 +434,9 @@ class AndroidBackend(DeviceBackend):
         # Walk allow labels in preference order; tap the first match. Restrict
         # to nodes belonging to a permission package (the dump can include
         # overlays from other system surfaces).
-        for label in ALLOW_LABELS:
+        for label in labels:
             for n in nodes:
-                if n.package not in PERMISSION_PACKAGES:
+                if n.package not in pkgs:
                     continue
                 if n.text != label and n.desc != label:
                     continue
@@ -425,7 +454,7 @@ class AndroidBackend(DeviceBackend):
                 return label
         logger.warning(
             f"permission popup probe: foreground={pkg!r} but no known Allow "
-            f"button found in dump (tried {len(ALLOW_LABELS)} labels)"
+            f"button found in dump (tried {len(labels)} labels)"
         )
         return None
 

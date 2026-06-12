@@ -146,6 +146,77 @@ class SwipeDownTests(unittest.TestCase):
         sg.assert_called_once_with(500, 1600, 500, 600, duration_ms=300, timeout=5.0)
 
 
+class InputTextFallbackTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch("agents.device.android.subprocess.run")
+        self.run = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.run.return_value = _cp()
+
+    def test_broadcast_when_channel_unknown_or_ok(self):
+        for state in (None, True):
+            b = AndroidBackend()
+            b._input_channel_ok = state
+            b.input_text("你好")
+            self.assertIn("ADB_INPUT_B64", self.run.call_args.args[0])
+
+    def test_ascii_fallback_when_channel_down(self):
+        b = AndroidBackend()
+        b._input_channel_ok = False
+        b.input_text("hello world")
+        argv = self.run.call_args.args[0]
+        self.assertEqual(argv[-3:], ["input", "text", "hello%sworld"])
+
+    def test_non_ascii_without_channel_raises(self):
+        b = AndroidBackend()
+        b._input_channel_ok = False
+        with self.assertRaises(RuntimeError):
+            b.input_text("你好")
+        self.run.assert_not_called()
+
+    def test_shell_unsafe_ascii_without_channel_raises(self):
+        b = AndroidBackend()
+        b._input_channel_ok = False
+        with self.assertRaises(RuntimeError):
+            b.input_text("a&b;c")  # would be parsed by the remote shell
+
+
+class VendorProfileTests(unittest.TestCase):
+    def setUp(self):
+        from agents.device import vendor_profiles as vp
+        self.vp = vp
+        self.addCleanup(vp.permission_packages.cache_clear)
+        self.addCleanup(vp.allow_labels.cache_clear)
+        vp.permission_packages.cache_clear()
+        vp.allow_labels.cache_clear()
+
+    def test_defaults_without_env(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RELAY_VENDOR_PROFILE", None)
+            self.assertEqual(self.vp.permission_packages(), self.vp.PERMISSION_PACKAGES)
+            self.assertEqual(self.vp.allow_labels(), self.vp.ALLOW_LABELS)
+
+    def test_overlay_merges_and_prepends(self):
+        import json
+        import tempfile
+        overlay = {"permission_packages": ["com.oem.grantor"],
+                   "allow_labels": ["总是同意", "允许"]}  # "允许" already a default
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(overlay, f)
+            path = f.name
+        self.addCleanup(os.unlink, path)
+        with mock.patch.dict(os.environ, {"RELAY_VENDOR_PROFILE": path}):
+            pkgs = self.vp.permission_packages()
+            labels = self.vp.allow_labels()
+        self.assertIn("com.oem.grantor", pkgs)
+        self.assertEqual(labels[0], "总是同意")          # overlay outranks defaults
+        self.assertEqual(labels.count("允许"), 1)        # dedup against defaults
+
+    def test_unreadable_overlay_falls_back_to_defaults(self):
+        with mock.patch.dict(os.environ, {"RELAY_VENDOR_PROFILE": "/no/such/file.json"}):
+            self.assertEqual(self.vp.permission_packages(), self.vp.PERMISSION_PACKAGES)
+
+
 class FactoryTests(unittest.TestCase):
     def tearDown(self):
         set_default_backend(None)

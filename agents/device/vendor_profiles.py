@@ -12,8 +12,27 @@ the call sites):
     paid only when the probe says a permission UI is up;
   * capped per task; a stuck dialog won't infinite-loop;
   * env opt-out via RELAY_DISMISS_PERMISSIONS=0 (handled by the agent).
+
+Extending for a new vendor/ROM: the defaults below stay in code (zero
+startup I/O, zero behavior change when nothing is configured); a JSON
+overlay can ADD entries without a code change:
+
+    RELAY_VENDOR_PROFILE=/path/to/profile.json
+    {"permission_packages": ["com.oem.grantor"],
+     "allow_labels": ["总是同意"]}
+
+Overlay packages are unioned; overlay labels are PREPENDED (they outrank
+the defaults, since a vendor label is usually more specific).
 """
 from __future__ import annotations
+
+import json
+import os
+from functools import lru_cache
+
+from loguru import logger
+
+_PROFILE_ENV = "RELAY_VENDOR_PROFILE"
 
 PERMISSION_PACKAGES: tuple[str, ...] = (
     "com.android.permissioncontroller",
@@ -42,3 +61,39 @@ ALLOW_LABELS: tuple[str, ...] = (
     "允许",
     "Allow",
 )
+
+
+def _load_overlay() -> dict:
+    path = os.getenv(_PROFILE_ENV)
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"{_PROFILE_ENV}={path!r} unreadable, ignoring overlay: {e}")
+        return {}
+    if not isinstance(data, dict):
+        logger.warning(f"{_PROFILE_ENV}={path!r} is not a JSON object, ignoring overlay")
+        return {}
+    return data
+
+
+@lru_cache(maxsize=1)
+def permission_packages() -> tuple[str, ...]:
+    """Defaults ∪ overlay (order: defaults first, new overlay entries after)."""
+    extra = [p for p in _load_overlay().get("permission_packages") or []
+             if isinstance(p, str) and p not in PERMISSION_PACKAGES]
+    if extra:
+        logger.info(f"vendor profile: +{len(extra)} permission package(s): {extra}")
+    return PERMISSION_PACKAGES + tuple(extra)
+
+
+@lru_cache(maxsize=1)
+def allow_labels() -> tuple[str, ...]:
+    """Overlay labels first (they outrank defaults), then the defaults."""
+    extra = [s for s in _load_overlay().get("allow_labels") or []
+             if isinstance(s, str) and s not in ALLOW_LABELS]
+    if extra:
+        logger.info(f"vendor profile: +{len(extra)} allow label(s): {extra}")
+    return tuple(extra) + ALLOW_LABELS
