@@ -1,75 +1,67 @@
-# RelayAgent 任务集（benchmark）
+# RelayAgent Benchmark Suite
 
-以 `manifests/*.yaml` 里各 App 内置 Agent 声明的 **capability** 为来源构造的单 App 任务集。借鉴公开 mobile GUI benchmark 的范式：
+Task set built from the **capabilities** declared by each app's built-in agent in `manifests/*.yaml`. The design borrows from public mobile-GUI benchmarks:
 
-- **MobileWorld** (Tongyi-MAI, ACL 2026)：201 任务 / 20 app，含 agent-user 交互 + MCP 增强 —
+- **MobileWorld** (Tongyi-MAI, ACL 2026): 201 tasks / 20 apps, with agent-user interaction + MCP augmentation —
   <https://github.com/Tongyi-MAI/MobileWorld>
-- **AndroidWorld** (Google DeepMind, ICLR 2025)：116 参数化任务 / 20 app，每任务带显式 success criteria —
+- **AndroidWorld** (Google DeepMind, ICLR 2025): 116 parameterized tasks / 20 apps, each with explicit success criteria —
   <https://github.com/google-research/android_world>
 
-借鉴点：instruction 参数化（防记忆 + 逼真 grounding）、每任务显式 `success` 判据、标注 `difficulty`/`category`。
+Borrowed ideas: parameterized instructions (avoids memorization, keeps grounding realistic), an explicit `success` criterion per task, and `difficulty`/`category` tags.
 
-## 文件
+> 中文版: [`README.zh.md`](README.zh.md)
 
-| 文件 | 内容 |
+## Files
+
+| File | Content |
 | --- | --- |
-| [`single_app_tasks.yaml`](single_app_tasks.yaml) | **50 条单 App 任务**（单 app + 单 capability，1-step 即可完成） |
-| [`relaybench_tasks.yaml`](relaybench_tasks.yaml) | **30 条 RelayBench**（15 single + 15 cross，10 App 均衡） |
+| [`relaybench_tasks.yaml`](relaybench_tasks.yaml) | **30 RelayBench tasks** (15 single-app + 15 cross-app, balanced across 10 manifest apps) |
+| [`androiddaily_task_info.csv`](androiddaily_task_info.csv) | Cached task metadata for the external `stepfun-ai/AndroidDaily` benchmark |
+| [`mobileworld_benchmark_task_info.csv`](mobileworld_benchmark_task_info.csv) | Cached task metadata for the external `Tongyi-MAI/MobileWorld` benchmark |
 
-> 单 App 任务用于验证每张 manifest card 的 capability 是否能稳定到达预期终态。
+See [`docs/evaluation.md`](../docs/evaluation.md) for the full evaluation design covering all three benchmarks.
 
-## RelayBench（`relaybench_tasks.yaml`）
+## RelayBench (`relaybench_tasks.yaml`)
 
-**30 条**均衡基准：15 single-app + 15 cross-app，覆盖 **10 个 manifest App**（每 App 全库出现 4–5 次；cross 段每 App 恰好 3 次）。
+**30-task** balanced benchmark: 15 single-app + 15 cross-app, covering **10 manifest apps** (each app appears 4-5 times across the whole set; exactly 3 times in the cross-app section).
 
-| 类型 | 条数 | 用途 |
+| Type | Count | Purpose |
 | --- | --- | --- |
-| single-app | 15 | 单 leg 能力到达终态（5 App×2 + 5 App×1） |
-| cross-app | 15 | NL flow 跨 App 编排（`run_plan.py`） |
+| single-app | 15 | a single leg's capability reaches its intended end state (5 apps x 2 + 5 apps x 1) |
+| cross-app | 15 | cross-app NL-flow orchestration (`run_plan.py`) |
 
-**App 消歧**：多 App 共享 capability 时，`instruction` 必须点名 App（cross 任务用 `app_labels` 校验）。不从 `single_app_tasks.yaml` 迁移。
+**App disambiguation**: when multiple apps share a capability, the `instruction` must name the app (cross-app tasks are checked against `app_labels`).
 
 ```bash
-# 校验任务集结构 / 均衡 / 消歧
+# validate task-set structure / balance / disambiguation
 uv run python scripts/validate_relaybench.py
 
-# 冒烟（每 App 1 条，默认 10 条）
+# smoke test (1 task per app, 10 by default)
 uv run python scripts/run_benchmark_test.py --benchmark relaybench --dry-list
 
-# 全量（建议仅 relay）
+# full run (relay system only is recommended)
 uv run python scripts/run_benchmark_test.py --benchmark relaybench --all --systems relay
 
-# 只看规划
+# plan-only (no device execution)
 uv run python scripts/run_benchmark_test.py --benchmark relaybench --plan-only
 ```
 
+## Conventions
 
-## single_app_tasks.yaml 一览
+- **Taobao shopping is folded into Qwen**: the standalone `com.taobao.taobao` card has been removed (Taobao's built-in assistant *is* Qwen). Its `search_product` / `purchase_guidance` / `track_order` / `order_food` capabilities are now declared under the `com.aliyun.tongyi` manifest and routed through the Taobao backend, so these tasks use ids like `rb-sa-tongyi-shop-*` with `app: com.aliyun.tongyi`.
+- **Safety semantics**: for any task with `handoff_required: true`, the agent must stop *before* an irreversible CTA (place order / pay / start navigation / open a document) and hand off — stopping right before the CTA counts as success; never actually complete the irreversible action.
 
-- 覆盖全部 **6 个 App / 27 个 capability**（每个 capability ≥1 条）。
-- category：`info_qa` 26 · `transaction` 16 · `content_gen` 6 · `navigation` 2
-- difficulty：`easy` 18 · `medium` 23 · `hard` 9
-- 每 App 任务数：千问 17 · 高德 8 · 携程 7 · WPS 7 · 小红书 6 · 微信 5
-
-> **淘宝购物能力已并入千问**：原独立的 `com.taobao.taobao` 卡片已下线（淘宝内置助手本身*就是*千问），
-> 其 `search_product` / `purchase_guidance` / `track_order` / `order_food` 现声明在
-> `com.aliyun.tongyi` manifest 下、经 Taobao 后端路由。故这些任务的 id 形如 `tongyi-shop-*`，`app` 为千问。
-
-字段含义见 YAML 头部注释。**安全语义**：`handoff_required=true` 的任务，agent 须停在
-不可逆 CTA（下单/支付/开始导航/打开文档）**之前**交还——“停在 CTA 前”即视为成功，不真下单/支付。
-
-## 怎么跑
+## How to run
 
 ```bash
-# 单条（app_id + 指令）
+# single task (app_id + instruction)
 uv run python -m agents.native_runner com.xingin.xhs "上海有什么值得一去的小众咖啡馆，推荐5家"
 
-# 购物类现走千问（app_id=com.aliyun.tongyi）
+# shopping capabilities now live under Qwen (app_id=com.aliyun.tongyi)
 uv run python -m agents.native_runner com.aliyun.tongyi "帮我找一台适合学生用的平板电脑，预算2000以内"
 
-# 自然语言 flow（只看规划和每步路由）
+# natural-language flow (plan + per-step routing only, no device execution)
 uv run python scripts/run_plan.py --dry-run "帮我找一台适合学生用的平板电脑，预算2000以内"
 ```
 
-> 注：本任务集一律使用 **manifest-canonical** id；购物能力归到 `com.aliyun.tongyi`，
-> 携程使用 `book_flight/book_hotel/book_train`。
+> Note: this task set always uses **manifest-canonical** ids — shopping capabilities live under `com.aliyun.tongyi`, and Ctrip uses `book_flight`/`book_hotel`/`book_train`.
