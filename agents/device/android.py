@@ -384,6 +384,51 @@ class AndroidBackend(DeviceBackend):
 
         return _recorder.start(out_dir, basename=basename)
 
+    # -- platform hooks -------------------------------------------------------
+    def dismiss_permission_popup(self) -> str | None:
+        """If a system permission/consent dialog is on top, tap the
+        most-permissive Allow button. Returns the label tapped (for logging)
+        or None when nothing was dismissed. Vendor tables:
+        agents/device/vendor_profiles.py."""
+        from agents.device.vendor_profiles import ALLOW_LABELS, PERMISSION_PACKAGES
+
+        pkg = self.foreground_app(timeout=3)
+        if pkg is None or pkg not in PERMISSION_PACKAGES:
+            return None
+        nodes = self.dump_ui_tree(dump_timeout=2, pull_timeout=1)
+        if nodes is None:
+            logger.info(
+                f"permission popup probe: foreground={pkg!r} but a11y "
+                "dump failed; cannot auto-dismiss"
+            )
+            return None
+        # Walk allow labels in preference order; tap the first match. Restrict
+        # to nodes belonging to a permission package (the dump can include
+        # overlays from other system surfaces).
+        for label in ALLOW_LABELS:
+            for n in nodes:
+                if n.package not in PERMISSION_PACKAGES:
+                    continue
+                if n.text != label and n.desc != label:
+                    continue
+                if not n.clickable:
+                    continue
+                center = n.center
+                if center is None:
+                    continue
+                if not self.tap(*center, timeout=3):
+                    return None
+                logger.info(
+                    f"dismissed system permission popup: tapped {label!r} at "
+                    f"{center} on {pkg}"
+                )
+                return label
+        logger.warning(
+            f"permission popup probe: foreground={pkg!r} but no known Allow "
+            f"button found in dump (tried {len(ALLOW_LABELS)} labels)"
+        )
+        return None
+
     # -- Android-only extras (not part of the DeviceBackend interface) -------
     def reset_airplane_mode(self, *, timeout: float = 10.0) -> bool:
         """Turn airplane mode OFF if a previous task left it ON. Returns True

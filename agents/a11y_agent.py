@@ -29,15 +29,14 @@ from __future__ import annotations
 import json
 import os
 import re
-import xml.etree.ElementTree as ET
 from typing import Any
 
 from loguru import logger
 
 from agents.action_model import JSONAction
 
-from agents._adb import _get_screen_size
-from agents.relay_agent import RelayAgent, _BOUNDS_RE, _dump_window_xml_root
+from agents.device import UINode, get_backend
+from agents.relay_agent import RelayAgent
 
 # Task-agnostic irreversible-action labels. A tap landing on one of these is
 # converted to a handoff so the baseline cannot cross a CTA — keeps §8.6 safety
@@ -69,7 +68,7 @@ _SYSTEM = (
 
 
 def serialize_tree(
-    root: ET.Element, screen_w: int, screen_h: int, max_nodes: int, trunc: int
+    nodes: list[UINode], screen_w: int, screen_h: int, max_nodes: int, trunc: int
 ) -> tuple[list[dict], str]:
     """Task-agnostic accessibility-tree serialization (WebVoyager / AutoGLM /
     SeeAct style). Keep every node that is interactable (clickable /
@@ -77,33 +76,24 @@ def serialize_tree(
     pure layout containers. One line per node: `[i] <Role> "label" {flags}`.
     No per-app knowledge — same rule for all apps."""
     out: list[dict] = []
-    for n in root.iter("node"):
-        text = (n.get("text") or "").strip()
-        desc = (n.get("content-desc") or "").strip()
-        cls = n.get("class") or ""
-        clickable = (n.get("clickable") or "") == "true"
-        longclick = (n.get("long-clickable") or "") == "true"
-        scrollable = (n.get("scrollable") or "") == "true"
-        editable = cls.endswith("EditText") or (
-            (n.get("focusable") or "") == "true" and "Edit" in cls
+    for n in nodes:
+        editable = n.class_name.endswith("EditText") or (
+            n.focusable and "Edit" in n.class_name
         )
-        label = text or desc
-        if not (clickable or longclick or scrollable or editable or label):
+        label = n.text or n.desc
+        if not (n.clickable or n.long_clickable or n.scrollable or editable or label):
             continue
-        m = _BOUNDS_RE.match(n.get("bounds") or "")
-        if not m:
+        c = n.center  # None already filters absent/zero-area bounds
+        if c is None:
             continue
-        x1, y1, x2, y2 = (int(v) for v in m.groups())
-        if x2 <= x1 or y2 <= y1:
-            continue
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        cx, cy = c
         if cx < 0 or cy < 0 or cx > screen_w or cy > screen_h:
             continue
         out.append({
             "cx": cx, "cy": cy, "label": label,
-            "role": (cls.split(".")[-1] or "View"),
+            "role": (n.class_name.split(".")[-1] or "View"),
             "editable": bool(editable),
-            "scrollable": bool(scrollable),
+            "scrollable": bool(n.scrollable),
         })
 
     truncated = len(out) > max_nodes
@@ -179,7 +169,7 @@ class A11yTextAgent(RelayAgent):
     def _screen_size(self) -> tuple[int, int]:
         if self._screen is None:
             try:
-                self._screen = _get_screen_size()
+                self._screen = get_backend().screen_size()
             except Exception:
                 self._screen = (1080, 2340)
         return self._screen
@@ -191,18 +181,18 @@ class A11yTextAgent(RelayAgent):
                 action_type="finished", goal_status="incomplete"
             )
 
-        root = _dump_window_xml_root()
-        if root is None:
+        tree = get_backend().dump_ui_tree()
+        if tree is None:
             self._dump_fail_streak += 1
             if self._dump_fail_streak >= self.max_dump_fail:
-                return ("uiautomator dump failed repeatedly; giving up",
+                return ("a11y dump failed repeatedly; giving up",
                         JSONAction(action_type="finished", goal_status="incomplete"))
             return (f"dump failed ({self._dump_fail_streak}); waiting",
                     JSONAction(action_type="wait"))
         self._dump_fail_streak = 0
 
         w, h = self._screen_size()
-        nodes, listing = serialize_tree(root, w, h, self.max_nodes, self.text_trunc)
+        nodes, listing = serialize_tree(tree, w, h, self.max_nodes, self.text_trunc)
 
         hist = "\n".join(self._history[-self.history_k:]) or "(none yet)"
         user = (
