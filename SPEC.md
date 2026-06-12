@@ -44,7 +44,10 @@ A `Card` does **not** describe:
 ```yaml
 spec_version: "0.1"          # required, string, semver of this SPEC
 card_version: "1.3.0"        # required, semver of this card file
-app_id: "com.autonavi.minimap" # required, package name (Android) or bundle id (iOS)
+app_id: "com.autonavi.minimap" # required, primary app id (by convention the Android package name)
+app_ids:                      # optional, per-platform ids for the same logical app;
+  android: "com.autonavi.minimap"  #   `android` (if present) must equal app_id, keys ⊆ platforms.
+  ios: "com.autonavi.amap"         #   Resolution: app_ids[platform], falling back to app_id.
 app_name: "Amap"              # required, human-readable
 platforms: ["android"]       # required, subset of: android, ios, harmonyos
 locale: ["zh-CN"]            # required, BCP-47 tags the embedded agent supports
@@ -269,7 +272,7 @@ A **conforming router** MUST:
 2. Honor `handoff_to_user_required`.
 3. Refuse to use cards marked stale unless the user explicitly opts in.
 
-**Enforcement layers.** Card rules 1–2 are machine-checked: structure by `spec/schema.json` (layer 1), cross-field consistency (filename ↔ `app_id`, `platforms` ↔ `verified_os`) by `scripts/validate_manifests.py` (layer 2), and `prompt_template` consistency plus capability-id uniqueness at catalog load time (layer 3). Card rules 3–4 and all router rules are **not machine-checkable** — they are enforced by card review (rule 4 needs a human judgment about irreversibility) and by router implementations respectively.
+**Enforcement layers.** Card rules 1–2 are machine-checked: structure by `spec/schema.json` (layer 1), cross-field consistency (filename ↔ `app_id`, `platforms` ↔ `verified_os`, `app_ids` ↔ `app_id`/`platforms`) by `scripts/validate_manifests.py` (layer 2), and `prompt_template` consistency plus capability-id uniqueness at catalog load time (layer 3). Card rules 3–4 and all router rules are **not machine-checkable** — they are enforced by card review (rule 4 needs a human judgment about irreversibility) and by router implementations respectively.
 
 ## 13. Out of scope for v0.1
 
