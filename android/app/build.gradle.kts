@@ -40,6 +40,14 @@ tasks.named("preBuild") {
     dependsOn(syncRelayPython, syncRelayAssets)
 }
 
+// Gradle 8.7 strict task validation requires an explicit producer->consumer
+// dependency, not just preBuild ordering: Chaquopy's python-source merge reads
+// build/relayPython and Android's asset merge reads build/relayAssets.
+tasks.matching { it.name.matches(Regex("merge.*PythonSources")) }
+    .configureEach { dependsOn(syncRelayPython) }
+tasks.matching { it.name.matches(Regex("merge.*Assets")) }
+    .configureEach { dependsOn(syncRelayAssets) }
+
 android {
     namespace = "com.relayagent.app"
     compileSdk = 34
