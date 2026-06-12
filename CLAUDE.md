@@ -125,3 +125,16 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 ## Handoff
 
 最后一步调 `ask_user` 等终端输入。stdin 被重定向时以 `EOF when reading a line` 结束 —— 这是**成功**不是失败。
+
+## Android App 移植（android/，进行中）
+
+纯无障碍方案 + Chaquopy 嵌 Python，把整个 NL flow 装进独立 App（无电脑无 adb）。骨架与映射表见 [`android/README.md`](android/README.md)。**主机行为零漂移**：以下接缝默认值全部保持原行为，只有 Android 侧换实现。
+
+- **LLM client**：一律经 `agents/llm_client.py:make_llm_client`（主机=真 openai SDK；`RELAY_LLM_HTTP=1` 或 SDK 缺失=stdlib HTTP shim，无 streaming）。`JSONAction` 已去 pydantic（纯 Python，行为由 `tests/test_action_model.py` 钉死）。
+- **交互**：终端 `input()` 已抽成 `agents/interaction.py:InteractionProvider`（`ask_user` 返回 None=EOF/接管=handoff 成功终止；`should_stop` 在循环边界轮询）。Android 实现=悬浮窗。
+- **leg 执行**：`flow_runner` 经 LegExecutor 接缝——`SubprocessLegExecutor`（默认，字节级等价）/ `InProcessLegExecutor`（`RELAY_LEG_EXECUTOR=inprocess`，Chaquopy 无法 spawn 子进程；env 快照/还原）。`native_runner.run_leg()` 可 import，`RELAY_TRAJ_DIR` 按调用解析（不再 import 期冻结）。
+- **NL pipeline**：`agents/nl_flow.py:plan_request/execute_plan`（结构化结果），`run_plan.py` 只剩 CLI 前端。`plan_request(allow_mw_legs=False)`=Android 禁缓存 MW plan；`FlowPlanner(mw_fallback=False)`=不可覆盖 leg 直接 unsatisfiable。
+- **路径**：`RELAY_TRAJ_ROOT` 重定向 traj_logs 基目录（Android 指 filesDir；主机默认 `<repo>/traj_logs` 不变）。
+- **Spike B 工具**：`scripts/diff_a11y_dump.py` 对比 App 内 a11y 序列化 与真 `uiautomator dump` 的 (text/content-desc/bounds) 节点集 + text-hash 流。
+- **已知语义漂移（端侧接受）**：无 shell 拿不到真 force-stop，冷启动以 `FLAG_ACTIVITY_CLEAR_TASK` 重启近似——端上运行不与 benchmark 对比。
+- **待接线**：`relay_android/backend.py:install()` 等 `agents.device` 注入缝（P0.1，device-backend 分支）落地。
