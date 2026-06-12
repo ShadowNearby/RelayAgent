@@ -41,11 +41,12 @@ from typing import Any
 
 import yaml
 from loguru import logger
-from openai import OpenAI
 
 from agents._adb import screencap
 from agents.action_model import ANSWER, ASK_USER, FINISHED
+from agents.interaction import get_interaction
 from agents.leg_judge import LOADING, final_frames, judge_leg
+from agents.llm_client import make_llm_client
 from agents.llm_retry import create_with_retry
 from agents.route_overlay import RouteOverlay
 from agents.runtime_config import ensure_llm_env
@@ -130,7 +131,7 @@ class _RecordingLLM:
     capability router), so the gateway isn't retried twice over.
     """
 
-    def __init__(self, client: OpenAI, retry: bool = True) -> None:
+    def __init__(self, client: Any, retry: bool = True) -> None:
         self._client = client
         self._retry = retry
         self.calls: list[dict] = []
@@ -193,6 +194,61 @@ class _RecCompletions:
 
 
 # --------------------------------------------------------------------------- #
+# Leg executors — how one app leg's native run is invoked
+# --------------------------------------------------------------------------- #
+
+
+class SubprocessLegExecutor:
+    """Host default: one fresh `python -m agents.native_runner` per leg
+    (crash isolation; per-leg env via the child process env). Byte-identical
+    to the pre-seam inline subprocess.call.
+
+    stdin is fed empty so the final ask_user handoff (when present) closes
+    cleanly with EOF rather than blocking the flow."""
+
+    def run(self, app: str, prompt: str, child_env: dict[str, str],
+            extra_args: list[str]) -> int:
+        cmd = [sys.executable, "-m", NATIVE_RUNNER_MODULE, app, prompt, *extra_args]
+        return subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
+
+
+class InProcessLegExecutor:
+    """Android / no-subprocess mode: swap os.environ to the leg env, run the
+    leg in this process via native_runner.main (same argparse path as the
+    CLI), restore env in a finally. Legs are sequential, so a plain swap is
+    safe; the agent module is re-executed per leg by _load_agent_class, so
+    module-level env reads re-resolve.
+
+    Unlike the subprocess executor, stdin is NOT detached — the in-task
+    ask_user handoff goes through the InteractionProvider instead of EOF."""
+
+    def run(self, app: str, prompt: str, child_env: dict[str, str],
+            extra_args: list[str]) -> int:
+        from agents import native_runner
+
+        snapshot = dict(os.environ)
+        os.environ.clear()
+        os.environ.update(child_env)
+        try:
+            return int(native_runner.main([app, prompt, *extra_args]) or 0)
+        except SystemExit as e:  # native_runner maps config errors to sys.exit
+            logger.warning(f"in-process leg exited: {e.code}")
+            return e.code if isinstance(e.code, int) else 1
+        except Exception:
+            logger.exception(f"in-process leg crashed for app={app}")
+            return 1
+        finally:
+            os.environ.clear()
+            os.environ.update(snapshot)
+
+
+def _default_leg_executor():
+    if os.getenv("RELAY_LEG_EXECUTOR", "subprocess") == "inprocess":
+        return InProcessLegExecutor()
+    return SubprocessLegExecutor()
+
+
+# --------------------------------------------------------------------------- #
 # FlowRunner
 # --------------------------------------------------------------------------- #
 
@@ -203,6 +259,7 @@ class FlowRunner:
         flow_path: Path,
         env_overrides: dict[str, str] | None = None,
         extra_args: list[str] | None = None,
+        leg_executor: Any | None = None,
     ) -> None:
         self.flow_path = flow_path
         self.flow = yaml.safe_load(flow_path.read_text(encoding="utf-8"))
@@ -212,11 +269,12 @@ class FlowRunner:
         self.env = ensure_llm_env(ENV_FILE, env_overrides)
 
         self.extra_args = extra_args or []
+        self._leg_executor = leg_executor or _default_leg_executor()
         # Wrapped so every flow-process LLM call (leg judge, bind extraction)
         # is recorded and later folded into each leg's traj.json — see
         # `_RecordingLLM` / `_fold_flow_llm_calls`.
         self._llm = _RecordingLLM(
-            OpenAI(base_url=self.env["LLM_BASE_URL"], api_key=self.env["LLM_API_KEY"])
+            make_llm_client(self.env["LLM_BASE_URL"], self.env["LLM_API_KEY"])
         )
 
         # Each flow run gets its own traj root, with one dir per leg
@@ -226,7 +284,11 @@ class FlowRunner:
         # subdir. Named with the timestamp first, then the apps it touches:
         # `<ts>_plan_<app1>_<app2>...`.
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.flow_traj_root = REPO_ROOT / "traj_logs" / f"{ts}_{self._traj_stem()}"
+        # RELAY_TRAJ_ROOT relocates the trajectory base dir (Android: REPO_ROOT
+        # lives inside the read-only APK, so the app points this at filesDir).
+        # Host default unchanged: <repo>/traj_logs/.
+        traj_base = Path(os.getenv("RELAY_TRAJ_ROOT") or (REPO_ROOT / "traj_logs"))
+        self.flow_traj_root = traj_base / f"{ts}_{self._traj_stem()}"
         self._step_idx = 0
         logger.info(f"flow traj root: {self.flow_traj_root}")
 
@@ -272,9 +334,17 @@ class FlowRunner:
     def run(self) -> dict[str, Any]:
         logger.info(f"FlowRunner start: {self.flow_path.name}  inputs={self.bb}")
         try:
+            interaction = get_interaction()
             for step in self.flow["steps"]:
+                if interaction.should_stop():
+                    logger.warning("stop requested via interaction provider; ending flow early")
+                    break
                 kind = step.get("type") or "app_step"
                 logger.info(f"--- step {step['id']!r} ({kind}) ---")
+                interaction.emit_status(
+                    {"event": "leg_start", "id": step["id"], "kind": kind,
+                     "app": step.get("app")}
+                )
                 if kind == "app_step":
                     self._run_app_step(step)
                 elif kind == "ask_user":
@@ -283,6 +353,7 @@ class FlowRunner:
                     self._run_mobileworld_step(step)
                 else:
                     raise ValueError(f"Unknown step type: {kind}")
+                interaction.emit_status({"event": "leg_end", "id": step["id"]})
                 logger.info(f"blackboard after {step['id']!r}: {_redact(self.bb)}")
         finally:
             # Tear down a MobileWorld server WE started (no-op if none / reused).
@@ -338,18 +409,12 @@ class FlowRunner:
                 "RELAY_TRAJ_DIR": str(step_log_root),
                 "RELAY_WALL_OUT": str(step_log_root / "wall_clock.json"),
             }
-            # The native runner reads LLM_* + RELAY_* from the child env.
-            cmd = [
-                sys.executable, "-m", NATIVE_RUNNER_MODULE, app, prompt,
-                *self.extra_args,
-            ]
+            # The native runner reads LLM_* + RELAY_* from the leg env.
             logger.info(
                 f"→ native runner for app={app} capability={capability!r} prompt={prompt!r}"
             )
-            # Feed empty stdin so the final ask_user handoff (when present)
-            # closes cleanly with EOF rather than blocking the flow.
             # The framework-excluded per-leg wall_clock.json is written by the
-            # agent (RELAY_WALL_OUT) at subprocess exit; here we only print the
+            # agent (RELAY_WALL_OUT) at leg end; here we only print the
             # gross leg time for reference when RELAY_TIMING=1.
             #
             # TODO(phase-B): same-session handoff round-trip. When this leg
@@ -360,10 +425,11 @@ class FlowRunner:
             # answer and resumes predict() in the SAME conversation instead of
             # terminating. Phase A handles handoff at flow granularity (a fresh
             # leg after a flow-level ask_user), which loses in-app state; phase B
-            # preserves it.
+            # preserves it. (The InteractionProvider in the in-process executor
+            # already gives the channel; the subprocess executor needs the fifo.)
             timing = os.getenv("RELAY_TIMING", "0") == "1"
             t0 = time.monotonic()
-            rc = subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
+            rc = self._leg_executor.run(app, prompt, child_env, self.extra_args)
             if timing:
                 logger.info(f"leg gross wall_s={round(time.monotonic() - t0, 1)}")
             if rc != 0:
@@ -682,6 +748,7 @@ class FlowRunner:
     def _run_ask_user(self, step: dict) -> None:
         header = render(step.get("prompt_header", ""), self.bb)
         bind = step["bind"]
+        interaction = get_interaction()
 
         if "select_from" in step:
             arr_key = step["select_from"]
@@ -689,25 +756,18 @@ class FlowRunner:
             if not items:
                 raise RuntimeError(f"ask_user {step['id']!r}: nothing in {arr_key!r} to choose from")
             label_tpl = step.get("item_label", "{name}")
-            print(header)
-            for i, it in enumerate(items, 1):
-                print(f"  {i}. {render(label_tpl, it)}")
-            print(f"  (1-{len(items)}, or empty to pick 1)", flush=True)
-            try:
-                raw = input("> ").strip()
-            except EOFError:
-                raw = ""
+            lines = [header]
+            lines += [f"  {i}. {render(label_tpl, it)}" for i, it in enumerate(items, 1)]
+            lines.append(f"  (1-{len(items)}, or empty to pick 1)")
+            # ask_user → None (EOF / take-over) keeps today's empty-default → pick 1.
+            raw = (interaction.ask_user("\n".join(lines)) or "").strip()
             chosen = _resolve_choice(raw, items, label_tpl)
             logger.info(f"user chose: {chosen}")
             self.bb[bind] = chosen
             return
 
         # plain freeform input
-        print(header, flush=True)
-        try:
-            raw = input("> ").strip()
-        except EOFError:
-            raw = ""
+        raw = (interaction.ask_user(header) or "").strip()
         self.bb[bind] = raw
 
     # ----------------------------------------------------------- extract

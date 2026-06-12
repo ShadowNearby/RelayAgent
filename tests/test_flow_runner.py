@@ -1,7 +1,6 @@
 """Unit tests for FlowRunner trajectory helpers."""
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import unittest
@@ -112,15 +111,28 @@ class NativeRunnerTrajDirTests(unittest.TestCase):
         try:
             import agents.native_runner as nr
 
-            importlib.reload(nr)
-            nr._rotate_traj_dir()
+            rotated = nr._rotate_traj_dir()
+            self.assertEqual(rotated, leg_dir)
             self.assertTrue(marker.exists())
             self.assertTrue((leg_dir / "traj.json").exists())
         finally:
             os.environ.pop("RELAY_TRAJ_DIR", None)
-            import agents.native_runner as nr
 
-            importlib.reload(nr)
+    def test_traj_dir_resolved_per_call_not_at_import(self) -> None:
+        # In-process legs change RELAY_TRAJ_DIR between calls in ONE process;
+        # the resolution must follow the env, not a value frozen at import.
+        import agents.native_runner as nr
+
+        leg_a = Path(self._tmp) / "leg_a"
+        leg_b = Path(self._tmp) / "leg_b"
+        try:
+            os.environ["RELAY_TRAJ_DIR"] = str(leg_a)
+            self.assertEqual(nr._rotate_traj_dir(), leg_a)
+            os.environ["RELAY_TRAJ_DIR"] = str(leg_b)
+            self.assertEqual(nr._rotate_traj_dir(), leg_b)
+            self.assertTrue((leg_b / "traj.json").exists())
+        finally:
+            os.environ.pop("RELAY_TRAJ_DIR", None)
 
     def setUp(self) -> None:
         import tempfile
