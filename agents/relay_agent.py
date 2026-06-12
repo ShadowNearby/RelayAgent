@@ -28,11 +28,8 @@ import json
 import os
 import atexit
 import re
-import subprocess
 import sys
-import tempfile
 import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -56,11 +53,10 @@ from agents.agent_base import MCPAgent as _MCPAgentBase
 from agents._img import pil_to_base64
 from agents.action_model import JSONAction
 
-from agents._adb import adb_base, force_stop, swipe_down
+from agents._adb import force_stop, swipe_down
 from agents._adb import cold_launch as _cold_launch
-from agents._adb import foreground_package as _adb_foreground_package
 from agents._adb import screencap as _adb_screencap
-from agents._adb import tap as _adb_tap
+from agents.device import get_backend
 from agents.action_planner import Step, build_plan
 from agents.capability_router import route_capability
 from agents.card_loader import load_card_by_app_id
@@ -192,9 +188,6 @@ _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _FENCE_ANY = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
 
 
-_BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
-
-
 # Common labels for in-app "stop generating" / "thinking" buttons. Used ONLY
 # as a chrome-filter for the reply-text scrape (so e.g. "停止生成" doesn't
 # leak into the extracted reply text). The done-detection signal is the
@@ -203,45 +196,6 @@ _DEFAULT_STREAMING_MARKERS: tuple[str, ...] = (
     "停止生成", "停止回答", "停止", "生成中", "正在生成", "思考中",
     "Stop generating", "Stop", "Generating", "Thinking",
 )
-
-
-def _dump_window_xml_root(
-    dump_timeout: float = 8, pull_timeout: float = 5,
-) -> "ET.Element | None":
-    """Run `uiautomator dump`, pull, parse. Returns root element or None on
-    any failure (logged at info — dump can be flaky during animations).
-
-    Timeouts are parameterized because the wait_for_reply precheck wants a
-    tight budget (3s) — an 8s stall on every tick would burn the wall-clock
-    budget when uiautomator is persistently unhealthy."""
-    base = adb_base()
-    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
-        local_xml = fh.name
-    remote_xml = "/sdcard/relay_window_dump.xml"
-    try:
-        dump = subprocess.run(
-            base + ["shell", "uiautomator", "dump", remote_xml],
-            capture_output=True, text=True, timeout=dump_timeout,
-        )
-        if dump.returncode != 0:
-            return None
-        pull = subprocess.run(
-            base + ["pull", remote_xml, local_xml],
-            capture_output=True, text=True, timeout=pull_timeout,
-        )
-        if pull.returncode != 0 or not os.path.getsize(local_xml):
-            return None
-        try:
-            return ET.parse(local_xml).getroot()
-        except ET.ParseError:
-            return None
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
-    finally:
-        try:
-            os.unlink(local_xml)
-        except OSError:
-            pass
 
 
 def _dump_visible_text_hash(
@@ -258,17 +212,17 @@ def _dump_visible_text_hash(
     app-agnostic (no per-app marker list to maintain), and it catches both
     apps without a stop button AND apps whose stop button stays around after
     generation completes."""
-    root = _dump_window_xml_root(dump_timeout=dump_timeout, pull_timeout=pull_timeout)
-    if root is None:
+    nodes = get_backend().dump_ui_tree(
+        dump_timeout=dump_timeout, pull_timeout=pull_timeout
+    )
+    if nodes is None:
         return None
     parts: list[str] = []
-    for n in root.iter("node"):
-        t = (n.get("text") or "").strip()
-        d = (n.get("content-desc") or "").strip()
-        if t:
-            parts.append(t)
-        if d and d != t:
-            parts.append(d)
+    for n in nodes:
+        if n.text:
+            parts.append(n.text)
+        if n.desc and n.desc != n.text:
+            parts.append(n.desc)
     joined = "␟".join(parts)
     import hashlib
     return hashlib.blake2b(joined.encode("utf-8", "replace"), digest_size=12).hexdigest()
@@ -294,7 +248,7 @@ def _extract_reply_text_from_dump(
     / nothing plausibly-reply found.
 
     Heuristic (no per-app config needed for most chat UIs):
-      1. Dump XML.
+      1. Dump the normalized a11y tree.
       2. Walk all visible text-bearing nodes in document order, recording
          (top-y, text). Strip status-bar (top 8%) and input-bar (bottom 18%)
          regions outright.
@@ -306,27 +260,21 @@ def _extract_reply_text_from_dump(
          input placeholders).
       5. Join with newlines, return None if the result is empty/whitespace.
     """
-    root = _dump_window_xml_root(dump_timeout=3, pull_timeout=2)
-    if root is None:
+    tree = get_backend().dump_ui_tree(dump_timeout=3, pull_timeout=2)
+    if tree is None:
         return None
     top_cutoff = int(screen_h * 0.08)
     bot_cutoff = int(screen_h * 0.82)
     # (top_y, text)
     nodes: list[tuple[int, str]] = []
-    for n in root.iter("node"):
-        t = (n.get("text") or "").strip()
-        if not t:
+    for n in tree:
+        if not n.text or n.center is None:  # center=None ⇒ no/zero-area bounds
             continue
-        m = _BOUNDS_RE.match(n.get("bounds") or "")
-        if not m:
-            continue
-        x1, y1, x2, y2 = (int(v) for v in m.groups())
-        if y2 <= y1 or x2 <= x1:
-            continue
+        y1 = n.bounds[1]
         # Drop status bar / input area / off-screen nodes.
         if y1 < top_cutoff or y1 > bot_cutoff:
             continue
-        nodes.append((y1, t))
+        nodes.append((y1, n.text))
     if not nodes:
         return None
     # Find y of last occurrence of user's typed input (their own bubble).
@@ -388,87 +336,16 @@ def _hash_screenshot_region(image) -> str:
 
 # --- System permission popup auto-dismiss ------------------------------------
 #
-# Per CLAUDE.md, every fresh capability that needs a runtime permission (camera,
-# location, mic, contacts, ...) gets blocked by a system dialog like
-# `要允许"千问"拍摄照片和录制视频吗？`. We auto-tap the most-permissive Allow
-# button at the top of every `_materialize` so the planner doesn't have to know
-# anything about it. Constraints:
-#   * only fires when the FOREGROUND package is a known permission controller
-#     — protects against an in-app "允许" label triggering a spurious tap.
-#   * uses a cheap `dumpsys window` probe first (~200ms); only pays the full
-#     uiautomator dump (~2.5s) when the probe says a permission UI is up.
-#   * capped to MAX_DISMISSALS per task; a stuck dialog won't infinite-loop.
-#   * env opt-out via RELAY_DISMISS_PERMISSIONS=0.
-_PERMISSION_PACKAGES = (
-    "com.android.permissioncontroller",
-    "com.google.android.permissioncontroller",
-    "com.lbe.security.miui",        # MIUI / Xiaomi
-    "com.miui.securitycenter",
-    "com.huawei.systemmanager",     # Huawei / Honor
-    "com.coloros.safecenter",       # OPPO
-    "com.heytap.openid",            # OPPO/realme newer
-    "com.vivo.permissionmanager",   # vivo
-    "com.samsung.android.permissioncontroller",
-)
-# Preference order: most-permissive first so e.g. "始终允许" wins over "允许".
-_ALLOW_LABELS: tuple[str, ...] = (
-    "始终允许",
-    "Always allow",
-    "在使用应用时允许",
-    "仅在使用该应用时允许",
-    "使用该应用时允许",
-    "While using the app",
-    "Allow while using the app",
-    "本次允许",
-    "仅在本次使用允许",
-    "Only this time",
-    "允许",
-    "Allow",
-)
+# The logic and vendor tables (permission-controller packages, Allow labels)
+# live in the device backend (agents/device/android.py +
+# agents/device/vendor_profiles.py); we hook it at the top of every predict so
+# the planner doesn't have to know anything about runtime-permission dialogs.
+# Capped to MAX_DISMISSALS per task; env opt-out via RELAY_DISMISS_PERMISSIONS=0.
 def _maybe_dismiss_permission_popup() -> str | None:
     """If a system permission/consent dialog is on top, tap the most-permissive
     Allow button. Returns the label tapped (for logging) or None when nothing
     was dismissed."""
-    pkg = _adb_foreground_package(timeout=3)
-    if pkg is None or pkg not in _PERMISSION_PACKAGES:
-        return None
-    root = _dump_window_xml_root(dump_timeout=2, pull_timeout=1)
-    if root is None:
-        logger.info(
-            f"permission popup probe: foreground={pkg!r} but uiautomator "
-            "dump failed; cannot auto-dismiss"
-        )
-        return None
-    # Walk allow labels in preference order; tap the first match. Restrict to
-    # nodes belonging to a permission package (the dump can include overlays
-    # from other system surfaces).
-    for label in _ALLOW_LABELS:
-        for n in root.iter("node"):
-            if (n.get("package") or "") not in _PERMISSION_PACKAGES:
-                continue
-            t = (n.get("text") or "").strip()
-            d = (n.get("content-desc") or "").strip()
-            if t != label and d != label:
-                continue
-            if (n.get("clickable") or "").lower() != "true":
-                continue
-            m = _BOUNDS_RE.match(n.get("bounds") or "")
-            if not m:
-                continue
-            x1, y1, x2, y2 = (int(v) for v in m.groups())
-            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-            if not _adb_tap(cx, cy, timeout=3):
-                return None
-            logger.info(
-                f"dismissed system permission popup: tapped {label!r} at "
-                f"({cx},{cy}) on {pkg}"
-            )
-            return label
-    logger.warning(
-        f"permission popup probe: foreground={pkg!r} but no known Allow "
-        f"button found in dump (tried {len(_ALLOW_LABELS)} labels)"
-    )
-    return None
+    return get_backend().dismiss_permission_popup()
 
 
 # Strip whitespace + common punctuation noise so two VLM extractions of the
@@ -553,117 +430,74 @@ def _stitch_chunks(chunks: list[str]) -> str:
     return merged
 
 
-def _ground_text_via_uiautomator(
+def _ground_text_via_a11y(
     target: str, screen_w: int, screen_h: int
 ) -> tuple[int, int] | None:
-    """Dump the current UI via `uiautomator dump` and find a node whose
-    text / content-desc / resource-id matches `target`. Returns the center of
-    the matching node's bounds in screen pixels, or None on miss.
+    """Dump the normalized a11y tree and find a node whose text / desc /
+    resource-id matches `target`. Returns the center of the matching node's
+    bounds in screen pixels, or None on miss.
 
     Match policy (tightest first):
-      1. exact text or content-desc match
+      1. exact text or desc match
       2. substring match (text contains target, or vice versa)
       3. resource-id endswith target
 
     All matches are restricted to clickable / focusable / visible nodes when
     possible — falls back to any node if no clickable match exists.
     """
-    base = adb_base()
-
-    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
-        local_xml = fh.name
-    remote_xml = "/sdcard/relay_window_dump.xml"
-    try:
-        dump = subprocess.run(
-            base + ["shell", "uiautomator", "dump", remote_xml],
-            capture_output=True, text=True, timeout=8,
-        )
-        if dump.returncode != 0:
-            logger.warning(f"uiautomator dump failed: {dump.stderr.strip()}")
-            return None
-        pull = subprocess.run(
-            base + ["pull", remote_xml, local_xml],
-            capture_output=True, text=True, timeout=5,
-        )
-        if pull.returncode != 0 or not os.path.getsize(local_xml):
-            logger.warning(f"adb pull failed: {pull.stderr.strip()}")
-            return None
-        try:
-            root = ET.parse(local_xml).getroot()
-        except ET.ParseError as e:
-            logger.warning(f"window dump XML parse error: {e}")
-            return None
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        logger.warning(f"uiautomator path unavailable: {e}")
+    nodes = get_backend().dump_ui_tree(dump_timeout=8, pull_timeout=5)
+    if nodes is None:
+        logger.warning(f"a11y grounding unavailable: UI dump failed for {target!r}")
         return None
-    finally:
-        try:
-            os.unlink(local_xml)
-        except OSError:
-            pass
 
-    nodes = list(root.iter("node"))
-
-    def _bounds_center(node) -> tuple[int, int] | None:
-        m = _BOUNDS_RE.match(node.get("bounds") or "")
-        if not m:
+    def _visible_center(n) -> tuple[int, int] | None:
+        c = n.center  # None already filters absent/zero-area bounds
+        if c is None:
             return None
-        x1, y1, x2, y2 = (int(v) for v in m.groups())
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        # Filter zero-area or off-screen rectangles.
-        if x2 <= x1 or y2 <= y1:
-            return None
+        cx, cy = c
         if cx < 0 or cy < 0 or cx > screen_w or cy > screen_h:
             return None
-        return cx, cy
+        return c
 
     def _candidates(predicate) -> list[tuple[int, tuple[int, int]]]:
         out: list[tuple[int, tuple[int, int]]] = []
         for n in nodes:
             if not predicate(n):
                 continue
-            c = _bounds_center(n)
+            c = _visible_center(n)
             if c is None:
                 continue
             # Prefer clickable / focusable nodes — higher score = better.
             score = 0
-            if (n.get("clickable") or "").lower() == "true":
+            if n.clickable:
                 score += 4
-            if (n.get("focusable") or "").lower() == "true":
+            if n.focusable:
                 score += 2
-            if (n.get("enabled") or "").lower() == "true":
+            if n.enabled:
                 score += 1
             out.append((score, c))
         out.sort(reverse=True)
         return out
 
-    def _attr(n, k):
-        return n.get(k) or ""
-
-    # Tier 1: exact text or content-desc
-    hits = _candidates(
-        lambda n: _attr(n, "text") == target or _attr(n, "content-desc") == target
-    )
+    # Tier 1: exact text or desc
+    hits = _candidates(lambda n: n.text == target or n.desc == target)
     # Tier 2: substring either way
     if not hits:
         hits = _candidates(
-            lambda n: (target in _attr(n, "text") and _attr(n, "text"))
-            or (target in _attr(n, "content-desc") and _attr(n, "content-desc"))
-            or (_attr(n, "text") and _attr(n, "text") in target and len(_attr(n, "text")) > 1)
+            lambda n: (n.text and target in n.text)
+            or (n.desc and target in n.desc)
+            or (n.text and n.text in target and len(n.text) > 1)
         )
     # Tier 3: resource-id endswith
     if not hits:
-        hits = _candidates(
-            lambda n: _attr(n, "resource-id").split("/")[-1] == target
-        )
+        hits = _candidates(lambda n: n.resource_id.split("/")[-1] == target)
     if not hits:
         logger.info(
-            f"uiautomator dump ok ({len(nodes)} nodes) but no match for "
-            f"{target!r}"
+            f"a11y dump ok ({len(nodes)} nodes) but no match for {target!r}"
         )
         return None
     logger.info(
-        f"uiautomator hit for {target!r}: bounds-center={hits[0][1]} "
+        f"a11y hit for {target!r}: bounds-center={hits[0][1]} "
         f"(score={hits[0][0]}, {len(hits)} candidates)"
     )
     return hits[0][1]
@@ -1256,7 +1090,7 @@ class RelayAgent(_MCPAgentBase):
             # 2. Fall back to the VLM only if the text was not in the a11y tree.
             xy = None
             for attempt in range(3):
-                xy = _ground_text_via_uiautomator(p["text"], screen_w, screen_h)
+                xy = _ground_text_via_a11y(p["text"], screen_w, screen_h)
                 if xy is not None:
                     break
                 if attempt < 2:
@@ -1288,7 +1122,7 @@ class RelayAgent(_MCPAgentBase):
             # for a VLM grounding call. These are generic UI words, not a card
             # selector. Falls through to the VLM on miss.
             for cand in p.get("ui_candidates") or []:
-                hit = _ground_text_via_uiautomator(cand, screen_w, screen_h)
+                hit = _ground_text_via_a11y(cand, screen_w, screen_h)
                 if hit is not None:
                     return JSONAction(action_type="click", x=hit[0], y=hit[1]), True, (
                         f"uiautomator {cand!r}"
@@ -1325,7 +1159,7 @@ class RelayAgent(_MCPAgentBase):
                 return JSONAction(action_type="wait"), True, "no text; bare wait"
             if self._wait_text_start_ts is None:
                 self._wait_text_start_ts = time.monotonic()
-            hit = _ground_text_via_uiautomator(target, screen_w, screen_h)
+            hit = _ground_text_via_a11y(target, screen_w, screen_h)
             elapsed_ms = int((time.monotonic() - self._wait_text_start_ts) * 1000)
             if hit is not None:
                 logger.info(
@@ -1679,7 +1513,7 @@ class RelayAgent(_MCPAgentBase):
             probe = p["probe"]
             target = p["target"]
             probe_text = probe.get("text") or probe.get("text_contains")
-            if probe_text and _ground_text_via_uiautomator(
+            if probe_text and _ground_text_via_a11y(
                 probe_text, screen_w, screen_h
             ) is not None:
                 return JSONAction(action_type="wait"), True, (
