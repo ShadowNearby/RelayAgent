@@ -31,7 +31,6 @@ import re
 from typing import Any
 
 from loguru import logger
-from openai import OpenAI
 
 from agents.capability_matrix_router import (
     FoundationNotApplicable,
@@ -279,7 +278,7 @@ class FlowPlanner:
     def __init__(
         self,
         catalog: dict[str, Any],
-        llm: OpenAI,
+        llm: Any,
         model: str,
         *,
         matrix: dict[str, Any] | None = None,

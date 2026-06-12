@@ -1,0 +1,111 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("com.chaquo.python")
+}
+
+// ---------------------------------------------------------------------------
+// Pull the shared Python runtime (agents/) and data assets (manifests/,
+// capability matrix) from the repo root into the build, so the app always
+// ships the same code the host runs. Copy-at-build (not symlink) keeps the
+// packaged set explicit.
+// ---------------------------------------------------------------------------
+val repoRoot = rootProject.layout.projectDirectory.dir("..")
+
+val syncRelayPython by tasks.registering(Sync::class) {
+    from(repoRoot.dir("agents")) {
+        into("agents")
+        exclude("**/__pycache__/**")
+        // Host-only modules: MobileWorld probe (imports mobile_world) and the
+        // adb recorder are never imported on-device.
+        exclude("mw_llm_probe.py")
+    }
+    into(layout.buildDirectory.dir("relayPython"))
+}
+
+val syncRelayAssets by tasks.registering(Sync::class) {
+    from(repoRoot.dir("manifests")) {
+        into("relay/manifests")
+        include("*.yaml")
+        exclude("_generated/**")
+    }
+    from(repoRoot.dir("docs")) {
+        into("relay")
+        include("app_capability_matrix.csv")
+    }
+    into(layout.buildDirectory.dir("relayAssets"))
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncRelayPython, syncRelayAssets)
+}
+
+// Gradle 8.7 strict task validation requires an explicit producer->consumer
+// dependency, not just preBuild ordering: Chaquopy's python-source merge reads
+// build/relayPython and Android's asset merge reads build/relayAssets.
+tasks.matching { it.name.matches(Regex("merge.*PythonSources")) }
+    .configureEach { dependsOn(syncRelayPython) }
+tasks.matching { it.name.matches(Regex("merge.*Assets")) }
+    .configureEach { dependsOn(syncRelayAssets) }
+
+android {
+    namespace = "com.relayagent.app"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.relayagent.app"
+        // minSdk 30 (Android 11): AccessibilityService.takeScreenshot +
+        // ACTION_IME_ENTER need API 30. Target devices are modern flagships.
+        minSdk = 30
+        targetSdk = 34
+        versionCode = 1
+        versionName = "0.1.0"
+        ndk { abiFilters += listOf("arm64-v8a") }
+    }
+
+    sourceSets {
+        getByName("main") {
+            assets.srcDir(layout.buildDirectory.dir("relayAssets"))
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false // Chaquopy + reflection; revisit later
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+}
+
+chaquopy {
+    defaultConfig {
+        // Spike A verifies 3.12 is available in this Chaquopy release;
+        // fall back to "3.11" if not (agents/ code is 3.10+-compatible).
+        version = "3.12"
+        pip {
+            // The full on-device dependency set. No openai, no pydantic —
+            // Phase 0 removed both from the runtime import chain
+            // (agents/llm_client.py + pure-Python JSONAction).
+            install("pyyaml")
+            install("pillow")
+            install("loguru")
+        }
+    }
+    sourceSets {
+        getByName("main") {
+            srcDir("src/main/python")
+            srcDir(layout.buildDirectory.dir("relayPython"))
+        }
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+}

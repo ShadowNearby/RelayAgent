@@ -13,9 +13,9 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from loguru import logger
-from openai import OpenAI
 
 from agents.action_model import JSONAction
+from agents.llm_client import make_llm_client
 
 
 class BaseAgent(ABC):
@@ -56,13 +56,10 @@ class BaseAgent(ABC):
         )
 
     def build_openai_client(self, base_url: str, api_key: str) -> None:
-        """Build the OpenAI client."""
-        self.openai_client = OpenAI(
-            base_url=base_url,
-            api_key=api_key if api_key else "empty",
-            timeout=120.0,
-        )
-        logger.debug(f"built the OpenAI client with base_url={base_url}")
+        """Build the chat-completions client (OpenAI SDK on host, stdlib HTTP
+        shim when the SDK is unavailable — see agents.llm_client)."""
+        self.openai_client = make_llm_client(base_url, api_key, timeout=120.0)
+        logger.debug(f"built the LLM client with base_url={base_url}")
 
     def _wrap_stream_with_usage_logging(self, stream: Any) -> Any:
         """Wrap a streaming response to log usage when the stream completes."""
