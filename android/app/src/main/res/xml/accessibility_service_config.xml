@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Capabilities mirror what the runtime needs:
+     - retrieve window content + report view ids -> A11yXmlSerializer
+       (uiautomator-format dumps for grounding / reply scrape / text-hash)
+     - perform gestures -> tap/swipe/long-press injection
+     - take screenshot -> degraded-mode capture when MediaProjection is
+       revoked (rate-limited; primary capture is the projection)
+     canRequestFilterKeyEvents stays off: we never intercept user input. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:canTakeScreenshot="true"
+    android:notificationTimeout="100"
+    android:description="@string/a11y_service_description" />
