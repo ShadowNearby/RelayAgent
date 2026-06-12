@@ -133,14 +133,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _rotate_traj_dir()
 
-    from agents.native_runtime import NativeEnv, activate_adb_keyboard, reset_ime, run_task
+    from agents.device import get_backend
+    from agents.native_runtime import NativeEnv, run_task
 
+    backend = get_backend()
     step_wait = (
         args.step_wait_time
         if args.step_wait_time is not None
         else float(os.getenv("RELAY_STEP_WAIT", "0.5"))
     )
-    env = NativeEnv(step_wait_time=step_wait)
+    env = NativeEnv(step_wait_time=step_wait, backend=backend)
 
     agent_cls = _load_agent_class(agent_file)
     agent = agent_cls(model_name=model, llm_base_url=base_url, api_key=api_key, env=env)
@@ -151,8 +153,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         file=sys.stderr,
     )
 
-    if not activate_adb_keyboard():
-        print("AdbKeyboard not active; input_text steps may fail.", file=sys.stderr)
+    if not backend.setup_input_channel():
+        print("Input channel not active; input_text steps may fail.", file=sys.stderr)
 
     start = time.monotonic()
     summary: dict = {}
@@ -163,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if callable(finalize):
             finalize()
         if not args.keep_ime:
-            reset_ime()
+            backend.teardown_input_channel()
         # Always stamp the agent's accumulated token total onto the summary —
         # even when run_task raised mid-leg, the agent has been counting usage,
         # and a bare {} summary would silently drop it from the run_plan token

@@ -1,29 +1,26 @@
 """Native execution substrate for RelayAgent.
 
-Drives the runtime loop with direct `adb` calls and an in-process
-`obs → predict → execute → obs` loop — no server, no per-action HTTP
-round-trip.
+Drives the runtime loop through a `DeviceBackend` (Android: direct adb) in
+an in-process `obs → predict → execute → obs` loop — no server, no
+per-action HTTP round-trip.
 
-- The agent (`agents/relay_agent.py`) does all device I/O via
-  `agents/_adb.py` and raw `uiautomator`/`subprocess`. So the env object
-  below exists only to serve the *runner loop* (initial screenshot +
-  executing the actions predict returns).
-- The action→adb mapping covers swipe geometry, scroll-direction reversal,
-  the `ADB_INPUT_B64` keyboard broadcast, and the `skip_screenshot`
-  last-frame reuse.
+- The agent (`agents/relay_agent.py`) does its own device I/O via the same
+  backend / the `agents/_adb.py` shim. So the env object below exists only
+  to serve the *runner loop* (initial screenshot + executing the actions
+  predict returns).
+- The action→gesture mapping covers swipe geometry, scroll-direction
+  reversal, and the `skip_screenshot` last-frame reuse; concrete device
+  commands (tap/swipe/keyboard) live in the backend.
 - The agent is the sole writer of `wall_clock.json` (anchored at its first
   predict via `_begin_task_once`, written at process exit).
-- Screenshots pipe `exec-out screencap` straight to PIL.
 
-Device prerequisite done here: activate the AdbKeyboard IME so
-`ADB_INPUT_B64` is received.
+Device prerequisite done here: `setup_input_channel()` (Android: activate
+the AdbKeyboard IME so the `ADB_INPUT_B64` broadcast is received).
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,8 +28,7 @@ from typing import Any
 
 from loguru import logger
 
-from agents._adb import adb_base, screencap
-from agents._adb import _get_screen_size  # type: ignore[attr-defined]
+from agents.device import DeviceBackend, Key, get_backend
 
 from agents.action_model import (
     ANSWER,
@@ -56,7 +52,6 @@ from agents.action_model import (
     JSONAction,
 )
 
-_ADB_KEYBOARD_IME = "com.android.adbkeyboard/.AdbIME"
 _TERMINAL_TYPES = frozenset({FINISHED, UNKNOWN, ENV_FAIL})
 
 
@@ -70,46 +65,17 @@ class Observation:
 
 
 # ---------------------------------------------------------------------------
-# Device prerequisite: AdbKeyboard IME
+# Device prerequisite: input channel (Android: AdbKeyboard IME)
 # ---------------------------------------------------------------------------
-def _adb(args: list[str], *, timeout: float = 30.0) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        adb_base() + args, check=False, capture_output=True, text=True, timeout=timeout
-    )
-
-
 def activate_adb_keyboard() -> bool:
-    """Enable + set AdbKeyboard as the active IME so input_text's
-    `am broadcast -a ADB_INPUT_B64` is received. Returns True on success.
-
-    We do NOT install it here —
-    the device already has com.android.adbkeyboard (verified); if it's missing,
-    surface that loudly rather than silently degrading (per the
-    surface-fallback-failures rule)."""
-    installed = _adb(["shell", "pm", "list", "packages", "com.android.adbkeyboard"])
-    if "com.android.adbkeyboard" not in (installed.stdout or ""):
-        logger.warning(
-            "AdbKeyboard (com.android.adbkeyboard) is NOT installed; input_text "
-            "via ADB_INPUT_B64 will not work. Install ADBKeyboard.apk first."
-        )
-        return False
-    _adb(["shell", "ime", "enable", _ADB_KEYBOARD_IME])
-    res = _adb(["shell", "ime", "set", _ADB_KEYBOARD_IME])
-    active = _adb(["shell", "settings", "get", "secure", "default_input_method"])
-    ok = _ADB_KEYBOARD_IME.split("/")[0] in (active.stdout or "")
-    if ok:
-        logger.info(f"AdbKeyboard IME active: {(active.stdout or '').strip()}")
-    else:
-        logger.warning(
-            f"ime set rc={res.returncode}; active IME still "
-            f"{(active.stdout or '').strip()!r}"
-        )
-    return ok
+    """Legacy name — delegates to the default backend's input-channel setup
+    (Android: enable + set the AdbKeyboard IME)."""
+    return get_backend().setup_input_channel()
 
 
 def reset_ime() -> None:
-    """Restore the device's default IME."""
-    _adb(["shell", "ime", "reset"])
+    """Legacy name — restore the device's default input state."""
+    get_backend().teardown_input_channel()
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +85,10 @@ class NativeEnv:
     """The device interface the runner loop uses: get_observation /
     get_screenshot / execute_action, plus an empty `tools`."""
 
-    def __init__(self, step_wait_time: float = 0.5) -> None:
+    def __init__(
+        self, step_wait_time: float = 0.5, backend: DeviceBackend | None = None
+    ) -> None:
+        self.backend = backend or get_backend()
         self.step_wait_time = step_wait_time
         self.tools: list[dict] = []
         self._last_screenshot: Any = None
@@ -132,7 +101,7 @@ class NativeEnv:
             time.sleep(self.step_wait_time)
         img = None
         for attempt in range(3):
-            img = screencap()
+            img = self.backend.screencap()
             if img is not None:
                 break
             logger.warning(f"screencap returned None (attempt {attempt + 1}/3); retrying")
@@ -155,8 +124,6 @@ class NativeEnv:
         at = action.action_type
         try:
             self._dispatch(action)
-        except subprocess.TimeoutExpired:
-            logger.warning(f"adb timed out executing {at}")
         except Exception as e:  # never let one bad action kill the loop
             logger.warning(f"error executing {at}: {e}")
 
@@ -176,30 +143,31 @@ class NativeEnv:
     def _dispatch(self, action: JSONAction) -> None:
         at = action.action_type
         if at == CLICK:
-            self._tap(int(action.x), int(action.y))
+            self.backend.tap(int(action.x), int(action.y))
         elif at == SWIPE:
             self._swipe(action.x, action.y, action.direction or "up")
         elif at == INPUT_TEXT:
             text = action.text or ""
             if text != "":
-                self._input_text(text)
+                self.backend.input_text(text)
             else:
                 logger.warning("input_text empty, skipping")
         elif at == NAVIGATE_BACK:
-            self._keyevent("KEYCODE_BACK")
+            self.backend.key(Key.BACK)
         elif at == NAVIGATE_HOME:
-            self._keyevent("KEYCODE_HOME")
+            self.backend.key(Key.HOME)
         elif at == KEYBOARD_ENTER:
-            self._keyevent("KEYCODE_ENTER")
+            self.backend.key(Key.ENTER)
         elif at == LONG_PRESS:
-            x, y = int(action.x), int(action.y)
-            _adb(["shell", "input", "swipe", str(x), str(y), str(x), str(y), "1000"])
+            self.backend.long_press(int(action.x), int(action.y))
         elif at == DOUBLE_TAP:
-            self._tap(int(action.x), int(action.y))
-            self._tap(int(action.x), int(action.y))
+            self.backend.tap(int(action.x), int(action.y))
+            self.backend.tap(int(action.x), int(action.y))
         elif at == DRAG:
-            _adb(["shell", "input", "swipe", str(int(action.start_x)), str(int(action.start_y)),
-                  str(int(action.end_x)), str(int(action.end_y)), "400"])
+            self.backend.swipe_gesture(
+                int(action.start_x), int(action.start_y),
+                int(action.end_x), int(action.end_y),
+            )
         elif at == SCROLL:
             # scroll maps to swipe with REVERSED vertical direction (scroll up =
             # content moves up = swipe down-ward visually).
@@ -217,22 +185,9 @@ class NativeEnv:
         else:
             logger.warning(f"native env: unhandled action_type={at!r}")
 
-    # -- adb primitives ----------------------------------------------------
-    def _tap(self, x: int, y: int) -> None:
-        _adb(["shell", "input", "tap", str(x), str(y)])
-
-    def _keyevent(self, code: str) -> None:
-        _adb(["shell", "input", "keyevent", code])
-
-    def _input_text(self, text: str) -> None:
-        # AdbKeyboard ADB_INPUT_B64 broadcast. Clean base64 (no surrounding
-        # b'...' quotes — we pass an argv list so the keyboard receives the
-        # decoded bytes directly).
-        b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
-        _adb(["shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", b64])
-
+    # -- direction → gesture geometry (platform-neutral) --------------------
     def _swipe(self, x: int | None, y: int | None, direction: str) -> None:
-        w, h = _get_screen_size()
+        w, h = self.backend.screen_size()
         if x is None:
             x = w // 2
         if y is None:
@@ -249,18 +204,17 @@ class NativeEnv:
         else:
             logger.warning(f"invalid swipe direction {direction!r}")
             return
-        _adb(["shell", "input", "swipe", str(x), str(y), str(x + dx), str(y + dy), "400"])
+        self.backend.swipe_gesture(x, y, x + dx, y + dy)
 
     def _open_app(self, app_name: str | None) -> None:
         # In the scripted single-app path open_app is skipped (the agent owns
-        # cold-launch). This defensive branch only fires if a plan emits it: a
-        # package id (has a dot) is monkey-launched; a bare label can't be
-        # resolved to a package here, so warn.
+        # cold-launch). This defensive branch only fires if a plan emits it: an
+        # app id (has a dot) is launched; a bare label can't be resolved to an
+        # app id here, so warn.
         if app_name and "." in app_name:
-            _adb(["shell", "monkey", "-p", app_name, "-c",
-                  "android.intent.category.LAUNCHER", "1"])
+            self.backend.launch(app_name)
         else:
-            logger.warning(f"open_app({app_name!r}): not a package id; cannot resolve label")
+            logger.warning(f"open_app({app_name!r}): not an app id; cannot resolve label")
 
 
 # ---------------------------------------------------------------------------
