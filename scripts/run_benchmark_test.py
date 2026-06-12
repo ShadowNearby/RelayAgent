@@ -96,7 +96,13 @@ if str(SCRIPTS_DIR) not in sys.path:
 from openai import OpenAI  # noqa: E402
 
 from agents import leg_judge  # noqa: E402
-from agents._adb import adb_base, force_stop, kill_all_apps  # noqa: E402
+from agents._adb import (  # noqa: E402
+    force_stop,
+    foreground_package,
+    keyevent,
+    kill_all_apps,
+    reset_airplane_mode,
+)
 from agents._adb import screencap as adb_screencap  # noqa: E402
 from agents.runtime_config import ensure_llm_env  # noqa: E402
 
@@ -498,24 +504,6 @@ def _handoff_stop_hint(task: dict[str, Any]) -> str:
     return "重要：" + _STOP_HINTS.get(task.get("category"), generic)
 
 
-def _foreground_package() -> str | None:
-    """Best-effort: the package of the app currently in the foreground (adb)."""
-    import re
-    try:
-        res = subprocess.run(
-            adb_base() + ["shell", "dumpsys", "activity", "activities"],
-            check=False, capture_output=True, text=True, timeout=10,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    # `ResumedActivity` / `mResumedActivity` line carries `pkg/.Activity`.
-    for pat in (r"ResumedActivity.*?\s([\w.]+)/", r"mCurrentFocus.*?\s([\w.]+)/"):
-        m = re.search(pat, res.stdout)
-        if m:
-            return m.group(1)
-    return None
-
-
 def _reset_device() -> None:
     """Clean the device between A/B systems so neither inherits the other's
     leftover screen (a system that runs *after* another would otherwise read the
@@ -525,22 +513,15 @@ def _reset_device() -> None:
     press HOME so the next system starts from the launcher and must navigate
     itself. Best-effort: failures only warn, never abort the run."""
     try:
-        pkg = _foreground_package()
+        pkg = foreground_package()
         if pkg and pkg not in ("com.android.systemui", "com.android.launcher",
                                "com.google.android.apps.nexuslauncher"):
             force_stop(pkg)
-        subprocess.run(adb_base() + ["shell", "input", "keyevent", "KEYCODE_HOME"],
-                       check=False, capture_output=True, timeout=10)
+        keyevent("KEYCODE_HOME")
         # a task may leave airplane mode ON (e.g. OpenFlightModeTask), which cuts
         # network for every task after it — turn it back off here
-        out = subprocess.run(adb_base() + ["shell", "settings", "get", "global",
-                                           "airplane_mode_on"],
-                             check=False, capture_output=True, timeout=10)
-        if out.stdout.decode(errors="replace").strip() == "1":
-            print("      [reset] airplane mode left ON — disabling", flush=True)
-            subprocess.run(adb_base() + ["shell", "cmd", "connectivity",
-                                         "airplane-mode", "disable"],
-                           check=False, capture_output=True, timeout=10)
+        if reset_airplane_mode():
+            print("      [reset] airplane mode left ON — disabled", flush=True)
     except (subprocess.TimeoutExpired, OSError) as exc:  # pragma: no cover
         print(f"      [reset] device reset skipped: {exc}", flush=True)
 

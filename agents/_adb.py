@@ -11,6 +11,7 @@ and is honored by every helper here.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 
@@ -22,6 +23,100 @@ _SERIAL_ENV = "RELAY_ANDROID_SERIAL"
 def adb_base() -> list[str]:
     serial = os.getenv(_SERIAL_ENV)
     return ["adb"] + (["-s", serial] if serial else [])
+
+
+def tap(x: int, y: int, *, timeout: float = 5.0) -> bool:
+    """Tap at pixel (x, y). Returns False (with a warning) on failure."""
+    try:
+        res = subprocess.run(
+            adb_base() + ["shell", "input", "tap", str(int(x)), str(int(y))],
+            check=False, capture_output=True, text=True, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning(f"tap ({x},{y}) failed: {exc}")
+        return False
+    if res.returncode != 0:
+        logger.warning(f"tap ({x},{y}) rc={res.returncode}: "
+                       f"{(res.stderr or res.stdout).strip()}")
+        return False
+    return True
+
+
+def keyevent(code: str, *, timeout: float = 10.0) -> None:
+    """Send a KEYCODE_* keyevent. Best-effort: failures only warn."""
+    try:
+        res = subprocess.run(
+            adb_base() + ["shell", "input", "keyevent", code],
+            check=False, capture_output=True, text=True, timeout=timeout,
+        )
+        if res.returncode != 0:
+            logger.warning(f"keyevent {code} rc={res.returncode}: "
+                           f"{(res.stderr or res.stdout).strip()}")
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning(f"keyevent {code} failed: {exc}")
+
+
+_FOCUS_PKG_RE = re.compile(r"\b([\w.]+)/[\w.$]+\b")
+
+
+def foreground_package(*, timeout: float = 5.0) -> str | None:
+    """Return the foreground app's package id, or None on any failure.
+
+    Two probes, cheapest first (merged from the previously duplicated
+    implementations in relay_agent / run_benchmark_test):
+      1. `dumpsys window` — mCurrentFocus / mFocusedApp lines (~100-300ms).
+         NOTE: `dumpsys window windows` emits nothing on some builds
+         (observed on this lab's pixel-class device); the bare subcommand
+         is portable.
+      2. `dumpsys activity activities` — (m)ResumedActivity line. Slower but
+         catches builds where the window dump carries no focus line.
+    """
+    try:
+        r = subprocess.run(
+            adb_base() + ["shell", "dumpsys", "window"],
+            check=False, capture_output=True, text=True, timeout=timeout,
+        )
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if "mCurrentFocus" not in line and "mFocusedApp" not in line:
+                    continue
+                m = _FOCUS_PKG_RE.search(line)
+                if m:
+                    return m.group(1)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    try:
+        r = subprocess.run(
+            adb_base() + ["shell", "dumpsys", "activity", "activities"],
+            check=False, capture_output=True, text=True, timeout=max(timeout, 10.0),
+        )
+        if r.returncode == 0:
+            m = re.search(r"ResumedActivity.*?\s([\w.]+)/", r.stdout)
+            if m:
+                return m.group(1)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
+def reset_airplane_mode(*, timeout: float = 10.0) -> bool:
+    """Turn airplane mode OFF if a previous task left it ON. Returns True when
+    it was on and we disabled it. Best-effort: failures only warn."""
+    try:
+        out = subprocess.run(
+            adb_base() + ["shell", "settings", "get", "global", "airplane_mode_on"],
+            check=False, capture_output=True, text=True, timeout=timeout,
+        )
+        if (out.stdout or "").strip() != "1":
+            return False
+        subprocess.run(
+            adb_base() + ["shell", "cmd", "connectivity", "airplane-mode", "disable"],
+            check=False, capture_output=True, timeout=timeout,
+        )
+        return True
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning(f"reset_airplane_mode failed: {exc}")
+        return False
 
 
 def force_stop(package: str, *, timeout: float = 10.0) -> None:
@@ -61,8 +156,7 @@ def kill_all_apps(*, timeout: float = 25.0) -> list[str]:
         targets = []
     for pkg in targets:
         force_stop(pkg)
-    subprocess.run(base + ["shell", "input", "keyevent", "KEYCODE_HOME"],
-                   check=False, capture_output=True, timeout=10)
+    keyevent("KEYCODE_HOME")
     logger.info(f"kill_all_apps: force-stopped {len(targets)} running app(s): {targets}")
     return targets
 
