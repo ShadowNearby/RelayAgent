@@ -44,6 +44,7 @@ from loguru import logger
 
 from agents._adb import screencap
 from agents.action_model import ANSWER, ASK_USER, FINISHED
+from agents.interaction import get_interaction
 from agents.leg_judge import LOADING, final_frames, judge_leg
 from agents.llm_client import make_llm_client
 from agents.llm_retry import create_with_retry
@@ -272,9 +273,17 @@ class FlowRunner:
     def run(self) -> dict[str, Any]:
         logger.info(f"FlowRunner start: {self.flow_path.name}  inputs={self.bb}")
         try:
+            interaction = get_interaction()
             for step in self.flow["steps"]:
+                if interaction.should_stop():
+                    logger.warning("stop requested via interaction provider; ending flow early")
+                    break
                 kind = step.get("type") or "app_step"
                 logger.info(f"--- step {step['id']!r} ({kind}) ---")
+                interaction.emit_status(
+                    {"event": "leg_start", "id": step["id"], "kind": kind,
+                     "app": step.get("app")}
+                )
                 if kind == "app_step":
                     self._run_app_step(step)
                 elif kind == "ask_user":
@@ -283,6 +292,7 @@ class FlowRunner:
                     self._run_mobileworld_step(step)
                 else:
                     raise ValueError(f"Unknown step type: {kind}")
+                interaction.emit_status({"event": "leg_end", "id": step["id"]})
                 logger.info(f"blackboard after {step['id']!r}: {_redact(self.bb)}")
         finally:
             # Tear down a MobileWorld server WE started (no-op if none / reused).
@@ -682,6 +692,7 @@ class FlowRunner:
     def _run_ask_user(self, step: dict) -> None:
         header = render(step.get("prompt_header", ""), self.bb)
         bind = step["bind"]
+        interaction = get_interaction()
 
         if "select_from" in step:
             arr_key = step["select_from"]
@@ -689,25 +700,18 @@ class FlowRunner:
             if not items:
                 raise RuntimeError(f"ask_user {step['id']!r}: nothing in {arr_key!r} to choose from")
             label_tpl = step.get("item_label", "{name}")
-            print(header)
-            for i, it in enumerate(items, 1):
-                print(f"  {i}. {render(label_tpl, it)}")
-            print(f"  (1-{len(items)}, or empty to pick 1)", flush=True)
-            try:
-                raw = input("> ").strip()
-            except EOFError:
-                raw = ""
+            lines = [header]
+            lines += [f"  {i}. {render(label_tpl, it)}" for i, it in enumerate(items, 1)]
+            lines.append(f"  (1-{len(items)}, or empty to pick 1)")
+            # ask_user → None (EOF / take-over) keeps today's empty-default → pick 1.
+            raw = (interaction.ask_user("\n".join(lines)) or "").strip()
             chosen = _resolve_choice(raw, items, label_tpl)
             logger.info(f"user chose: {chosen}")
             self.bb[bind] = chosen
             return
 
         # plain freeform input
-        print(header, flush=True)
-        try:
-            raw = input("> ").strip()
-        except EOFError:
-            raw = ""
+        raw = (interaction.ask_user(header) or "").strip()
         self.bb[bind] = raw
 
     # ----------------------------------------------------------- extract

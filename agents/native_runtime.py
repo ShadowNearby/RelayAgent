@@ -33,6 +33,7 @@ from loguru import logger
 
 from agents._adb import adb_base, screencap
 from agents._adb import _get_screen_size  # type: ignore[attr-defined]
+from agents.interaction import get_interaction
 
 from agents.action_model import (
     ANSWER,
@@ -425,7 +426,11 @@ def run_task(goal: str, agent: Any, env: NativeEnv, max_step: int = -1) -> dict:
     last_action_type = UNKNOWN
     last_goal_status = None
 
+    interaction = get_interaction()
     while True:
+        if interaction.should_stop():
+            logger.info("stop requested via interaction provider; ending task")
+            break
         step += 1
         prediction, action = agent.predict(
             {
@@ -442,6 +447,10 @@ def run_task(goal: str, agent: Any, env: NativeEnv, max_step: int = -1) -> dict:
         last_action_type = at
         last_goal_status = action.goal_status
         logger.info(f"[step {step}] {at} :: {prediction}")
+        interaction.emit_status(
+            {"event": "step", "step": step, "action_type": at,
+             "thought": str(prediction)}
+        )
 
         # Log the frame the agent acted on + the action/click position. obs is
         # the pre-action screenshot, so the action's (x, y) reference it.
@@ -452,12 +461,12 @@ def run_task(goal: str, agent: Any, env: NativeEnv, max_step: int = -1) -> dict:
             break
         if at == ASK_USER:
             # Handoff endpoint. Under batch runs stdin is redirected; an EOF
-            # here is the documented SUCCESS terminal, not a failure.
+            # (ask_user → None) is the documented SUCCESS terminal, not a
+            # failure. On Android the overlay's take-over button maps to None.
             question = action.text or "The agent needs your input"
-            try:
-                user_response = input(f"\n🤖 {question}\n> ")
-            except EOFError:
-                logger.info("ask_user got EOF (stdin redirected) — handoff terminal, ending")
+            user_response = interaction.ask_user(f"\n🤖 {question}")
+            if user_response is None:
+                logger.info("ask_user got EOF/take-over — handoff terminal, ending")
                 break
             shot = env.get_screenshot(wait_to_stabilize=True)
             obs = Observation(screenshot=shot, ask_user_response=user_response)
