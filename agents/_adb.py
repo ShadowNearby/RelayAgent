@@ -1,289 +1,74 @@
-"""Shared ADB helpers — cold-launch, force-stop, base command builder.
+"""Legacy module-level shims over the default DeviceBackend.
 
-Cold-launch policy (see CLAUDE.md / feedback_cold_launch_always.md): every
-app open MUST be preceded by force-stop so the first observation is the
-app's clean home surface — not a stale modal / chat thread / session sheet
-from the previous run.
+The adb implementations moved to `agents/device/android.py` (AndroidBackend);
+these same-named functions delegate to `agents.device.get_backend()` so the
+existing import surface (`from agents._adb import screencap, ...`) keeps
+working unchanged while call sites migrate. New code should hold a backend
+instance instead:
 
-`RELAY_ANDROID_SERIAL` selects a specific device in multi-device setups
-and is honored by every helper here.
+    from agents.device import get_backend
+    backend = get_backend()
+
+`RELAY_ANDROID_SERIAL` is honored by the factory (read once at first use —
+set it before the first device call, as every entry-point script does).
 """
 from __future__ import annotations
 
-import os
-import re
-import subprocess
-import time
+from typing import Any
 
-from loguru import logger
-
-_SERIAL_ENV = "RELAY_ANDROID_SERIAL"
+from agents.device import get_backend
 
 
 def adb_base() -> list[str]:
-    serial = os.getenv(_SERIAL_ENV)
-    return ["adb"] + (["-s", serial] if serial else [])
+    return get_backend().adb_base()  # type: ignore[attr-defined]  # Android-only
 
 
 def tap(x: int, y: int, *, timeout: float = 5.0) -> bool:
-    """Tap at pixel (x, y). Returns False (with a warning) on failure."""
-    try:
-        res = subprocess.run(
-            adb_base() + ["shell", "input", "tap", str(int(x)), str(int(y))],
-            check=False, capture_output=True, text=True, timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning(f"tap ({x},{y}) failed: {exc}")
-        return False
-    if res.returncode != 0:
-        logger.warning(f"tap ({x},{y}) rc={res.returncode}: "
-                       f"{(res.stderr or res.stdout).strip()}")
-        return False
-    return True
+    return get_backend().tap(x, y, timeout=timeout)
 
 
 def keyevent(code: str, *, timeout: float = 10.0) -> None:
-    """Send a KEYCODE_* keyevent. Best-effort: failures only warn."""
-    try:
-        res = subprocess.run(
-            adb_base() + ["shell", "input", "keyevent", code],
-            check=False, capture_output=True, text=True, timeout=timeout,
-        )
-        if res.returncode != 0:
-            logger.warning(f"keyevent {code} rc={res.returncode}: "
-                           f"{(res.stderr or res.stdout).strip()}")
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning(f"keyevent {code} failed: {exc}")
-
-
-_FOCUS_PKG_RE = re.compile(r"\b([\w.]+)/[\w.$]+\b")
+    get_backend().keyevent(code, timeout=timeout)  # type: ignore[attr-defined]  # Android-only
 
 
 def foreground_package(*, timeout: float = 5.0) -> str | None:
-    """Return the foreground app's package id, or None on any failure.
-
-    Two probes, cheapest first (merged from the previously duplicated
-    implementations in relay_agent / run_benchmark_test):
-      1. `dumpsys window` — mCurrentFocus / mFocusedApp lines (~100-300ms).
-         NOTE: `dumpsys window windows` emits nothing on some builds
-         (observed on this lab's pixel-class device); the bare subcommand
-         is portable.
-      2. `dumpsys activity activities` — (m)ResumedActivity line. Slower but
-         catches builds where the window dump carries no focus line.
-    """
-    try:
-        r = subprocess.run(
-            adb_base() + ["shell", "dumpsys", "window"],
-            check=False, capture_output=True, text=True, timeout=timeout,
-        )
-        if r.returncode == 0:
-            for line in r.stdout.splitlines():
-                if "mCurrentFocus" not in line and "mFocusedApp" not in line:
-                    continue
-                m = _FOCUS_PKG_RE.search(line)
-                if m:
-                    return m.group(1)
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-    try:
-        r = subprocess.run(
-            adb_base() + ["shell", "dumpsys", "activity", "activities"],
-            check=False, capture_output=True, text=True, timeout=max(timeout, 10.0),
-        )
-        if r.returncode == 0:
-            m = re.search(r"ResumedActivity.*?\s([\w.]+)/", r.stdout)
-            if m:
-                return m.group(1)
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-    return None
+    return get_backend().foreground_app(timeout=timeout)
 
 
 def reset_airplane_mode(*, timeout: float = 10.0) -> bool:
-    """Turn airplane mode OFF if a previous task left it ON. Returns True when
-    it was on and we disabled it. Best-effort: failures only warn."""
-    try:
-        out = subprocess.run(
-            adb_base() + ["shell", "settings", "get", "global", "airplane_mode_on"],
-            check=False, capture_output=True, text=True, timeout=timeout,
-        )
-        if (out.stdout or "").strip() != "1":
-            return False
-        subprocess.run(
-            adb_base() + ["shell", "cmd", "connectivity", "airplane-mode", "disable"],
-            check=False, capture_output=True, timeout=timeout,
-        )
-        return True
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning(f"reset_airplane_mode failed: {exc}")
-        return False
+    return get_backend().reset_airplane_mode(timeout=timeout)  # type: ignore[attr-defined]  # Android-only
 
 
 def force_stop(package: str, *, timeout: float = 10.0) -> None:
-    res = subprocess.run(
-        adb_base() + ["shell", "am", "force-stop", package],
-        check=False, capture_output=True, text=True, timeout=timeout,
-    )
-    if res.returncode != 0:
-        logger.warning(
-            f"force-stop {package} rc={res.returncode}: "
-            f"{(res.stderr or res.stdout).strip()}"
-        )
+    get_backend().force_stop(package, timeout=timeout)
 
 
 def kill_all_apps(*, timeout: float = 25.0) -> list[str]:
-    """Force-stop every *running* third-party app, then return to the launcher.
-
-    Used as a between-task hard reset so no app (chat thread, half-finished
-    booking, logged-in session sheet) survives into the next task. We force-stop
-    only third-party packages (`pm list packages -3`) that actually have a live
-    process (`ps -A`), so we skip the ~hundreds of installed-but-idle apps and
-    never touch system packages. Best-effort: per-app failures only warn.
-    """
-    base = adb_base()
-    try:
-        third = subprocess.run(base + ["shell", "pm", "list", "packages", "-3"],
-                               check=False, capture_output=True, text=True, timeout=timeout)
-        installed = {ln.split("package:", 1)[1].strip()
-                     for ln in third.stdout.splitlines() if ln.startswith("package:")}
-        procs = subprocess.run(base + ["shell", "ps", "-A", "-o", "NAME"],
-                               check=False, capture_output=True, text=True, timeout=timeout)
-        # process name may carry a `:service` suffix — the package is the prefix
-        running = {ln.strip().split(":", 1)[0] for ln in procs.stdout.splitlines()}
-        targets = sorted(installed & running)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning(f"kill_all_apps enumerate failed: {exc}")
-        targets = []
-    for pkg in targets:
-        force_stop(pkg)
-    keyevent("KEYCODE_HOME")
-    logger.info(f"kill_all_apps: force-stopped {len(targets)} running app(s): {targets}")
-    return targets
+    return get_backend().kill_all_apps(timeout=timeout)
 
 
-def screencap(timeout: float = 5.0):
-    """Grab a fresh device screenshot as a PIL.Image (or None on failure).
-
-    Used when RELAY_SKIP_STEP_SCREENSHOT is on and a step needs vision after
-    all (tap_text / nm_ground_tap VLM fallback): the incoming observation
-    may be a reused stale frame, so we capture our own current frame here.
-    """
-    import io
-
-    from PIL import Image
-
-    try:
-        res = subprocess.run(
-            adb_base() + ["exec-out", "screencap", "-p"],
-            check=False, capture_output=True, timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("screencap timed out")
-        return None
-    if res.returncode != 0 or not res.stdout:
-        logger.warning(
-            f"screencap rc={res.returncode}: {(res.stderr or b'').decode(errors='replace').strip()}"
-        )
-        return None
-    try:
-        return Image.open(io.BytesIO(res.stdout)).convert("RGB")
-    except Exception as e:  # pragma: no cover — decode guard
-        logger.warning(f"screencap decode failed: {e}")
-        return None
-
-
-_screen_size: tuple[int, int] | None = None
+def screencap(timeout: float = 5.0) -> Any | None:
+    return get_backend().screencap(timeout=timeout)
 
 
 def _get_screen_size(timeout: float = 5.0) -> tuple[int, int]:
-    global _screen_size
-    if _screen_size is not None:
-        return _screen_size
-    res = subprocess.run(
-        adb_base() + ["shell", "wm", "size"],
-        check=False, capture_output=True, text=True, timeout=timeout,
-    )
-    # Output like: "Physical size: 1080x2400" (and maybe "Override size: ...")
-    w = h = 0
-    for line in (res.stdout or "").splitlines():
-        if "size:" in line and "x" in line:
-            try:
-                wh = line.split(":", 1)[1].strip().split("x")
-                w, h = int(wh[0]), int(wh[1])
-            except (ValueError, IndexError):
-                continue
-    if w == 0 or h == 0:
-        # Fallback to a common phone resolution if parsing fails.
-        w, h = 1080, 2400
-        logger.warning(f"wm size parse failed, fallback to {w}x{h}")
-    _screen_size = (w, h)
-    return _screen_size
+    return get_backend().screen_size(timeout=timeout)
 
 
-def swipe_down(
-    ratio: float = 0.5,
-    *,
-    duration_ms: int = 300,
-    timeout: float = 5.0,
-) -> None:
-    """Finger-up swipe — pushes current content UP off screen, revealing
-    content BELOW the current viewport. Used by wait_for_reply capture_full
-    to walk forward through a long agent reply (e.g. 小红书 点点) whose
-    visible portion is the start; subsequent chunks live below.
-
-    `ratio` is the vertical travel distance as a fraction of screen height
-    (clamped to [0.1, 0.5]). Overridable per-call by env
-    `RELAY_CAPTURE_SCROLL_RATIO`.
-    """
-    env = os.getenv("RELAY_CAPTURE_SCROLL_RATIO")
-    if env:
-        try:
-            ratio = float(env)
-        except ValueError:
-            logger.warning(f"Invalid RELAY_CAPTURE_SCROLL_RATIO={env!r}, using {ratio}")
-    ratio = max(0.1, min(0.5, ratio))
-    w, h = _get_screen_size()
-    x = w // 2
-    travel = int(h * ratio)
-    margin = int(h * 0.2)
-    y_start = h - margin
-    y_end = max(margin, y_start - travel)
-    subprocess.run(
-        adb_base() + [
-            "shell", "input", "swipe",
-            str(x), str(y_start), str(x), str(y_end), str(duration_ms),
-        ],
-        check=False, capture_output=True, text=True, timeout=timeout,
-    )
+def swipe_down(ratio: float = 0.5, *, duration_ms: int = 300, timeout: float = 5.0) -> None:
+    get_backend().swipe_down(ratio, duration_ms=duration_ms, timeout=timeout)
 
 
-def cold_launch(
-    package: str,
-    *,
-    settle_seconds: float = 1.0,
-    timeout: float = 10.0,
-) -> None:
-    """Force-stop + monkey LAUNCHER + settle. Raises on launch failure.
+def cold_launch(package: str, *, settle_seconds: float = 1.0, timeout: float = 10.0) -> None:
+    get_backend().cold_launch(package, settle_seconds=settle_seconds, timeout=timeout)
 
-    `settle_seconds` defaults to 1.0. Our target apps have no splash *ad*, but
-    most still show a brief brand splash (logo page) for ~0.5-1.0s after
-    monkey LAUNCHER — measured on 千问: 0.5s catches the logo page, the chat
-    home is fully rendered by 1.0s. 1.0s clears the brand splash without the
-    wasted 2.5s. If an app you add DOES show a splash *ad* (skippable, longer),
-    bump settle_seconds for that call site rather than re-globalizing the wait.
-    """
-    logger.info(f"cold-launching {package} (force-stop + monkey LAUNCHER) ...")
-    force_stop(package, timeout=timeout)
-    res = subprocess.run(
-        adb_base() + [
-            "shell", "monkey", "-p", package,
-            "-c", "android.intent.category.LAUNCHER", "1",
-        ],
-        check=False, capture_output=True, text=True, timeout=timeout,
-    )
-    if res.returncode != 0 or "No activities found" in (res.stdout + res.stderr):
-        raise RuntimeError(
-            f"Failed to launch {package} via adb monkey. "
-            f"stdout={res.stdout.strip()!r} stderr={res.stderr.strip()!r}"
-        )
-    time.sleep(settle_seconds)
+
+def dump_ui_tree(*, dump_timeout: float = 8.0, pull_timeout: float = 5.0):
+    return get_backend().dump_ui_tree(dump_timeout=dump_timeout, pull_timeout=pull_timeout)
+
+
+__all__ = [
+    "adb_base", "tap", "keyevent", "foreground_package", "reset_airplane_mode",
+    "force_stop", "kill_all_apps", "screencap", "swipe_down", "cold_launch",
+    "dump_ui_tree",
+]
