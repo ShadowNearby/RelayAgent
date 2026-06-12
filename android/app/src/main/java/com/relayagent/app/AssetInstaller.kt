@@ -5,7 +5,7 @@ import android.util.Log
 import java.io.File
 
 /**
- * Extracts the bundled data assets (manifests/*.yaml + the capability
+ * Extracts the bundled data assets (manifest *.yaml files + the capability
  * matrix CSV, synced from the repo at build time) into filesDir/relay/ so
  * the Python runtime reads them as ordinary files. Re-extracts when the app
  * version changes.
