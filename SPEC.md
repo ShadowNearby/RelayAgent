@@ -36,8 +36,8 @@ A `Card` does **not** describe:
 
 - One YAML file per host app: `manifests/<reverse-dns-app-id>.yaml`.
 - UTF-8, LF line endings.
-- Top-level keys are fixed; unknown top-level keys MUST be rejected by validators.
-- Extension keys at any nested level MUST be prefixed with `x_` and are ignored by reference SDKs.
+- Top-level keys are fixed; unknown top-level keys MUST be rejected by validators (this includes top-level `x_` keys — there is no extension point at the top level).
+- Extension keys at any level **below** the top MUST be prefixed with `x_` and MAY be ignored by conforming SDKs. The schema permits `x_` keys inside every nested object. For the extensions the reference adapter consumes (§13.1), the schema additionally pins their shape — a misspelled step inside `x_post_result_flow` fails validation instead of being silently dropped at runtime.
 
 ## 4. Top-level schema
 
@@ -92,6 +92,8 @@ entry:
 
 Super-apps generally do not expose a public scheme or intent that reaches an internal AI surface, so `tap_sequence` is the only entry method in v0.1. (Deep-link / intent methods were specified in early drafts but no real card used them; see §13.)
 
+The `primary` wrapper is deliberate forward-compatibility: ordered fallback paths (`entry.fallback`) were dropped from v0.1 for lack of use but are a v0.2 candidate (see §15 / OQ-2), and keeping the key means adding them back is non-breaking.
+
 ### 6.1 `method` enum
 
 - **`tap_sequence`** — ordered list of `steps`, each one of:
@@ -100,11 +102,12 @@ Super-apps generally do not expose a public scheme or intent that reaches an int
   - `tap: { screen_fraction: { x_ratio, y_ratio } }` — taps at a fractional screen position.
   - `tap_unless_present: { probe: <selector>, target: <selector> }` — taps `target` only when `probe` is absent; makes an entry step idempotent across cold/warm starts.
   - `swipe: up | down | left | right` — scroll direction; compiled to a scroll action.
-  - `wait: { ms }` or `wait: { until: <selector>, timeout_seconds? }`
+  - `wait: { ms }` or `wait: { until: { text | text_contains }, timeout_seconds? }` — `timeout_seconds` defaults to 5. The `until` anchor MUST be text-bearing (`text` or `text_contains`): presence is polled against the a11y dump, so coordinate or id-only selectors are not pollable. A `wait.until` whose anchor never appears is **best-effort**: on timeout the router logs a warning and proceeds to the next step; it MUST NOT abort the sequence.
+  - `wait_for_reply: { max_seconds?, poll_interval_seconds? }` — wait for the in-app agent to finish responding before continuing. How doneness is decided is implementation-defined (the reference adapter's deterministic algorithm is described in §13.1). `max_seconds` defaults to `max(5 × capability.typical_latency_seconds, 60)`.
 
 Selectors MUST prefer, in order: `accessibility_id` > `resource_id` > `text` > `text_contains`.
 
-In v0.1 a selector is a **single field**. Real apps often share one `resource_id` across sibling nodes (e.g. all bottom tabs in a tab bar), forcing authors to fall back to `text`. Composite selectors (`{ resource_id, text }`) are tracked in OQ-10.
+A selector is normally a **single field**. A selector MAY carry multiple fields only when they are **alternative anchors for the same node** (e.g. a `screen_fraction` tap point plus the node's hint `text` as a semantic anchor); routers resolve such selectors by priority — `screen_fraction`, when present, is the authoritative tap point, and the remaining fields are hints/fallbacks for matchers that want a semantic anchor. Multi-field selectors are **not** AND-composites: intersection matching for disambiguation (`{ resource_id, text }` must match both) is not in v0.1 and is tracked in OQ-10.
 
 **Screen fraction as a last-resort selector (`screen_fraction`).** When an element has neither a usable `resource_id`, `accessibility_id`, nor stable `text`, the author MAY fall back to a screen-relative tap point:
 
@@ -137,16 +140,20 @@ invocation:
         y_ratio: 0.8690
 ```
 
-The OS agent SHOULD pass the **user's original phrasing** to the embedded agent whenever possible. Rewriting the user's prompt before handoff defeats the design — the in-app agent is presumed better at interpreting requests in its own domain.
+The OS agent SHOULD pass the **user's original phrasing** to the embedded agent whenever possible. Rewriting the user's prompt before handoff defeats the design — the in-app agent is presumed better at interpreting requests in its own domain. The one sanctioned exception is a capability-declared `prompt_template` (§8.3), where the card author — not the router — has pinned the wording.
+
+The top-level `locale` list declares which languages the embedded agent accepts. It informs router-side card/capability matching only; it does not instruct the router to translate — the submitted prompt stays in the user's own language per the rule above.
 
 ### 7.1 `output` block (optional)
 
 ```yaml
 output:
-  method: none                       # none | screen_text_extract | accessibility_tree | copy_button
+  method: none                       # none | copy_button
 ```
 
-`method: none` is the recommended default for v0.1: the OS agent hands off and stops. Reading results back is explicitly out of scope for this version (see §13). `copy_button` is an opt-in extension (see §A `output.x_copy_button`).
+`method: none` is the recommended default for v0.1: the OS agent hands off and stops. Reading results back is explicitly out of scope for this version (see §13). `copy_button` is a core enum value, but its locator details live in the `output.x_copy_button` extension consumed by the reference adapter (see §13.1).
+
+`screen_text_extract` and `accessibility_tree` are **reserved** enum values: they name read-back methods whose semantics will be defined by the OQ-5 standardization and are intentionally not valid in v0.1 (no shipped card uses them, and a v0.1 router would have no defined behavior to attach to them).
 
 ## 8. `capabilities` block
 
@@ -185,6 +192,8 @@ Two distinct reasons to set this `true`:
 
 Either reason is sufficient. Card authors are encouraged to explain *why* `true` in the capability's `description`.
 
+When `executable: false`, the flag is vacuous — there is no terminal action for the router to complete, so control always returns to the user. Authors MUST still set it explicitly (the schema requires it); `true` is the conventional value.
+
 ### 8.3 `prompt_template` / `prompt_slots` (optional)
 
 Structured capabilities (navigation, booking, messaging, …) MAY pin the wording of the prompt sent to the in-app agent, so an LLM router only extracts slot values instead of free-composing the prompt (which can derail the app's intent routing):
@@ -202,6 +211,7 @@ prompt_slots:
 Rules (validated at load time by conforming routers):
 
 - Every `{placeholder}` MUST be a declared slot; every declared slot MUST be referenced.
+- `prompt_slots` without a `prompt_template` is invalid (schema-enforced) — slots describe a template, never stand alone.
 - A **required** slot MUST appear outside any `[...]` segment; missing value = hard failure.
 - An **optional** slot MUST appear only inside `[...]`; an empty value drops the whole segment (including surrounding wording).
 - Brackets MUST be balanced and non-nested.
@@ -223,7 +233,7 @@ provenance:
     density_dpi: 420
 ```
 
-A card is considered **stale** by tooling if `last_verified` is more than 90 days old, or if `verified_app_version` is more than two minor versions behind the current store version. Stale cards MUST still be served by the registry, marked as stale, and SHOULD NOT be used by routers without an explicit override.
+A card is considered **stale** by tooling if `last_verified` is more than 90 days old, or — where the tooling can observe the current store version — if `verified_app_version` is more than two minor versions behind it. (Both thresholds are placeholders until real freshness signal exists; see OQ-9.) Stale cards MUST still be served by the registry, marked as stale, and SHOULD NOT be used by routers without an explicit override.
 
 ## 10. `constraints` block
 
@@ -240,24 +250,26 @@ constraints:
 
 ## 11. Versioning
 
-- `spec_version` follows this document. Breaking changes bump major.
-- `card_version` is per-card semver. Bump **major** when capability ids are removed or renamed; **minor** when capabilities or fields are added; **patch** for prose, examples, or `provenance` updates.
-- Routers MUST refuse cards whose `spec_version` major exceeds the version they implement.
+- `spec_version` follows this document. Breaking changes bump major. **While the SPEC is at 0.x, the minor version carries breaking changes** (standard semver 0.x convention).
+- `card_version` is per-card semver. Bump **major** when capability ids are removed or renamed; **minor** when capabilities or fields are added, **or when `entry` / `invocation` steps or selectors change behaviorally** (e.g. re-pathing after an app update); **patch** for prose, examples, or `provenance` updates.
+- Routers MUST refuse cards whose `spec_version` major exceeds the version they implement; while `spec_version` is 0.x, the **minor** version plays this role (a 0.1 router MUST refuse a 0.2 card).
 
 ## 12. Conformance
 
 A **conforming card** MUST:
 
 1. Validate against the schema (JSON Schema mirror at `spec/schema.json`, normative).
-2. Have at least one capability with at least two `example_prompts`.
+2. Have at least one capability, and **every** capability has at least two `example_prompts` (the schema enforces this per-capability).
 3. Have `provenance.last_verified` set to a real, dated verification.
 4. For every capability whose terminal action is irreversible or has user-visible cost (payment, message send, delete), set `handoff_to_user_required: true`.
 
 A **conforming router** MUST:
 
-1. Pass user prompts to the embedded agent without semantic rewriting.
+1. Pass user prompts to the embedded agent without semantic rewriting — except when the selected capability declares a `prompt_template` (§8.3), in which case the template governs the wording and the router only extracts slot values from the user's utterance.
 2. Honor `handoff_to_user_required`.
 3. Refuse to use cards marked stale unless the user explicitly opts in.
+
+**Enforcement layers.** Card rules 1–2 are machine-checked: structure by `spec/schema.json` (layer 1), cross-field consistency (filename ↔ `app_id`, `platforms` ↔ `verified_os`) by `scripts/validate_manifests.py` (layer 2), and `prompt_template` consistency plus capability-id uniqueness at catalog load time (layer 3). Card rules 3–4 and all router rules are **not machine-checkable** — they are enforced by card review (rule 4 needs a human judgment about irreversibility) and by router implementations respectively.
 
 ## 13. Out of scope for v0.1
 
@@ -268,7 +280,7 @@ A **conforming router** MUST:
 
 ## 13.1 `x_` extensions used by the reference adapter
 
-SPEC §1 (Conformance) reserves the `x_` prefix for vendor/implementation
+SPEC §3 (File format) reserves the `x_` prefix for vendor/implementation
 extensions that conforming SDKs MAY ignore. The reference adapter
 (`agents/relay_agent.py`) + planner (`agents/action_planner.py`) consume
 the following extensions in the ten shipped reference cards. They are
@@ -278,19 +290,21 @@ class fields is tracked in `SPEC-OPEN-QUESTIONS.md`.
 
 ### Step kinds (extend §6.1)
 
-- **`wait_for_reply: { max_seconds?, poll_interval_seconds? }`** — wait for
-  the in-app agent to finish responding. The adapter decides doneness
-  deterministically — the a11y-tree text hash must hold byte-identical
-  across consecutive dumps — within a wall-clock budget; the reply text is
-  scraped from the a11y tree (a VLM only reads the frame when the scrape
-  comes up empty). `max_seconds` defaults to
-  `max(5 × capability.typical_latency_seconds, 60)`; override per capability
-  with `x_max_wait_seconds`.
-
-(`tap_unless_present` was promoted from an extension to a core step kind; see §6.1.)
+(`tap_unless_present` and `wait_for_reply` were both promoted from
+extensions to core step kinds; see §6.1. The adapter's `wait_for_reply`
+doneness algorithm is implementation detail, not normative: the a11y-tree
+text hash must hold byte-identical across consecutive dumps, within the
+wall-clock budget; the reply text is scraped from the a11y tree, and a VLM
+only reads the frame when the scrape comes up empty.)
 
 ### Capability-level extensions (extend §8)
 
+- **`x_max_wait_seconds: N`** — per-capability override of the implicit
+  `wait_for_reply` budget (default `max(5 × typical_latency_seconds, 60)`).
+- **`x_skip_wait_for_reply: true`** — skip the implicit `wait_for_reply`
+  after submit entirely. Used by capabilities whose submit yields a CTA /
+  user handoff rather than a text reply (e.g. Amap `navigate_to`), where
+  polling for a reply would burn the full timeout on a non-text surface.
 - **`x_pre_invocation_steps: [<step>, ...]`** — extra steps run AFTER entry
   but BEFORE focusing the input field. Used to lock the chat surface into
   a sub-mode (e.g. WPS "AI PPT").
