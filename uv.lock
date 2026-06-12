@@ -1900,7 +1900,6 @@ dependencies = [
     { name = "loguru" },
     { name = "openai" },
     { name = "pillow" },
-    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "socksio" },
 ]
@@ -1920,7 +1919,6 @@ requires-dist = [
     { name = "mobile-world", marker = "extra == 'mw'", git = "https://github.com/ShadowNearby/MobileWorld?rev=12306ff9795f6b94bfffac8e9667c9eb4f8349f3" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pillow", specifier = ">=10.0" },
-    { name = "pydantic", specifier = "<2.11" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "socksio", specifier = ">=1.0.0" },
 ]

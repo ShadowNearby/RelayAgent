@@ -20,9 +20,9 @@ dependencies = [
     "openai>=1.0",
     # Screenshot decode/encode for VLM grounding / reply-watch + native capture.
     "pillow>=10.0",
-    # agents/action_model.py's JSONAction is a pydantic model. The <2.11 pin is
-    # kept conservative so validator behaviour matches the resolved lock.
-    "pydantic<2.11",
+    # No direct pydantic dependency: JSONAction is pure Python (the Android
+    # build's Chaquopy has no pydantic-core wheel). openai still pulls pydantic
+    # in transitively on host; our code must not import it.
     "socksio>=1.0.0",
 ]
 
