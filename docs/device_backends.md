@@ -11,7 +11,7 @@ agents/device/
 ├── base.py            DeviceBackend ABC + UINode + Key
 ├── android.py         AndroidBackend — adb (IMPLEMENTED, the only real backend)
 ├── ios.py             IOSBackend — WebDriverAgent skeleton (NotImplementedError)
-├── harmony.py         HarmonyBackend — hdc/uitest skeleton (NotImplementedError)
+├── harmony.py         HarmonyBackend — hdc/uitest (implemented; tokens pending on-device check)
 ├── factory.py         get_backend(): RELAY_PLATFORM → backend instance
 └── vendor_profiles.py Android vendor tables (+ RELAY_VENDOR_PROFILE overlay)
 ```

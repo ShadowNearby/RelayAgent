@@ -37,7 +37,7 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 运行时是纯 Python，**无 server、无框架冷启动**；设备 I/O 全部走 **`agents/device/` 后端抽象层**（Android=直 adb），由以下模块组成：
 
-- `agents/device/` — **DeviceBackend 抽象层**：`base.py`（ABC + `UINode` 归一化 a11y 节点 + `Key`）、`android.py`（adb 实现，唯一真实后端；含 IME、`dump_ui_tree`、权限弹窗 `dismiss_permission_popup`）、`ios.py`/`harmony.py`（WDA/hdc 骨架，调用抛 NotImplementedError）、`factory.py`（`get_backend()` 按 `RELAY_PLATFORM`（默认 android）分发，serial 是实例属性）、`vendor_profiles.py`（厂商权限表 + `RELAY_VENDOR_PROFILE` JSON overlay）。多平台能力映射见 [`docs/device_backends.zh.md`](docs/device_backends.zh.md)。**`agents/_adb.py` 已退化为同名委托 shim**（旧 import 面兼容；新代码持 backend 实例）。
+- `agents/device/` — **DeviceBackend 抽象层**：`base.py`（ABC + `UINode` 归一化 a11y 节点 + `Key`）、`android.py`（adb 实现，含 IME、`dump_ui_tree`、权限弹窗 `dismiss_permission_popup`）、`harmony.py`（hdc/uitest 实现，逐方法镜像 android.py；命令 token 待真机核，见下「HarmonyOS App 移植」）、`ios.py`（WDA 骨架，调用抛 NotImplementedError）、`factory.py`（`get_backend()` 按 `RELAY_PLATFORM`（默认 android；`harmony`→`harmonyos`，serial 读 `RELAY_HARMONY_SERIAL`）分发，serial 是实例属性）、`vendor_profiles.py`（厂商权限表 + `RELAY_VENDOR_PROFILE` JSON overlay）。多平台能力映射见 [`docs/device_backends.zh.md`](docs/device_backends.zh.md)。**`agents/_adb.py` 已退化为同名委托 shim**（旧 import 面兼容；新代码持 backend 实例）。
 - `agents/action_model.py` — `JSONAction` + action-type 常量（validator/`__eq__`/`model_dump`）。
 - `agents/agent_base.py` — `BaseAgent` + `MCPAgent`（OpenAI client、token 计数、`openai_chat_completions_create` 含 claude/gpt/o1/kimi 分支）。`relay_agent` 经 `from agents.agent_base import MCPAgent as _MCPAgentBase`（别名排序见文件头注释，让 loader 选 RelayAgent）。
 - `agents/_img.py` — `pil_to_base64`。
@@ -141,3 +141,13 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 - **Spike B 工具**：`scripts/diff_a11y_dump.py` 对比 App 内 a11y 序列化 与真 `uiautomator dump` 的 (text/content-desc/bounds) 节点集 + text-hash 流。
 - **已知语义漂移（端侧接受）**：无 shell 拿不到真 force-stop，冷启动以 `FLAG_ACTIVITY_CLEAR_TASK` 重启近似——端上运行不与 benchmark 对比。
 - **已接线 + 模拟器验证**：`relay_android/backend.py:install()` 注入 `OnDeviceAndroidBackend` 已在 AVD 上跑通（CPython→backend 注入→MediaProjection 截帧→路由/规划→in-process leg→traj 落 filesDir）。`native_runner._agent_spec` 在磁盘无 `agents/relay_agent.py`（Chaquopy AssetFinder 打包形态）时回落包内 module spec 加载 agent。debug APK 的 abiFilters 含 x86_64 可装模拟器；搭建与安装步骤见 `docs/emulator_testing.zh.md` §3/§7（scrcpy 远程观察 §6）。
+
+## HarmonyOS App 移植（harmony/）
+
+HarmonyOS NEXT **无 Chaquopy/CPython 嵌入**，所以端侧 runtime **用 ArkTS 重写**（不复用 `agents/`），host 侧 `agents/device/harmony.py` 用 hdc/uitest 实现同一 DeviceBackend 契约。完整实现文档见 [`docs/harmony_app.zh.md`](docs/harmony_app.zh.md)（English: [`docs/harmony_app.md`](docs/harmony_app.md)）；**所有「真机待验证」与「未做（Phase 2/3/4）」项见 [`docs/harmony_app_todo.md`](docs/harmony_app_todo.md)**。
+
+- **Part A（host，已实现+单测）**：`agents/device/harmony.py` 逐方法镜像 `android.py`（adb→hdc，uiautomator-XML→`uitest dumpLayout` JSON）；`_layout_to_nodes` 纯函数产 `UINode[]`；hdc 设备选择 `-t`（读 `RELAY_HARMONY_SERIAL`）。单测 `tests/test_harmony_backend.py`。命令 token（screenCap/dumpLayout/keyEvent/inputText 等）标 `TODO(verify-on-device)`。
+- **Part B（端侧 ArkTS app，最小单 App 循环）**：`harmony/` DevEco/hvigor 工程，结构对位 `android/`。设备原语 `ets/device/*`（`AccessibilityExtensionAbility` 手势/a11y 树、AVScreenCapture(Phase 2)、`@ohos.window` 浮窗、`@ohos.data.preferences` 设置）；runtime `ets/relay/*`（`device`/`actionModel`/`nativeEnv`/`interaction`/`llmClient`/`agent`/`nativeRunner`，对位 `agents/`）。只支持 deterministic + a11y 步（open_app/tap_text/input_text/wait_for_reply）。
+- **构建（headless 已跑通）**：`uv run python scripts/sync_harmony_assets.py`（manifests→slim JSON 卡片进 rawfile，gitignore）→ `source /opt/harmonyos-env.sh` → `cd harmony && /opt/command-line-tools-for-hmos/bin/hvigorw assembleHap --no-daemon` → unsigned HAP。配置钉死点：`compatibleSdkVersion`/`targetSdkVersion`=`6.1.1(24)`；`modelVersion`=`6.0.0`（`hvigor/hvigor-config.json5` 与根 `oh-package.json5` 两处一致）；profile JSON 无注释。装机需开发者证书签名。
+- **契约对齐（双 runtime 不漂移）**：`JSONAction` 字段顺序/validator/equals、`NativeEnv` scroll 反转+swipe 几何+skip_screenshot、`UINode.center`、`runTask` terminal 集合+ask_user 语义、卡片 `swipe` 方向 —— 全部对齐 host Python（`action_model` 由 `tests/test_action_model.py` 钉）。
+- **已知漂移**：无 shell 无真 force-stop（relaunch 近似）；端侧运行行为（手势/截屏/浮窗/跑通单 App）为真机 Spike，未验。

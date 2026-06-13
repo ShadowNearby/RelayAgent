@@ -10,7 +10,7 @@ agents/device/
 ├── base.py            DeviceBackend 抽象基类 + UINode + Key
 ├── android.py         AndroidBackend — adb（已实现，目前唯一真实后端）
 ├── ios.py             IOSBackend — WebDriverAgent 骨架（NotImplementedError）
-├── harmony.py         HarmonyBackend — hdc/uitest 骨架（NotImplementedError）
+├── harmony.py         HarmonyBackend — hdc/uitest（已实现；命令 token 待真机核）
 ├── factory.py         get_backend()：RELAY_PLATFORM → 后端实例
 └── vendor_profiles.py Android 厂商表（+ RELAY_VENDOR_PROFILE overlay）
 ```

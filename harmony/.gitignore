@@ -1,0 +1,12 @@
+# DevEco / hvigor build outputs
+/build
+/*/build
+/.hvigor
+/.cxx
+/oh_modules
+/*/oh_modules
+.idea
+local.properties
+
+# Synced assets (generated from repo manifests by scripts/sync_harmony_assets.py)
+/entry/src/main/resources/rawfile/relay/

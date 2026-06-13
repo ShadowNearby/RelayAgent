@@ -1,0 +1,31 @@
+{
+  // Project-level build profile (DevEco / hvigor). Mirrors the role of
+  // android/build.gradle.kts + settings.gradle.kts: declares the signing
+  // products and the modules that make up the app.
+  "app": {
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        // Matches the bundled CLT: HarmonyOS 6.x / API 24 (see /opt/harmonyos-env.sh).
+        "compatibleSdkVersion": "6.1.1(24)",
+        "targetSdkVersion": "6.1.1(24)",
+        "runtimeOS": "HarmonyOS"
+      }
+    ],
+    "buildModeSet": [
+      { "name": "debug" },
+      { "name": "release" }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        { "name": "default", "applyToProducts": ["default"] }
+      ]
+    }
+  ]
+}

@@ -235,12 +235,14 @@ class FactoryTests(unittest.TestCase):
             os.environ.pop("RELAY_PLATFORM", None)
             self.assertEqual(current_platform(), "android")
 
-    def test_stubs_instantiable_but_unusable(self):
-        for backend in (IOSBackend(), HarmonyBackend()):
-            with self.assertRaises(NotImplementedError):
-                backend.screencap()
-            with self.assertRaises(NotImplementedError):
-                backend.tap(1, 2)
+    def test_ios_stub_instantiable_but_unusable(self):
+        # HarmonyBackend is implemented now (see test_harmony_backend.py); only
+        # the iOS/WDA backend remains a NotImplementedError skeleton.
+        backend = IOSBackend()
+        with self.assertRaises(NotImplementedError):
+            backend.screencap()
+        with self.assertRaises(NotImplementedError):
+            backend.tap(1, 2)
 
 
 if __name__ == "__main__":

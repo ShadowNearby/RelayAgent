@@ -1,0 +1,12 @@
+{
+  // App-level identity (mirrors android/ applicationId + label). Same
+  // bundleName as the Android build so the two ports stay recognizably one app.
+  "app": {
+    "bundleName": "com.relayagent.app",
+    "vendor": "relayagent",
+    "versionCode": 1,
+    "versionName": "0.1.0",
+    "icon": "$media:app_icon",
+    "label": "$string:app_name"
+  }
+}

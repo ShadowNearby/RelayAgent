@@ -1,0 +1,12 @@
+{
+  // Project-level package descriptor (ohpm). No third-party runtime deps: the
+  // ArkTS RelayAgent runtime is self-contained (HTTP via @ohos.net.http,
+  // accessibility/capture/window from the system kits).
+  // modelVersion must match hvigor/hvigor-config.json5 and sit in
+  // [5.0.0, current(API24 → 6.0.0)] (hvigor ValidateUtil.modelVersionCheck).
+  "modelVersion": "6.0.0",
+  "name": "relayagent",
+  "version": "0.1.0",
+  "description": "RelayAgent — on-device cross-app agent runtime (HarmonyOS, ArkTS)",
+  "dependencies": {}
+}

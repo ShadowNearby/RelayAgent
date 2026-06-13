@@ -1,0 +1,11 @@
+{
+  // hvigor wrapper config. Versions match the bundled CLT
+  // (hvigor 6.24.2, see /opt/harmonyos-env.sh). DevEco Studio regenerates this
+  // on first open if absent; pinned here so headless `hvigorw` also resolves.
+  "modelVersion": "6.0.0",
+  "dependencies": {},
+  "execution": {},
+  "logging": {},
+  "debugging": {},
+  "nodeOptions": {}
+}
