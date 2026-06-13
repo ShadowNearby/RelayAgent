@@ -21,7 +21,7 @@
 
 1. Android Studio 打开 `android/`（首次会自动装 SDK 34 / Gradle wrapper）。
 2. 版本核对（**Spike A 的一部分**）：`app/build.gradle.kts` 里 Chaquopy 16.0.0 + Python 3.12 —— 若该版 Chaquopy 不支持 3.12，把 `version` 降到 `"3.11"`（`agents/` 代码 3.10+ 语法兼容；宿主仓库 `requires-python` 不受影响）。
-3. `./gradlew :app:assembleDebug`，装到 arm64 真机（minSdk 30 / Android 11+）。
+3. `./gradlew :app:assembleDebug`，装到 arm64 真机（minSdk 30 / Android 11+）或 x86_64 模拟器（debug 的 `abiFilters` 含 `x86_64`，正式发布可去掉减体积）。headless 构建需 `JAVA_HOME=/snap/android-studio/current/jbr ANDROID_HOME=~/Android/Sdk`。
 
 ## Spike 清单（按序验证，详见总计划 §风险）
 
@@ -29,10 +29,10 @@
 - **Spike A2（后台启动豁免）**：App 退到后台时 `DeviceBridge.launchApp("com.aliyun.tongyi")` 能把千问拉到前台（a11y 上下文 + 前台服务 + SYSTEM_ALERT_WINDOW）。
 - **Spike B（dump 保真度）**：同一屏幕分别取 `adb shell uiautomator dump` 与 App 内 `uiDumpXml()`，宿主脚本 diff (text, content-desc, bounds) 节点集；迭代 `A11yXmlSerializer` 直到回复相关节点对齐。
 
-## 已知阻塞 / 待接线
+## 接线状态
 
-- **`relay_android/backend.py` 的 `install()` 依赖 `agents.device` 注入缝**（DeviceBackend 抽象，P0.1，正在 device-backend 分支落地）。落地前 entry 会快速失败并报清晰错误。落地后若接口名有出入，只需改 `AndroidBackend` 的方法名映射。
-- 主机侧已就绪的部分：`run_leg` 进程内执行、`InProcessLegExecutor`、`InteractionProvider`、`make_llm_client` HTTP shim、`nl_flow.plan_request/execute_plan`、`RELAY_TRAJ_ROOT` 重定向。
+- **`agents.device` 注入缝已落地并接线**：`relay_android/backend.py:install()` 经 `set_default_backend` 注入 `OnDeviceAndroidBackend`，已在模拟器上跑通（CPython 启动 → backend 注入 → MediaProjection 截帧 → 三段式路由 → flow 规划 → in-process leg 执行 → traj/wall_clock 落 filesDir）。模拟器搭建与 APK 安装步骤见 [`../docs/emulator_testing.zh.md`](../docs/emulator_testing.zh.md) §7。
+- 主机侧复用件：`run_leg` 进程内执行、`InProcessLegExecutor`、`InteractionProvider`、`make_llm_client` HTTP shim、`nl_flow.plan_request/execute_plan`、`RELAY_TRAJ_ROOT` 重定向。`native_runner._agent_spec` 在磁盘无 `agents/relay_agent.py` 时（Chaquopy AssetFinder 打包形态）回落包内 module spec 加载 agent。
 
 ## 运行时数据布局（filesDir）
 

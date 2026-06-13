@@ -1,0 +1,63 @@
+{
+  // Central module manifest — mirrors android/app/src/main/AndroidManifest.xml.
+  // Declares the frontend UIAbility, the AccessibilityExtensionAbility (the
+  // device-driving service), and the permissions: INTERNET (LLM gateway),
+  // SYSTEM_FLOAT_WINDOW (overlay chip + ask_user panel), background run (the
+  // worker loop), and screen capture.
+  //
+  // TODO(verify-on-device): exact permission names + accessibility profile key
+  // can shift across HarmonyOS NEXT releases — confirm against the installed SDK.
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "srcEntry": "./ets/entryability/EntryAbility.ets",
+    "description": "RelayAgent entry",
+    "mainElement": "EntryAbility",
+    "deviceTypes": ["phone", "tablet"],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "RelayAgent frontend (goal box + run/stop + onboarding)",
+        "icon": "$media:app_icon",
+        "label": "$string:app_name",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "skills": [
+          {
+            "entities": ["entity.system.home"],
+            "actions": ["action.system.home"]
+          }
+        ]
+      }
+    ],
+
+    "extensionAbilities": [
+      {
+        "name": "RelayAccessibilityExtension",
+        "srcEntry": "./ets/device/RelayAccessibilityExtension.ets",
+        "description": "Gesture injection + a11y-tree dump + screenshot driver",
+        "type": "accessibility",
+        "exported": false,
+        "metadata": [
+          {
+            "name": "ohos.accessibleability",
+            "resource": "$profile:accessibility_config"
+          }
+        ]
+      }
+    ],
+
+    "requestPermissions": [
+      { "name": "ohos.permission.INTERNET" },
+      { "name": "ohos.permission.SYSTEM_FLOAT_WINDOW" },
+      { "name": "ohos.permission.KEEP_BACKGROUND_RUNNING" },
+      { "name": "ohos.permission.GET_RUNNING_INFO" }
+    ]
+  }
+}

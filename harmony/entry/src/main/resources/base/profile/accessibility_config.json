@@ -1,0 +1,7 @@
+{
+  "accessibilityAbilityTypes": ["all"],
+  "accessibilityCapabilities": ["retrieve", "gesture"],
+  "accessibilityEventTypes": ["all"],
+  "notificationTimeout": 0,
+  "description": "$string:a11y_description"
+}

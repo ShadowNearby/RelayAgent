@@ -76,6 +76,19 @@ def _rotate_traj_dir() -> Path:
     return traj_dir
 
 
+def _agent_spec(path: Path):
+    """Module spec for the agent at `path`. Prefers the on-disk file (host
+    checkout layout). In packaged runtimes (Chaquopy AssetFinder zip) the
+    agents/*.py sources are importable modules but never exist as files —
+    fall back to the package spec so on-device runs load the same agent."""
+    if path.exists():
+        return importlib.util.spec_from_file_location(path.stem, str(path))
+    try:
+        return importlib.util.find_spec(f"agents.{path.stem}")
+    except (ImportError, ValueError):
+        return None
+
+
 def _load_agent_class(path: Path):
     """Load the alphabetically first BaseAgent subclass from a Python file.
 
@@ -83,7 +96,7 @@ def _load_agent_class(path: Path):
     reads RELAY_* env at module level, and per-leg env must re-resolve."""
     from agents.agent_base import BaseAgent
 
-    spec = importlib.util.spec_from_file_location(path.stem, str(path))
+    spec = _agent_spec(path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load agent file: {path}")
     module = importlib.util.module_from_spec(spec)
@@ -118,7 +131,7 @@ def run_leg(
     duration of the run — in-process multi-leg callers snapshot/restore
     around it (see flow_runner.InProcessLegExecutor)."""
     agent_file = _agent_file()
-    if not agent_file.exists():
+    if _agent_spec(agent_file) is None:
         raise RuntimeError(f"agent file missing: {agent_file}")
 
     env_vars, base_url, api_key, model = resolve_llm_config(

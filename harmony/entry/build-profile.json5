@@ -1,0 +1,16 @@
+{
+  // entry HAP module build profile. apiType "stageMode" is the only modern
+  // model (HarmonyOS NEXT). Both arm64 and x86_64 ABIs so it installs on a
+  // real device and on the DevEco emulator (mirrors android abiFilters).
+  "apiType": "stageMode",
+  "buildOption": {
+    "arkOptions": {},
+    "nativeLib": {}
+  },
+  "targets": [
+    {
+      "name": "default",
+      "runtimeOS": "HarmonyOS"
+    }
+  ]
+}

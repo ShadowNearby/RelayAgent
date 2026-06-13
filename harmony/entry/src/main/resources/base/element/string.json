@@ -1,0 +1,6 @@
+{
+  "string": [
+    { "name": "a11y_description", "value": "RelayAgent 通过无障碍服务注入手势、读取界面、跨 App 执行任务" },
+    { "name": "EntryAbility_label", "value": "RelayAgent" }
+  ]
+}

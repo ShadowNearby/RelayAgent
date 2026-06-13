@@ -1,0 +1,7 @@
+{
+  "name": "entry",
+  "version": "0.1.0",
+  "description": "RelayAgent entry HAP — frontend, device primitives, ArkTS runtime",
+  "main": "",
+  "dependencies": {}
+}

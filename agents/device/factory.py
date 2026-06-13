@@ -17,6 +17,7 @@ from agents.device.base import DeviceBackend
 
 _PLATFORM_ENV = "RELAY_PLATFORM"
 _SERIAL_ENV = "RELAY_ANDROID_SERIAL"
+_HARMONY_SERIAL_ENV = "RELAY_HARMONY_SERIAL"
 
 _default_backend: DeviceBackend | None = None
 
@@ -46,7 +47,7 @@ def _create(platform: str) -> DeviceBackend:
     if platform == "harmonyos":
         from agents.device.harmony import HarmonyBackend
 
-        return HarmonyBackend()
+        return HarmonyBackend(serial=os.getenv(_HARMONY_SERIAL_ENV))
     raise ValueError(
         f"unknown {_PLATFORM_ENV}={platform!r} (expected android | ios | harmonyos)"
     )
