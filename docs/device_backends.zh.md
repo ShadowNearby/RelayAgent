@@ -10,7 +10,7 @@ agents/device/
 ├── base.py            DeviceBackend 抽象基类 + UINode + Key
 ├── android.py         AndroidBackend — adb（已实现，目前唯一真实后端）
 ├── ios.py             IOSBackend — WebDriverAgent 骨架（NotImplementedError）
-├── harmony.py         HarmonyBackend — hdc/uitest 骨架（NotImplementedError）
+├── harmony.py         HarmonyBackend — hdc/uitest，已实现（未在真机验证）
 ├── factory.py         get_backend()：RELAY_PLATFORM → 后端实例
 └── vendor_profiles.py Android 厂商表（+ RELAY_VENDOR_PROFILE overlay）
 ```
@@ -56,18 +56,22 @@ backend = get_backend()
 | DeviceBackend | Android (adb) | iOS (WebDriverAgent) | HarmonyOS NEXT (hdc) |
 | --- | --- | --- | --- |
 | `screencap` | `exec-out screencap -p` | `GET /screenshot` | `uitest screenCap` + `hdc file recv` |
-| `screen_size` | `wm size` | `GET /window/size` | `hidumper` / `uitest`（待验证） |
-| `dump_ui_tree` | `uiautomator dump` → UINode | `GET /source?format=json` → UINode | `uitest dumpLayout` → UINode |
-| `foreground_app` | `dumpsys window` → `dumpsys activity` | `GET /wda/activeAppInfo` | `aa dump -a` |
+| `screen_size` | `wm size` | `GET /window/size` | screencap 帧尺寸，缓存（待验证） |
+| `dump_ui_tree` | `uiautomator dump` → UINode | `GET /source?format=json` → UINode | `uitest dumpLayout`(JSON) + `hdc file recv` → UINode（属性名待验证） |
+| `foreground_app` | `dumpsys window` → `dumpsys activity` | `GET /wda/activeAppInfo` | `aa dump -l` → FOREGROUND mission 的 bundle（待验证） |
 | `tap` / `long_press` | `input tap` / 同点 swipe | `POST /wda/touch/perform` | `uitest uiInput click / longClick` |
-| `swipe_gesture` | `input swipe` | `POST /wda/dragfromtoforduration` | `uitest uiInput swipe` |
-| `key` BACK / HOME / ENTER | `KEYCODE_*` | 边缘滑动 / `/wda/homescreen` / `/wda/keys "\n"` | `uiInput keyEvent Back / Home` |
-| `input_text` | AdbKeyboard `ADB_INPUT_B64` 广播；ASCII 降级 `input text` | `POST /wda/keys`（无 IME 依赖——中文直接发） | `uiInput inputText`（中文待验证） |
-| `launch` / `cold_launch` / `force_stop` | monkey LAUNCHER / `am force-stop` | `POST /session {bundleId}` / terminate | `aa start -b` / `aa force-stop` |
-| `kill_all_apps` | `pm list -3` ∩ `ps -A` → force-stop | 无法枚举——仅 terminate 已知 id | `bm dump -a` + `aa force-stop` |
-| `setup_input_channel` | `ime enable/set` AdbKeyboard | no-op | 预计 no-op（待验证） |
-| `start_recording` | `screenrecord` 分段 + pull | mjpeg 端口；真机文件录屏是 **gap** | `uitest record`（待验证） |
-| `dismiss_permission_popup` | 厂商包名 + Allow 标签 | springboard alerts：`/alert/text` + `/alert/accept` | 弹窗在 dumpLayout 内，同标签策略 |
+| `swipe_gesture` | `input swipe` | `POST /wda/dragfromtoforduration` | `uitest uiInput swipe`（duration→velocity px/s） |
+| `key` BACK / HOME / ENTER | `KEYCODE_*` | 边缘滑动 / `/wda/homescreen` / `/wda/keys "\n"` | `uiInput keyEvent Back / Home / 2054`（ENTER keycode 待验证） |
+| `input_text` | AdbKeyboard `ADB_INPUT_B64` 广播；ASCII 降级 `input text` | `POST /wda/keys`（无 IME 依赖——中文直接发） | `uiInput inputText <x> <y> <text>`，落在 last-tap 点；无 IME 切换（中文/空格待验证） |
+| `launch` / `cold_launch` / `force_stop` | monkey LAUNCHER / `am force-stop` | `POST /session {bundleId}` / terminate | `aa start -b <bundle> -a <ability>`（默认 `EntryAbility`）/ `aa force-stop` |
+| `kill_all_apps` | `pm list -3` ∩ `ps -A` → force-stop | 无法枚举——仅 terminate 已知 id | `aa dump -l` 的 bundle 去掉 launcher/systemui → `aa force-stop` |
+| `setup_input_channel` | `ime enable/set` AdbKeyboard | no-op | no-op（uiInput 直接注入） |
+| `start_recording` | `screenrecord` 分段 + pull | mjpeg 端口；真机文件录屏是 **gap** | 暂不支持——no-op 句柄 + warning（**gap**） |
+| `dismiss_permission_popup` | 厂商包名 + Allow 标签 | springboard alerts：`/alert/text` + `/alert/accept` | 权限管理器 bundle + dumpLayout 里的 Allow 标签 |
+
+> HarmonyOS 列**已实现但尚未在真机 HarmonyOS 6 上跑过**：`agents/device/harmony.py` 里每个
+> `NOTE(verify-on-device)` 标注一处需在首次真机联调时确认的接线细节（dumpLayout 属性名、
+> ENTER keycode、`aa dump -l` 解析、`uiInput inputText` 的中文支持）。
 
 ## iOS 前置（实装时）
 

@@ -2,7 +2,8 @@
 
 `DeviceBackend` is the single seam between the agent/runtime layers and the
 phone. The Android implementation (`agents/device/android.py`) drives adb;
-iOS (WebDriverAgent) and HarmonyOS NEXT (hdc) are interface skeletons — see
+HarmonyOS NEXT (`harmony.py`, hdc/uitest) is implemented but not yet verified
+on a live device; iOS (WebDriverAgent) is still an interface skeleton — see
 docs/device_backends.md for the per-platform capability mapping.
 
 Layering rule: code above this package never talks to a device tool

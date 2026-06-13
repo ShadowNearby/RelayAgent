@@ -16,7 +16,11 @@ from unittest import mock
 from agents.device import Key, UINode, set_default_backend
 from agents.device.android import AndroidBackend, _xml_to_nodes
 from agents.device.factory import _create, current_platform
-from agents.device.harmony import HarmonyBackend
+from agents.device.harmony import (
+    HarmonyBackend,
+    _layout_to_nodes,
+    _parse_foreground_bundle,
+)
 from agents.device.ios import IOSBackend
 
 
@@ -235,12 +239,149 @@ class FactoryTests(unittest.TestCase):
             os.environ.pop("RELAY_PLATFORM", None)
             self.assertEqual(current_platform(), "android")
 
-    def test_stubs_instantiable_but_unusable(self):
-        for backend in (IOSBackend(), HarmonyBackend()):
-            with self.assertRaises(NotImplementedError):
-                backend.screencap()
-            with self.assertRaises(NotImplementedError):
-                backend.tap(1, 2)
+    def test_ios_stub_instantiable_but_unusable(self):
+        # iOS (WDA) is still a skeleton; HarmonyOS is implemented (see
+        # HarmonyArgvTests / LayoutToNodesTests below).
+        b = IOSBackend()
+        with self.assertRaises(NotImplementedError):
+            b.screencap()
+        with self.assertRaises(NotImplementedError):
+            b.tap(1, 2)
+
+
+class HarmonyArgvTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch("agents.device.harmony.subprocess.run")
+        self.run = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.run.return_value = _cp()
+
+    def _argv(self, call_index: int = 0) -> list[str]:
+        return self.run.call_args_list[call_index].args[0]
+
+    def test_serial_uses_dash_t(self):
+        b = HarmonyBackend(serial="HX9")
+        self.assertEqual(b.hdc_base(), ["hdc", "-t", "HX9"])
+        b.tap(10, 20)
+        self.assertEqual(
+            self._argv(),
+            ["hdc", "-t", "HX9", "shell", "uitest", "uiInput", "click", "10", "20"],
+        )
+
+    def test_no_serial(self):
+        self.assertEqual(HarmonyBackend().hdc_base(), ["hdc"])
+
+    def test_tap_records_last_point_and_failure_paths(self):
+        b = HarmonyBackend()
+        self.assertTrue(b.tap(3, 4))
+        self.assertEqual(b._last_tap, (3, 4))
+        self.run.return_value = _cp(returncode=1, stderr="boom")
+        self.assertFalse(b.tap(5, 6))
+        self.run.side_effect = subprocess.TimeoutExpired(cmd="hdc", timeout=5)
+        self.assertFalse(b.tap(7, 8))
+
+    def test_key_mapping(self):
+        b = HarmonyBackend()
+        b.key(Key.BACK)
+        self.assertEqual(self._argv()[-2:], ["keyEvent", "Back"])
+        b.key(Key.HOME)
+        self.assertEqual(self._argv(1)[-1], "Home")
+        b.key(Key.ENTER)
+        self.assertEqual(self._argv(2)[-1], "2054")
+
+    def test_swipe_converts_duration_to_velocity(self):
+        b = HarmonyBackend()
+        # 1000px over 500ms -> 2000 px/s
+        b.swipe_gesture(0, 0, 0, 1000, duration_ms=500)
+        argv = self._argv()
+        self.assertEqual(argv[-6:-1], ["swipe", "0", "0", "0", "1000"])
+        self.assertEqual(argv[-1], "2000")
+
+    def test_input_text_uses_last_tap_point(self):
+        b = HarmonyBackend()
+        b.tap(120, 340)
+        b.input_text("你好 hi")
+        argv = self._argv(1)  # call 0 was the tap
+        self.assertEqual(
+            argv[-4:], ["inputText", "120", "340", "你好 hi"]
+        )
+
+    def test_launch_splits_bundle_and_ability(self):
+        b = HarmonyBackend()
+        b.launch("com.example.app")
+        self.assertEqual(
+            self._argv()[-7:],
+            ["shell", "aa", "start", "-b", "com.example.app", "-a", "EntryAbility"],
+        )
+        b.launch("com.x/MainAbility")
+        self.assertEqual(self._argv(1)[-3:], ["com.x", "-a", "MainAbility"])
+
+    def test_launch_raises_on_error_output(self):
+        b = HarmonyBackend()
+        self.run.return_value = _cp(stdout="error: bundle not found")
+        with self.assertRaises(RuntimeError):
+            b.launch("com.missing.app")
+
+    def test_force_stop_uses_bundle_only(self):
+        b = HarmonyBackend()
+        b.force_stop("com.x/MainAbility")
+        self.assertEqual(self._argv()[-3:], ["aa", "force-stop", "com.x"])
+
+    def test_setup_input_channel_is_noop_true(self):
+        b = HarmonyBackend()
+        self.assertTrue(b.setup_input_channel())
+        self.assertIs(b._input_channel_ok, True)
+        self.run.assert_not_called()  # no IME swap commands
+
+
+class LayoutToNodesTests(unittest.TestCase):
+    LAYOUT = {
+        "attributes": {"type": "Root", "bounds": "[0,0][1260,2720]"},
+        "children": [
+            {
+                "attributes": {
+                    "text": "发送", "description": "send button",
+                    "id": "send_btn", "type": "Button",
+                    "bundleName": "com.x", "bounds": "[100,200][300,400]",
+                    "clickable": "true", "enabled": "true",
+                },
+                "children": [],
+            },
+            {
+                # object-form bounds + disabled
+                "attributes": {
+                    "text": "", "type": "Image", "bundleName": "com.x",
+                    "bounds": {"left": 5, "top": 5, "right": 5, "bottom": 5},
+                    "clickable": "false", "enabled": "false",
+                },
+            },
+        ],
+    }
+
+    def test_flatten_and_field_mapping(self):
+        nodes = _layout_to_nodes(self.LAYOUT)
+        self.assertEqual(len(nodes), 3)  # root + 2 children, pre-order
+        btn = nodes[1]
+        self.assertEqual(btn.text, "发送")
+        self.assertEqual(btn.desc, "send button")
+        self.assertEqual(btn.resource_id, "send_btn")
+        self.assertEqual(btn.class_name, "Button")
+        self.assertEqual(btn.package, "com.x")
+        self.assertEqual(btn.bounds, (100, 200, 300, 400))
+        self.assertTrue(btn.clickable)
+        self.assertEqual(btn.center, (200, 300))
+        # zero-area bounds -> no center; explicit enabled=false honored
+        img = nodes[2]
+        self.assertFalse(img.enabled)
+        self.assertIsNone(img.center)
+
+    def test_foreground_bundle_parse(self):
+        out = (
+            "Mission ID #1\n  ... #1:com.bg.app:EntryAbility ... state #BACKGROUND\n"
+            "Mission ID #2\n  ... #2:com.fg.app:EntryAbility ... state #FOREGROUND\n"
+        )
+        self.assertEqual(_parse_foreground_bundle(out), "com.fg.app")
+        self.assertIsNone(_parse_foreground_bundle("nothing here"))
 
 
 if __name__ == "__main__":

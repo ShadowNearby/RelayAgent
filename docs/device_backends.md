@@ -11,7 +11,7 @@ agents/device/
 ├── base.py            DeviceBackend ABC + UINode + Key
 ├── android.py         AndroidBackend — adb (IMPLEMENTED, the only real backend)
 ├── ios.py             IOSBackend — WebDriverAgent skeleton (NotImplementedError)
-├── harmony.py         HarmonyBackend — hdc/uitest skeleton (NotImplementedError)
+├── harmony.py         HarmonyBackend — hdc/uitest, implemented (unverified on device)
 ├── factory.py         get_backend(): RELAY_PLATFORM → backend instance
 └── vendor_profiles.py Android vendor tables (+ RELAY_VENDOR_PROFILE overlay)
 ```
@@ -57,20 +57,24 @@ zero-area bounds (consumers rely on this as the visibility filter).
 | DeviceBackend | Android (adb) | iOS (WebDriverAgent) | HarmonyOS NEXT (hdc) |
 | --- | --- | --- | --- |
 | `screencap` | `exec-out screencap -p` | `GET /screenshot` | `uitest screenCap` + `hdc file recv` |
-| `screen_size` | `wm size` | `GET /window/size` | `hidumper` / `uitest` (TBV) |
-| `dump_ui_tree` | `uiautomator dump` → UINode | `GET /source?format=json` → UINode | `uitest dumpLayout` → UINode |
-| `foreground_app` | `dumpsys window` → `dumpsys activity` | `GET /wda/activeAppInfo` | `aa dump -a` |
+| `screen_size` | `wm size` | `GET /window/size` | screencap frame size, cached (TBV) |
+| `dump_ui_tree` | `uiautomator dump` → UINode | `GET /source?format=json` → UINode | `uitest dumpLayout` (JSON) + `hdc file recv` → UINode (attr names TBV) |
+| `foreground_app` | `dumpsys window` → `dumpsys activity` | `GET /wda/activeAppInfo` | `aa dump -l` → FOREGROUND mission bundle (TBV) |
 | `tap` / `long_press` | `input tap` / same-point swipe | `POST /wda/touch/perform` | `uitest uiInput click / longClick` |
-| `swipe_gesture` | `input swipe` | `POST /wda/dragfromtoforduration` | `uitest uiInput swipe` |
-| `key` BACK / HOME / ENTER | `KEYCODE_*` | edge-swipe / `/wda/homescreen` / `/wda/keys "\n"` | `uiInput keyEvent Back / Home` |
-| `input_text` | AdbKeyboard `ADB_INPUT_B64` broadcast; ASCII `input text` fallback | `POST /wda/keys` (no IME dependency — CJK works) | `uiInput inputText` (CJK TBV) |
-| `launch` / `cold_launch` / `force_stop` | monkey LAUNCHER / `am force-stop` | `POST /session {bundleId}` / terminate | `aa start -b` / `aa force-stop` |
-| `kill_all_apps` | `pm list -3` ∩ `ps -A` → force-stop | no enumeration — known ids only | `bm dump -a` + `aa force-stop` |
-| `setup_input_channel` | `ime enable/set` AdbKeyboard | no-op | likely no-op (TBV) |
-| `start_recording` | `screenrecord` chunked + pull | mjpeg port; real-device file recording is a **gap** | `uitest record` (TBV) |
-| `dismiss_permission_popup` | vendor packages + Allow labels | springboard alerts: `/alert/text` + `/alert/accept` | dialogs appear in dumpLayout; same label strategy |
+| `swipe_gesture` | `input swipe` | `POST /wda/dragfromtoforduration` | `uitest uiInput swipe` (duration→velocity px/s) |
+| `key` BACK / HOME / ENTER | `KEYCODE_*` | edge-swipe / `/wda/homescreen` / `/wda/keys "\n"` | `uiInput keyEvent Back / Home / 2054` (ENTER keycode TBV) |
+| `input_text` | AdbKeyboard `ADB_INPUT_B64` broadcast; ASCII `input text` fallback | `POST /wda/keys` (no IME dependency — CJK works) | `uiInput inputText <x> <y> <text>` at the last-tap point; no IME swap (CJK/spaces TBV) |
+| `launch` / `cold_launch` / `force_stop` | monkey LAUNCHER / `am force-stop` | `POST /session {bundleId}` / terminate | `aa start -b <bundle> -a <ability>` (default `EntryAbility`) / `aa force-stop` |
+| `kill_all_apps` | `pm list -3` ∩ `ps -A` → force-stop | no enumeration — known ids only | `aa dump -l` bundles minus launcher/systemui → `aa force-stop` |
+| `setup_input_channel` | `ime enable/set` AdbKeyboard | no-op | no-op (uiInput injects directly) |
+| `start_recording` | `screenrecord` chunked + pull | mjpeg port; real-device file recording is a **gap** | not supported yet — no-op handle, warns (**gap**) |
+| `dismiss_permission_popup` | vendor packages + Allow labels | springboard alerts: `/alert/text` + `/alert/accept` | permission-manager bundle + Allow labels via dumpLayout |
 
-TBV = to be verified on a real device.
+TBV = to be verified on a real device. The HarmonyOS column is **implemented
+but not yet run against a live HarmonyOS 6 device** — each `NOTE(verify-on-device)`
+in `agents/device/harmony.py` marks a wire detail (dumpLayout attribute names,
+the ENTER keycode, `aa dump -l` parsing, CJK over `uiInput inputText`) to confirm
+on first real-device bring-up.
 
 ## iOS prerequisites (when implementing)
 
