@@ -140,4 +140,4 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 - **路径**：`RELAY_TRAJ_ROOT` 重定向 traj_logs 基目录（Android 指 filesDir；主机默认 `<repo>/traj_logs` 不变）。
 - **Spike B 工具**：`scripts/diff_a11y_dump.py` 对比 App 内 a11y 序列化 与真 `uiautomator dump` 的 (text/content-desc/bounds) 节点集 + text-hash 流。
 - **已知语义漂移（端侧接受）**：无 shell 拿不到真 force-stop，冷启动以 `FLAG_ACTIVITY_CLEAR_TASK` 重启近似——端上运行不与 benchmark 对比。
-- **待接线**：`relay_android/backend.py:install()` 等 `agents.device` 注入缝（P0.1，device-backend 分支）落地。
+- **已接线 + 模拟器验证**：`relay_android/backend.py:install()` 注入 `OnDeviceAndroidBackend` 已在 AVD 上跑通（CPython→backend 注入→MediaProjection 截帧→路由/规划→in-process leg→traj 落 filesDir）。`native_runner._agent_spec` 在磁盘无 `agents/relay_agent.py`（Chaquopy AssetFinder 打包形态）时回落包内 module spec 加载 agent。debug APK 的 abiFilters 含 x86_64 可装模拟器；搭建与安装步骤见 `docs/emulator_testing.zh.md` §3/§7（scrcpy 远程观察 §6）。
