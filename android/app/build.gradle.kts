@@ -60,7 +60,10 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // x86_64 covers the AVD emulator (docs/emulator_testing.zh.md); Chaquopy
+        // only reads abiFilters from defaultConfig, so both live here. Drop
+        // x86_64 for a slimmer release APK when shipping to real devices only.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     sourceSets {
