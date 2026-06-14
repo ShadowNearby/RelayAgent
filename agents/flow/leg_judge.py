@@ -34,8 +34,8 @@ from typing import Any
 
 from loguru import logger
 
-from agents._img import pil_to_base64
-from agents.action_model import ASK_USER
+from agents.runtime._img import pil_to_base64
+from agents.agent.action_model import ASK_USER
 
 # Verdict states.
 SUCCESS = "success"

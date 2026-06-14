@@ -15,12 +15,12 @@ from typing import Any
 
 from loguru import logger
 
-from agents.card_catalog import clean_text
-from agents.llm_retry import create_with_retry
-from agents.locale_policy import first_locale, locale_policy_text
-from agents.route_overlay import RouteOverlay
+from agents.routing.card_catalog import clean_text
+from agents.llm.llm_retry import create_with_retry
+from agents.routing.locale_policy import first_locale, locale_policy_text
+from agents.routing.route_overlay import RouteOverlay
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 MATRIX_CSV = REPO_ROOT / "docs" / "app_capability_matrix.csv"
 
 # The generic, catch-all capability. Routing isolates it into its own fallback

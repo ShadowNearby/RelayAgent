@@ -2,7 +2,7 @@
 
 The adb implementations moved to `agents/device/android.py` (AndroidBackend);
 these same-named functions delegate to `agents.device.get_backend()` so the
-existing import surface (`from agents._adb import screencap, ...`) keeps
+existing import surface (`from agents.runtime._adb import screencap, ...`) keeps
 working unchanged while call sites migrate. New code should hold a backend
 instance instead:
 

@@ -26,13 +26,10 @@ Design notes (see CLAUDE.md for project context):
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
-import re
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 from datetime import datetime
@@ -42,210 +39,49 @@ from typing import Any
 import yaml
 from loguru import logger
 
-from agents._adb import screencap
-from agents.action_model import ANSWER, ASK_USER, FINISHED
-from agents.interaction import get_interaction
-from agents.leg_judge import LOADING, final_frames, judge_leg
-from agents.llm_client import make_llm_client
-from agents.llm_retry import create_with_retry
-from agents.route_overlay import RouteOverlay
-from agents.runtime_config import ensure_llm_env
+from agents.runtime._adb import screencap
+from agents.runtime.interaction import get_interaction
+from agents.flow.leg_judge import LOADING, final_frames, judge_leg
+from agents.llm.llm_client import make_llm_client
+from agents.routing.route_overlay import RouteOverlay
+from agents.runtime.runtime_config import ensure_llm_env
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = REPO_ROOT / ".env"
-# Each app leg is a fresh native runner subprocess (direct adb).
-NATIVE_RUNNER_MODULE = "agents.native_runner"
-# MobileWorld fallback legs shell out to this driver (manages the MW server,
-# prelaunch, .env LLM config) — see scripts/run_mobileworld.py.
-RUN_MOBILEWORLD = REPO_ROOT / "scripts" / "run_mobileworld.py"
-MW_STEP_TYPE = "mobileworld"
+# Pieces split out of this module; re-exported here so `flow_runner` stays the
+# public facade (tests, nl_flow and the Android entry import these from here).
+from agents.flow.flow_recording_llm import _RecordingLLM
+from agents.flow.flow_leg_executor import (
+    InProcessLegExecutor,
+    SubprocessLegExecutor,
+    _default_leg_executor,
+)
+from agents.flow.flow_runner_util import (
+    ENV_FILE,
+    MW_STEP_TYPE,
+    NATIVE_RUNNER_MODULE,
+    REPO_ROOT,
+    RUN_MOBILEWORLD,
+    _assert_output_free_step_completed,
+    _harvest_mw_traj,
+    _load_mw_driver,
+    _parse_fenced_json,
+    _read_json_file,
+    _redact,
+    _resolve_choice,
+    render,
+)
+
+__all__ = [
+    "FlowRunner",
+    "InProcessLegExecutor",
+    "SubprocessLegExecutor",
+    "_RecordingLLM",
+    "MW_STEP_TYPE",
+    "_harvest_mw_traj",
+]
 
 
-# cold-launch delegates to agents._adb so native_runner/flow_runner/relay_agent
+# cold-launch delegates to agents.runtime._adb so native_runner/flow_runner/relay_agent
 # open_app share one implementation.
-
-
-# --------------------------------------------------------------------------- #
-# templating
-# --------------------------------------------------------------------------- #
-
-_VAR_RE = re.compile(r"\{([a-zA-Z_][\w.]*)\}")
-
-
-def render(template: str, ctx: dict[str, Any]) -> str:
-    """Substitute `{var}` and `{var.field}` against ctx. Missing keys → ''."""
-    def repl(m: re.Match) -> str:
-        path = m.group(1).split(".")
-        v: Any = ctx
-        for p in path:
-            if isinstance(v, dict):
-                v = v.get(p, "")
-            else:
-                v = getattr(v, p, "")
-        return "" if v is None else str(v)
-    return _VAR_RE.sub(repl, template)
-
-
-# --------------------------------------------------------------------------- #
-# Flow-process LLM-call recording
-# --------------------------------------------------------------------------- #
-
-
-def _sanitize_flow_messages(messages: list[dict]) -> list[dict]:
-    """Strip giant base64 image_url payloads (leg-judge screenshots) so the
-    folded traj.json stays readable; text content is left untouched."""
-    out: list[dict] = []
-    for msg in messages:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            out.append(msg)
-            continue
-        parts: list[Any] = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "image_url":
-                url = (part.get("image_url") or {}).get("url", "")
-                if isinstance(url, str) and url.startswith("data:"):
-                    parts.append({"type": "image_url", "image_url": {
-                        "url": f"<base64 image, {len(url)} chars>"
-                    }})
-                    continue
-            parts.append(part)
-        out.append({**msg, "content": parts})
-    return out
-
-
-class _RecordingLLM:
-    """Thin proxy over the OpenAI client that records every
-    `chat.completions.create` call (sanitized) into `self.calls`. FlowRunner
-    folds each leg's slice of that buffer into the leg's traj.json under the
-    top-level `flow_llm_calls` key, so flow-process LLM cost (leg judge, bind
-    extraction) is observable alongside the in-app agent's
-    `["0"]["llm_calls"]`. The real response object is returned untouched.
-
-    `purpose` is a caller-set label (e.g. "leg_judge", "bind_extract") stamped
-    onto each recorded call; single-threaded flow so a plain attribute is enough.
-
-    `retry=True` (FlowRunner's callers invoke `.chat.completions.create`
-    directly, so the recorder owns the retry). Set `retry=False` when the
-    caller already wraps the proxy in `create_with_retry` (e.g. the planner /
-    capability router), so the gateway isn't retried twice over.
-    """
-
-    def __init__(self, client: Any, retry: bool = True) -> None:
-        self._client = client
-        self._retry = retry
-        self.calls: list[dict] = []
-        self.purpose = "flow"
-        self.chat = _RecChat(self)
-
-
-class _RecChat:
-    def __init__(self, rec: _RecordingLLM) -> None:
-        self.completions = _RecCompletions(rec)
-
-
-class _RecCompletions:
-    def __init__(self, rec: _RecordingLLM) -> None:
-        self._rec = rec
-
-    def create(self, *args: Any, **kwargs: Any) -> Any:
-        rec = self._rec
-        started = time.monotonic()
-        record: dict[str, Any] = {
-            "ts": time.time(),
-            "purpose": rec.purpose,
-            "model": kwargs.get("model"),
-            "messages": _sanitize_flow_messages(kwargs.get("messages", [])),
-            "kwargs": {k: kwargs[k] for k in ("temperature", "max_tokens")
-                       if k in kwargs},
-        }
-        try:
-            # Retry transient gateway failures (timeout/5xx/rate-limit) before
-            # giving up — one flaky call shouldn't sink the whole flow leg.
-            # Skip when the caller already retries (rec._retry=False) so we
-            # don't nest create_with_retry over itself.
-            resp = (
-                create_with_retry(rec._client, *args, **kwargs)
-                if rec._retry
-                else rec._client.chat.completions.create(*args, **kwargs)
-            )
-        except Exception as e:  # best-effort logging — record then re-raise
-            record["elapsed_s"] = round(time.monotonic() - started, 3)
-            record["response"] = None
-            record["error"] = repr(e)
-            rec.calls.append(record)
-            raise
-        record["elapsed_s"] = round(time.monotonic() - started, 3)
-        msg = resp.choices[0].message if getattr(resp, "choices", None) else None
-        # qwen can null `content` and put the answer in `reasoning_content`.
-        record["response"] = (
-            (getattr(msg, "content", None) or getattr(msg, "reasoning_content", None))
-            if msg is not None else None
-        )
-        usage = getattr(resp, "usage", None)
-        if usage is not None:
-            record["usage"] = {
-                "prompt_tokens": getattr(usage, "prompt_tokens", None),
-                "completion_tokens": getattr(usage, "completion_tokens", None),
-                "total_tokens": getattr(usage, "total_tokens", None),
-            }
-        rec.calls.append(record)
-        return resp
-
-
-# --------------------------------------------------------------------------- #
-# Leg executors — how one app leg's native run is invoked
-# --------------------------------------------------------------------------- #
-
-
-class SubprocessLegExecutor:
-    """Host default: one fresh `python -m agents.native_runner` per leg
-    (crash isolation; per-leg env via the child process env). Byte-identical
-    to the pre-seam inline subprocess.call.
-
-    stdin is fed empty so the final ask_user handoff (when present) closes
-    cleanly with EOF rather than blocking the flow."""
-
-    def run(self, app: str, prompt: str, child_env: dict[str, str],
-            extra_args: list[str]) -> int:
-        cmd = [sys.executable, "-m", NATIVE_RUNNER_MODULE, app, prompt, *extra_args]
-        return subprocess.call(cmd, cwd=REPO_ROOT, env=child_env, stdin=subprocess.DEVNULL)
-
-
-class InProcessLegExecutor:
-    """Android / no-subprocess mode: swap os.environ to the leg env, run the
-    leg in this process via native_runner.main (same argparse path as the
-    CLI), restore env in a finally. Legs are sequential, so a plain swap is
-    safe; the agent module is re-executed per leg by _load_agent_class, so
-    module-level env reads re-resolve.
-
-    Unlike the subprocess executor, stdin is NOT detached — the in-task
-    ask_user handoff goes through the InteractionProvider instead of EOF."""
-
-    def run(self, app: str, prompt: str, child_env: dict[str, str],
-            extra_args: list[str]) -> int:
-        from agents import native_runner
-
-        snapshot = dict(os.environ)
-        os.environ.clear()
-        os.environ.update(child_env)
-        try:
-            return int(native_runner.main([app, prompt, *extra_args]) or 0)
-        except SystemExit as e:  # native_runner maps config errors to sys.exit
-            logger.warning(f"in-process leg exited: {e.code}")
-            return e.code if isinstance(e.code, int) else 1
-        except Exception:
-            logger.exception(f"in-process leg crashed for app={app}")
-            return 1
-        finally:
-            os.environ.clear()
-            os.environ.update(snapshot)
-
-
-def _default_leg_executor():
-    if os.getenv("RELAY_LEG_EXECUTOR", "subprocess") == "inprocess":
-        return InProcessLegExecutor()
-    return SubprocessLegExecutor()
 
 
 # --------------------------------------------------------------------------- #
@@ -796,119 +632,3 @@ class FlowRunner:
         data = _parse_fenced_json(out)
         if "bind_to_array_key" in spec and isinstance(data, dict):
             data = data.get(spec["bind_to_array_key"], data)
-        return data
-
-
-# --------------------------------------------------------------------------- #
-# small utilities
-# --------------------------------------------------------------------------- #
-
-
-_FENCE_RE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
-
-
-def _parse_fenced_json(text: str) -> Any:
-    m = _FENCE_RE.search(text)
-    payload = m.group(1) if m else text
-    # strict=False tolerates raw control characters (literal newlines/tabs) inside
-    # string values, which some models emit instead of escaping them.
-    return json.loads(payload, strict=False)
-
-
-def _redact(d: dict[str, Any]) -> dict[str, Any]:
-    """Shallow redact obvious secrets in blackboard logging."""
-    out = {}
-    for k, v in d.items():
-        if "key" in k.lower() or "token" in k.lower():
-            out[k] = "***"
-        else:
-            out[k] = v
-    return out
-
-
-def _load_mw_driver():
-    """Load scripts/run_mobileworld.py as a module (server health/start/wait
-    helpers live there; reuse rather than duplicate)."""
-    path = REPO_ROOT / "scripts" / "run_mobileworld.py"
-    spec = importlib.util.spec_from_file_location("run_mobileworld", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _harvest_mw_traj(leg_dir: Path) -> tuple[str, str | None, str | None]:
-    """Pull (reply, terminal_action_type, goal_status) from a MobileWorld leg.
-
-    MobileWorld's TrajLogger writes <leg_dir>/user_task/traj.json shaped like
-    `{"0": {"traj": [{"action": {...}}, ...]}}`. The leg reply is the text of the
-    last `answer` action; the terminal signal is the last action overall.
-    Best-effort — a missing/garbled traj yields ("", None, None)."""
-    traj = _read_json_file(leg_dir / "user_task" / "traj.json")
-    node = traj.get("0") if isinstance(traj.get("0"), dict) else {}
-    steps = node.get("traj") if isinstance(node.get("traj"), list) else []
-    if not steps:
-        return "", None, None
-    last_action = (steps[-1].get("action") or {}) if isinstance(steps[-1], dict) else {}
-    terminal_action = last_action.get("action_type")
-    goal_status = last_action.get("goal_status")
-    reply = ""
-    for entry in reversed(steps):
-        action = (entry.get("action") or {}) if isinstance(entry, dict) else {}
-        if action.get("action_type") == ANSWER and (action.get("text") or "").strip():
-            reply = action["text"].strip()
-            break
-    return reply, terminal_action, goal_status
-
-
-def _read_json_file(path: Path) -> dict[str, Any]:
-    try:
-        if path.exists() and path.stat().st_size > 0:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning(f"failed to read native summary {path}: {exc}")
-    return {}
-
-
-def _assert_output_free_step_completed(
-    step: dict,
-    summary: dict[str, Any],
-    rc: int,
-    summary_path: Path,
-) -> None:
-    """No-reply legs still need a positive terminal signal from the child run."""
-    last_action = summary.get("last_action_type")
-    goal_status = summary.get("last_goal_status")
-    ok = (
-        rc == 0
-        and (
-            last_action in {ASK_USER, ANSWER}
-            or (last_action == FINISHED and goal_status == "complete")
-        )
-    )
-    if ok:
-        return
-    raise RuntimeError(
-        f"Step {step['id']!r}: output-free native run did not reach a successful "
-        f"terminal state (rc={rc}, last_action_type={last_action!r}, "
-        f"last_goal_status={goal_status!r}). Check {summary_path.parent}."
-    )
-
-
-def _resolve_choice(raw: str, items: list[Any], label_tpl: str) -> Any:
-    if not raw:
-        return items[0]
-    if raw.isdigit():
-        idx = int(raw) - 1
-        if 0 <= idx < len(items):
-            return items[idx]
-    # substring match against rendered label, then `name`
-    lowered = raw.lower()
-    for it in items:
-        if lowered in render(label_tpl, it).lower():
-            return it
-    for it in items:
-        if isinstance(it, dict) and lowered in str(it.get("name", "")).lower():
-            return it
-    raise ValueError(f"Could not resolve user choice {raw!r} among {len(items)} items")

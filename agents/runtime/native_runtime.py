@@ -29,9 +29,9 @@ from typing import Any
 from loguru import logger
 
 from agents.device import DeviceBackend, Key, get_backend
-from agents.interaction import get_interaction
+from agents.runtime.interaction import get_interaction
 
-from agents.action_model import (
+from agents.agent.action_model import (
     ANSWER,
     ASK_USER,
     CLICK,

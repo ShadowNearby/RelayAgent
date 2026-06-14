@@ -16,10 +16,10 @@ pays a round-trip per UI step that delegation removes.
 
 It subclasses RelayAgent only to inherit the LLM-call logging wrapper
 (`openai_chat_completions_create` → per-call `usage_delta` in traj.json, which
-`scripts/aggregate_metrics.py` reads) and `build_openai_client`. It loads NO
+`scripts/eval/aggregate_metrics.py` reads) and `build_openai_client`. It loads NO
 card and builds NO plan.
 
-Run via:  RELAY_AGENT_FILE=$PWD/agents/a11y_agent.py python -m agents.native_runner <pkg> "<goal>"
+Run via:  RELAY_AGENT_FILE=$PWD/agents/a11y_agent.py python -m agents.runtime.native_runner <pkg> "<goal>"
 Knobs:    A11Y_MAX_NODES (60) · A11Y_TEXT_TRUNC (50) · A11Y_HISTORY_K (12)
           A11Y_STEP_CAP (50) · A11Y_MAX_DUMP_FAIL (4)
 """
@@ -33,10 +33,10 @@ from typing import Any
 
 from loguru import logger
 
-from agents.action_model import JSONAction
+from agents.agent.action_model import JSONAction
 
 from agents.device import UINode, get_backend
-from agents.relay_agent import RelayAgent
+from agents.agent.relay_agent import RelayAgent
 
 # Task-agnostic irreversible-action labels. A tap landing on one of these is
 # converted to a handoff so the baseline cannot cross a CTA — keeps §8.6 safety

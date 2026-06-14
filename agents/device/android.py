@@ -407,7 +407,7 @@ class AndroidBackend(DeviceBackend):
         # Lazy import: _recorder pulls in the _adb shim, which resolves back
         # through the factory to this class — import at call time, not module
         # import time, to keep that loop open.
-        from agents import _recorder
+        from agents.runtime import _recorder
 
         return _recorder.start(out_dir, basename=basename)
 

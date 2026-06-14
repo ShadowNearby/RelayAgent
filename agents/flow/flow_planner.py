@@ -1,7 +1,7 @@
 """LLM flow synthesizer.
 
 Given the full catalog of apps + their embedded-agent capabilities (the
-same shape `agents.card_catalog.build_catalog()` produces) and a user's
+same shape `agents.routing.card_catalog.build_catalog()` produces) and a user's
 natural-language request, ask the text LLM to synthesize a *new* multi-app
 flow plan — the same step/bind schema that `FlowRunner` already executes,
 so no new executor is needed.
@@ -26,20 +26,18 @@ Design (see CLAUDE.md + the `project_cross_app_planner` decision notes):
 from __future__ import annotations
 
 import json
-import os
-import re
 from typing import Any
 
 from loguru import logger
 
-from agents.capability_matrix_router import (
+from agents.routing.capability_matrix_router import (
     FoundationNotApplicable,
     NoRunnableAppForCapability,
     route as route_app_capability,
 )
-from agents.llm_retry import create_with_retry
-from agents.route_overlay import RouteOverlay, compute_route_key as _compute_route_key
-from agents.locale_policy import (
+from agents.llm.llm_retry import create_with_retry
+from agents.routing.route_overlay import RouteOverlay, compute_route_key as _compute_route_key
+from agents.routing.locale_policy import (
     appears_compatible_with_locale,
     first_locale,
     has_explicit_language_instruction,
@@ -50,7 +48,26 @@ from agents.locale_policy import (
 # `_VAR_RE` (the `{var}` / `{var.field}` matcher) and the fenced-JSON parser
 # are shared with the runner so the planner validates exactly what the runner
 # will later template against.
-from agents.flow_runner import _VAR_RE, _parse_fenced_json
+from agents.flow.flow_runner_util import _VAR_RE, _parse_fenced_json
+
+# MobileWorld fallback + plan-shape/template helpers split out of this module;
+# re-exported here so `flow_planner` stays the public facade (tests import
+# MW_STEP_TYPE / _to_mw_leg / _mw_whole_request_plan from here, and the class
+# below uses every name as a module global).
+from agents.flow.flow_planner_mw import (
+    MW_STEP_TYPE,
+    _mw_whole_request_plan,
+    _to_mw_leg,
+    mw_fallback_enabled,
+)
+from agents.flow.flow_planner_util import (
+    _bind_referenced_later,
+    _fill_template,
+    _has_slot_value,
+    _is_ask_user,
+    _is_mw_leg,
+    _var_roots,
+)
 
 
 class PlanValidationError(RuntimeError):
@@ -82,54 +99,6 @@ class PlanValidationError(RuntimeError):
 # and re-validate, before giving up with PlanValidationError.
 _REPAIR_ROUNDS = 3
 
-# Step type for a MobileWorld fallback leg: a leg RA's manifest/capability
-# routing could not cover, handed to MobileWorld's manifest-free general_e2e
-# agent instead of failing the whole plan. See docs/nl_flow.md "MobileWorld 兜底".
-MW_STEP_TYPE = "mobileworld"
-
-
-def mw_fallback_enabled() -> bool:
-    """Whether an uncoverable leg falls back to MobileWorld instead of failing
-    the plan. Default on; disable with RELAY_MW_FALLBACK=0 (or
-    `run_plan.py --no-mw-fallback`)."""
-    return os.getenv("RELAY_MW_FALLBACK", "1") != "0"
-
-
-def _to_mw_leg(step: dict, reason: str) -> dict:
-    """In place, turn one synthesized app step into a MobileWorld fallback leg.
-
-    Keeps `id` / `prompt` / `bind` / `extract` (MW's final answer text feeds the
-    same blackboard slot an app leg would) and keeps `app` as a *prelaunch hint*
-    only — there is no capability to route. Drops the capability requirement and
-    the coverage-gap marker."""
-    step["type"] = MW_STEP_TYPE
-    step.pop("capability", None)
-    step.pop("x_coverage_gap", None)
-    # Drop the provisional route key stamped before routing failed: a MW leg is
-    # not a matrix route, so it must not feed route solidification.
-    step.pop("x_route_key", None)
-    step["x_fallback_reason"] = reason
-    return step
-
-
-def _mw_whole_request_plan(nl_request: str, reason: str) -> dict:
-    """A one-leg plan that hands the entire request to MobileWorld.
-
-    Used when the planner LLM judges the request unsatisfiable outright (no
-    steps to convert leg-by-leg), so per-leg fallback degenerates to a single
-    MobileWorld leg carrying the original request."""
-    return {
-        "description": f"MobileWorld fallback: {reason}",
-        "apps_required": [],
-        "steps": [
-            {
-                "id": "mw_fallback",
-                "type": MW_STEP_TYPE,
-                "prompt": nl_request,
-                "x_fallback_reason": reason,
-            }
-        ],
-    }
 
 _PLANNER_SYSTEM = """You synthesize a multi-app cowork PLAN from a user's natural-language request.
 
@@ -969,93 +938,3 @@ class FlowPlanner:
         for r in sorted(_var_roots(step.get("prompt_header", "")) - produced):
             errors.append(f"ask_user step {sid!r}: prompt_header references {{{r}}} before it is bound")
 
-
-# --------------------------------------------------------------------------- #
-# helpers
-# --------------------------------------------------------------------------- #
-
-
-def _is_ask_user(step: dict) -> bool:
-    return isinstance(step, dict) and step.get("type") == "ask_user"
-
-
-def _is_mw_leg(step: dict) -> bool:
-    return isinstance(step, dict) and step.get("type") == MW_STEP_TYPE
-
-
-def _var_roots(template: str) -> set[str]:
-    """Root variable names referenced by `{var}` / `{var.field}` in a template."""
-    return {m.group(1).split(".")[0] for m in _VAR_RE.finditer(template or "")}
-
-
-# Optional template segment: `[ ... {slot} ... ]`. Non-nested. Kept (brackets
-# stripped, inner slots filled) only when every declared slot it references has a
-# non-empty value; otherwise the whole segment — surrounding wording, spaces, and
-# punctuation included — is dropped.
-_OPT_SEGMENT_RE = re.compile(r"\[([^\[\]]*)\]")
-
-
-def _has_slot_value(slots: dict, name: str) -> bool:
-    v = slots.get(name)
-    return v is not None and str(v).strip() != ""
-
-
-def _fill_slots(text: str, slots: dict, slot_names: list[str]) -> str:
-    """Replace each declared `{slot}` with its value, leaving other braces intact.
-
-    Targeted replacement (not str.format) so cross-step `{var}` tokens that a slot
-    value carries (e.g. "{poi.name}") survive for the runtime `render()`.
-    """
-    for name in slot_names:
-        val = slots.get(name)
-        text = text.replace("{" + name + "}", "" if val is None else str(val))
-    return text
-
-
-def _fill_template(template: str, slots: dict, slot_names: list[str]) -> str:
-    """Fill declared `{slot}`s; conditionally render optional `[..]` segments.
-
-    Template syntax:
-    - `{slot}` — replaced by its extracted value (or an upstream `{var}` token).
-    - `[ ... {slot} ... ]` — an OPTIONAL segment, for slots declared
-      `required: false`. Kept (brackets stripped, inner slots filled) only when
-      every declared slot it references has a non-empty value; otherwise the
-      whole segment is removed, so surrounding wording/spaces/punctuation go with
-      it (e.g. `Navigate to {place}[ by {mode}].` → `Navigate to X.` when `mode`
-      is absent). A `[...]` with no declared slot inside is left as literal text.
-
-    A bare (un-bracketed) optional slot with no value is stripped to '' — put
-    optional slots inside a `[..]` segment to drop their surrounding wording too.
-    """
-    def _render_segment(m: re.Match) -> str:
-        inner = m.group(1)
-        referenced = [n for n in slot_names if ("{" + n + "}") in inner]
-        if not referenced:
-            return m.group(0)  # no declared slot → literal brackets, keep as-is
-        if all(_has_slot_value(slots, n) for n in referenced):
-            return _fill_slots(inner, slots, slot_names)
-        return ""
-
-    out = _OPT_SEGMENT_RE.sub(_render_segment, template)
-    # Fill any remaining required / bare declared slots outside optional segments.
-    out = _fill_slots(out, slots, slot_names)
-    # Tidy double spaces a dropped mid-sentence segment can leave behind.
-    out = re.sub(r"  +", " ", out).strip()
-    return out
-
-
-def _bind_referenced_later(bind: str, steps: list, start_idx: int) -> bool:
-    for step in steps[start_idx:]:
-        if not isinstance(step, dict):
-            continue
-        if _is_ask_user(step):
-            if step.get("select_from") == bind:
-                return True
-            fields = [step.get("prompt_header", "")]
-        else:
-            fields = [step.get("prompt", "")]
-            if isinstance(step.get("extract"), dict):
-                fields.append(step["extract"].get("prompt", ""))
-        if any(bind in _var_roots(str(field or "")) for field in fields):
-            return True
-    return False

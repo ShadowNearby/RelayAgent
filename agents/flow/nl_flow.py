@@ -25,10 +25,10 @@ from typing import Any
 import yaml
 from loguru import logger
 
-from agents.flow_planner import FlowPlanner, PlanValidationError
-from agents.flow_runner import MW_STEP_TYPE, FlowRunner
+from agents.flow.flow_planner import FlowPlanner, PlanValidationError
+from agents.flow.flow_runner import MW_STEP_TYPE, FlowRunner
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GENERATED_DIR = REPO_ROOT / "manifests" / "_generated"
 
 
@@ -198,7 +198,7 @@ def prekill_apps(plan: dict) -> None:
     """
     import os
 
-    from agents import _adb
+    from agents.runtime import _adb
 
     if os.getenv("RELAY_PREKILL_APPS", "1") == "0":
         return

@@ -4,8 +4,8 @@ Loads a BaseAgent implementation and drives it through the direct-adb native
 runtime in an in-process obs -> predict -> execute loop. This module is also
 the subprocess target used by the flow and benchmark drivers:
 
-    python -m agents.native_runner com.aliyun.tongyi "order three drinks"
-    python -m agents.native_runner com.autonavi.minimap "navigate home" --max-step 40
+    python -m agents.runtime.native_runner com.aliyun.tongyi "order three drinks"
+    python -m agents.runtime.native_runner com.autonavi.minimap "navigate home" --max-step 40
 
 The agent writes the task wall-clock to traj_logs/user_task/wall_clock.json,
 anchored at its first predict.
@@ -29,15 +29,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 ENV_FILE = REPO_ROOT / ".env"
-DEFAULT_AGENT_FILE = REPO_ROOT / "agents" / "relay_agent.py"
+DEFAULT_AGENT_FILE = REPO_ROOT / "agents" / "agent" / "relay_agent.py"
 SUMMARY_OUT_ENV = "RELAY_SUMMARY_OUT"
 
-from agents.runtime_config import resolve_llm_config  # noqa: E402
+from agents.runtime.runtime_config import resolve_llm_config  # noqa: E402
 
 
 def _agent_file() -> Path:
@@ -84,7 +84,9 @@ def _agent_spec(path: Path):
     if path.exists():
         return importlib.util.spec_from_file_location(path.stem, str(path))
     try:
-        return importlib.util.find_spec(f"agents.{path.stem}")
+        # Agent modules live under the agents.agent subpackage (relay_agent,
+        # a11y_agent); the on-disk default is agents/agent/relay_agent.py.
+        return importlib.util.find_spec(f"agents.agent.{path.stem}")
     except (ImportError, ValueError):
         return None
 
@@ -94,7 +96,7 @@ def _load_agent_class(path: Path):
 
     Re-executes the module on every call (one call per leg): the agent module
     reads RELAY_* env at module level, and per-leg env must re-resolve."""
-    from agents.agent_base import BaseAgent
+    from agents.agent.agent_base import BaseAgent
 
     spec = _agent_spec(path)
     if spec is None or spec.loader is None:
@@ -153,7 +155,7 @@ def run_leg(
     traj_dir = _rotate_traj_dir()
 
     from agents.device import get_backend
-    from agents.native_runtime import NativeEnv, run_task
+    from agents.runtime.native_runtime import NativeEnv, run_task
 
     backend = get_backend()
     step_wait = (

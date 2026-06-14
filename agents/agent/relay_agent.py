@@ -2,7 +2,7 @@
 
 Run with:
 
-    python -m agents.native_runner com.aliyun.tongyi "在通义里点一杯蜜雪冰城"
+    python -m agents.runtime.native_runner com.aliyun.tongyi "在通义里点一杯蜜雪冰城"
 
 Design:
 - Subclass MCPAgent (agents/agent_base.py) for the provider-agnostic openai
@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import os
 import atexit
-import re
 import sys
 import time
 from pathlib import Path
@@ -36,30 +35,30 @@ from typing import Any
 # The file→agent loader loads this file via importlib.util.spec_from_file_location,
 # so the package directory is NOT on sys.path automatically. Add the repo root
 # so the sibling modules under `agents/` resolve as a package.
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from loguru import logger
 
 # Aliased to a leading-underscore name on purpose: the file→agent loader
-# (agents.native_runner:_load_agent_class) collects every BaseAgent subclass in
+# (agents.runtime.native_runner:_load_agent_class) collects every BaseAgent subclass in
 # this module via inspect.getmembers (alphabetically sorted) and instantiates
 # the first. If the base were exposed as "MCPAgent" it would sort before
 # "RelayAgent" and the loader would try to instantiate the abstract base → "Can't
 # instantiate abstract class MCPAgent". "_MCPAgentBase" sorts AFTER "RelayAgent"
 # (ASCII '_' > 'R'), so RelayAgent is picked.
-from agents.agent_base import MCPAgent as _MCPAgentBase
-from agents._img import pil_to_base64
-from agents.action_model import JSONAction
+from agents.agent.agent_base import MCPAgent as _MCPAgentBase
+from agents.runtime._img import pil_to_base64
+from agents.agent.action_model import JSONAction
 
-from agents._adb import force_stop, swipe_down
-from agents._adb import cold_launch as _cold_launch
-from agents._adb import screencap as _adb_screencap
+from agents.runtime._adb import force_stop, swipe_down
+from agents.runtime._adb import cold_launch as _cold_launch
+from agents.runtime._adb import screencap as _adb_screencap
 from agents.device import get_backend
-from agents.action_planner import Step, build_plan
-from agents.capability_router import route_capability
-from agents.card_loader import load_card_by_app_id
+from agents.agent.action_planner import Step, build_plan
+from agents.routing.capability_router import route_capability
+from agents.routing.card_loader import load_card_by_app_id
 
 _TARGET_APP_ENV = "RELAY_TARGET_APP"
 _MANIFESTS_ENV = "RELAY_MANIFESTS"
@@ -143,516 +142,32 @@ _TRAJ_DIR = (
     else Path("traj_logs") / "user_task"
 )
 
-_GROUNDING_SYSTEM = (
-    "You are a UI grounding model. Given a phone screenshot and a target "
-    "element description, return the click point as JSON with normalized "
-    "coordinates in [0, 999]. Reply with ONE ```json``` fenced object: "
-    '{"x": <int 0-999>, "y": <int 0-999>}. Pick the visible center of the '
-    "element. If you cannot find it, reply with "
-    '{"x": null, "y": null}.'
+# Grounding, reply-scrape, permission-popup and LLM-logging helpers split into
+# sibling modules; imported here because RelayAgent uses each as a module global
+# (and tests import some of them from this module — see test_a11y_migration).
+from agents.agent.relay_grounding import (  # noqa: E402
+    _FENCE_ANY,
+    _GROUNDING_SYSTEM,
+    _JSON_FENCE,
+    _extract_xy,
+    _ground_text_via_a11y,
 )
-_REPLY_WATCH_SYSTEM = (
-    "You watch an in-app AI assistant render its reply on a phone screen. "
-    "Read the assistant's reply to the user's most recent message off the "
-    "screenshot. Ignore UI chrome (input bar, suggestion chips, status bar) "
-    "and the user's own message bubbles. "
-    "Reply with ONE ```json``` fenced object: "
-    '{"text": "<the assistant\'s reply text verbatim, '
-    'or null if you cannot read it>"} . '
-    "Keep `text` short (<= 500 chars); summarize tail only if too long."
+from agents.agent.relay_reply import (  # noqa: E402
+    _NM_ADVANCE_SYSTEM,
+    _REPLY_WATCH_SYSTEM,
+    _crop_cutoffs,
+    _dump_visible_text_hash,
+    _extract_reply_text_from_dump,
+    _hash_screenshot_region,
+    _normalize_for_dedup,
+    _stitch_chunks,
 )
-_NM_ADVANCE_SYSTEM = (
-    "You are driving a phone on behalf of a user whose task is being handled by "
-    "an in-app AI assistant. The assistant has replied and may show option cards "
-    "(store choices, item specs, quantities). Your job is NOT to make real "
-    "choices for the user — only to ACCEPT the assistant's recommended DEFAULTS "
-    "and advance the interaction until the screen reaches the final human-confirmation "
-    "step, then STOP. Rules, in priority order:\n"
-    "1. If ANY visible button would perform an IRREVERSIBLE action — pay, place/"
-    "submit the order, confirm payment, confirm a ride or booking (labels like "
-    "立即支付, 支付宝付款, 微信支付, 提交订单, 确认支付, 立即下单, 去支付, 确认下单, "
-    "立即叫车, 确认叫车, Pay, Place order) — the task MUST stop here for the human. "
-    "Set cta_present=true and return NO advance point.\n"
-    "2. Otherwise, if a button simply PROCEEDS by accepting the assistant's "
-    "recommended/default option (labels like 选这个, 选好了, 确定, 确认, 下一步, "
-    "继续, 保存, Confirm, Next), return its center as `advance`.\n"
-    "3. Otherwise (the reply is just informational, nothing to advance, or you "
-    "are unsure), set done=true and return no advance.\n"
-    "When unsure whether a button is irreversible, treat it as irreversible "
-    "(prefer stopping over tapping). Reply with ONE ```json``` fenced object: "
-    '{"cta_present": <bool>, "cta_label": "<text or null>", '
-    '"advance": [<x 0-999>, <y 0-999>] or null, "advance_label": "<text or null>", '
-    '"done": <bool>}.'
+from agents.agent.relay_permissions import _maybe_dismiss_permission_popup  # noqa: E402
+from agents.agent.relay_llm_log import (  # noqa: E402
+    _llm_purpose_from_messages,
+    _sanitize_kwargs_for_log,
+    _sanitize_messages_for_log,
 )
-_JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
-_FENCE_ANY = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
-
-
-# Common labels for in-app "stop generating" / "thinking" buttons. Used ONLY
-# as a chrome-filter for the reply-text scrape (so e.g. "停止生成" doesn't
-# leak into the extracted reply text). The done-detection signal is the
-# text-hash diff in wait_for_reply Stage 2, not these markers.
-_DEFAULT_STREAMING_MARKERS: tuple[str, ...] = (
-    "停止生成", "停止回答", "停止", "生成中", "正在生成", "思考中",
-    "Stop generating", "Stop", "Generating", "Thinking",
-)
-
-
-def _dump_visible_text_hash(
-    dump_timeout: float = 3,
-    pull_timeout: float = 2,
-) -> "str | None":
-    """blake2b hash of all visible text + content-desc joined in document
-    order. Used by the wait_for_reply Stage-2 precheck: if this tick's hash
-    matches the previous tick's hash, no new text was rendered → the in-app
-    agent is done streaming. If it differs, the reply is still growing → skip
-    the VLM call. None on dump failure (caller falls through to VLM).
-
-    This is strictly better than the old "look for 停止生成 marker" heuristic:
-    app-agnostic (no per-app marker list to maintain), and it catches both
-    apps without a stop button AND apps whose stop button stays around after
-    generation completes."""
-    nodes = get_backend().dump_ui_tree(
-        dump_timeout=dump_timeout, pull_timeout=pull_timeout
-    )
-    if nodes is None:
-        return None
-    parts: list[str] = []
-    for n in nodes:
-        if n.text:
-            parts.append(n.text)
-        if n.desc and n.desc != n.text:
-            parts.append(n.desc)
-    joined = "␟".join(parts)
-    import hashlib
-    return hashlib.blake2b(joined.encode("utf-8", "replace"), digest_size=12).hexdigest()
-
-
-# Screen crop ratios shared by the reply scrape and the screenshot-region
-# hash: strip the status bar (top, default 8%) and the input/keyboard area
-# (bottom, default 18%). Device-profile knobs — punch-hole rows, taller nav
-# pills or unusual input bars move them via env.
-_CROP_TOP_ENV = "RELAY_CROP_TOP"
-_CROP_BOTTOM_ENV = "RELAY_CROP_BOTTOM"
-
-
-def _crop_cutoffs(h: int) -> tuple[int, int]:
-    """(top_cutoff, bottom_cutoff) in pixels for screen height `h`: content
-    rows above/below them are status bar / input area and get dropped."""
-    def _ratio(env: str, default: float) -> float:
-        raw = os.getenv(env)
-        if raw:
-            try:
-                return min(0.45, max(0.0, float(raw)))
-            except ValueError:
-                logger.warning(f"Invalid {env}={raw!r}, using {default}")
-        return default
-
-    top = _ratio(_CROP_TOP_ENV, 0.08)
-    bottom = _ratio(_CROP_BOTTOM_ENV, 0.18)
-    return int(h * top), int(h * (1.0 - bottom))
-
-
-# Chrome labels we never want to include in the extracted reply text.
-# Combined with the streaming-marker list at runtime.
-_REPLY_CHROME_LABELS: frozenset[str] = frozenset({
-    "复制", "重新生成", "重试", "分享", "收藏", "点赞", "踩", "更多", "发送",
-    "Copy", "Regenerate", "Retry", "Share", "Send", "More",
-    "发消息", "发消息或按住说话", "请输入", "输入",
-    "AI 内容仅供参考", "AI 生成内容可能存在错误",
-})
-
-
-def _extract_reply_text_from_dump(
-    user_input_text: str | None,
-    screen_h: int,
-    extra_excludes: tuple[str, ...] = (),
-) -> str | None:
-    """Scrape the assistant's most recent reply text directly from the
-    uiautomator XML, no VLM. Returns the joined text or None on dump failure
-    / nothing plausibly-reply found.
-
-    Heuristic (no per-app config needed for most chat UIs):
-      1. Dump the normalized a11y tree.
-      2. Walk all visible text-bearing nodes in document order, recording
-         (top-y, text). Strip status-bar (top 8%) and input-bar (bottom 18%)
-         regions outright.
-      3. If `user_input_text` was supplied and appears in any node, take the
-         LAST such occurrence's y; keep only nodes whose top-y > that y.
-         (Those are siblings rendered below the user's own bubble — i.e. the
-         assistant's reply.)
-      4. Filter out chrome labels (Copy / Regenerate / streaming markers /
-         input placeholders).
-      5. Join with newlines, return None if the result is empty/whitespace.
-    """
-    tree = get_backend().dump_ui_tree(dump_timeout=3, pull_timeout=2)
-    if tree is None:
-        return None
-    top_cutoff, bot_cutoff = _crop_cutoffs(screen_h)
-    # (top_y, text)
-    nodes: list[tuple[int, str]] = []
-    for n in tree:
-        if not n.text or n.center is None:  # center=None ⇒ no/zero-area bounds
-            continue
-        y1 = n.bounds[1]
-        # Drop status bar / input area / off-screen nodes.
-        if y1 < top_cutoff or y1 > bot_cutoff:
-            continue
-        nodes.append((y1, n.text))
-    if not nodes:
-        return None
-    # Find y of last occurrence of user's typed input (their own bubble).
-    # We compare with substring containment to tolerate trailing spaces /
-    # avatar timestamps appended by some apps.
-    cut_y = -1
-    if user_input_text:
-        u = user_input_text.strip()
-        if u:
-            for y, t in nodes:
-                if u in t or t in u:
-                    cut_y = max(cut_y, y)
-    # Filter: above user bubble OR known chrome OR streaming markers.
-    excludes = set(_REPLY_CHROME_LABELS) | set(extra_excludes)
-    excludes |= set(_DEFAULT_STREAMING_MARKERS)
-    candidates: list[tuple[int, str]] = []
-    for y, t in nodes:
-        if cut_y >= 0 and y <= cut_y:
-            continue
-        if t in excludes:
-            continue
-        # Substring-match exclusion for noisy chrome variants ("AI 内容..." etc.)
-        if any(x and x in t and len(x) >= 4 for x in excludes):
-            continue
-        candidates.append((y, t))
-    if not candidates:
-        return None
-    # Drop short "quick-reply chip"-looking nodes IFF there's at least one
-    # substantial node — otherwise a one-line reply would itself be dropped.
-    # Threshold (25 chars) catches typical follow-up suggestion buttons
-    # ("复旦大学有哪些王牌专业？") while preserving real reply prose.
-    MIN_CHIP_LEN = 25
-    has_substantial = any(len(t) >= MIN_CHIP_LEN for _, t in candidates)
-    if has_substantial:
-        candidates = [(y, t) for y, t in candidates if len(t) >= MIN_CHIP_LEN]
-    joined = "\n".join(t for _, t in candidates).strip()
-    return joined or None
-
-
-def _hash_screenshot_region(image) -> str:
-    """Perceptual-ish hash of the message area of a phone screenshot.
-    Crops out the status bar (top ~8%) and the input/keyboard area (bottom
-    ~18%) so a ticking clock or a blinking input caret doesn't constantly
-    flip the hash. Downscales to 48×96 grayscale so a streaming cursor /
-    small fading dots don't either, while a growing reply paragraph still
-    changes enough pixels to register as different.
-
-    This is the *fast* precheck signal in wait_for_reply: comparing this
-    hash across ticks is essentially free, and lets us skip the expensive
-    uiautomator dump (and the VLM call) while text is actively streaming."""
-    w, h = image.size
-    top, bot = _crop_cutoffs(h)
-    crop = image.crop((0, top, w, bot))
-    small = crop.convert("L").resize((48, 96))
-    import hashlib
-    return hashlib.blake2b(small.tobytes(), digest_size=12).hexdigest()
-
-
-# --- System permission popup auto-dismiss ------------------------------------
-#
-# The logic and vendor tables (permission-controller packages, Allow labels)
-# live in the device backend (agents/device/android.py +
-# agents/device/vendor_profiles.py); we hook it at the top of every predict so
-# the planner doesn't have to know anything about runtime-permission dialogs.
-# Capped to MAX_DISMISSALS per task; env opt-out via RELAY_DISMISS_PERMISSIONS=0.
-def _maybe_dismiss_permission_popup() -> str | None:
-    """If a system permission/consent dialog is on top, tap the most-permissive
-    Allow button. Returns the label tapped (for logging) or None when nothing
-    was dismissed."""
-    return get_backend().dismiss_permission_popup()
-
-
-# Strip whitespace + common punctuation noise so two VLM extractions of the
-# same paragraph compare equal even when one renders "2022年, 董..." and the
-# other "2022年，董...", or with/without inline numbering / bullet glyphs.
-_DEDUP_STRIP_RE = re.compile(r"[\s.,;:!?，。、；：！？\-—–·•*•]+")
-
-
-def _normalize_for_dedup(s: str) -> str:
-    """Lowercase + drop whitespace and minor punctuation. Used only for
-    chunk-equality checks; the original chunk text is preserved for output."""
-    return _DEDUP_STRIP_RE.sub("", s).lower()
-
-
-def _stitch_chunks(chunks: list[str]) -> str:
-    """Merge VLM-extracted chunks from sliding screenshot windows into one
-    coherent reply. Two passes:
-
-      1. Drop any chunk whose normalized form is a substring of another
-         (sub-window dupes — same content captured at a slightly different
-         scroll position).
-      2. Walk surviving chunks in capture order (top → bottom) and append
-         their lines, skipping any line whose normalized form was already
-         emitted. This handles both the heavy-overlap case (most lines
-         dedupe → output ≈ longest chunk) and the disjoint-content case
-         (chunks cover different parts of a long reply → output is the
-         union, in reading order).
-
-    Char-level suffix/prefix stitching is intentionally avoided: VLM
-    paraphrase drift defeats it. Line-level dedup is robust because the
-    VLM tends to reproduce whole lines verbatim per frame even when the
-    surrounding wrap changes.
-
-    Chunks are assumed to be in reading order (top → bottom)."""
-    chunks = [c for c in chunks if c and c.strip()]
-    if not chunks:
-        return ""
-    if len(chunks) == 1:
-        return chunks[0]
-
-    # (1) Drop substring duplicates (normalized).
-    norms = [_normalize_for_dedup(c) for c in chunks]
-    keep_idx: list[int] = []
-    for i, ni in enumerate(norms):
-        if not ni:
-            continue
-        if any(i != j and norms[j] and ni in norms[j] for j in range(len(norms))):
-            continue  # ni is a substring of some other chunk
-        keep_idx.append(i)
-    chunks = [chunks[i] for i in keep_idx]
-    if len(chunks) <= 1:
-        return chunks[0] if chunks else ""
-
-    # (2) Line-level ordered-dedup merge. For each chunk in capture order,
-    # append its lines unless we've already emitted that line (normalized).
-    # Blank lines pass through unconditionally so paragraph breaks survive,
-    # but consecutive blanks are collapsed.
-    out_lines: list[str] = []
-    seen: set[str] = set()
-    new_line_counts: list[int] = []
-    for c in chunks:
-        added = 0
-        for line in c.splitlines():
-            if not line.strip():
-                if out_lines and out_lines[-1].strip():
-                    out_lines.append("")
-                continue
-            key = _normalize_for_dedup(line)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            out_lines.append(line)
-            added += 1
-        new_line_counts.append(added)
-    while out_lines and not out_lines[-1].strip():
-        out_lines.pop()
-    merged = "\n".join(out_lines)
-    logger.info(
-        f"_stitch_chunks: merged {len(chunks)} chunks by line-dedup "
-        f"(new lines per chunk: {new_line_counts}) -> {len(merged)} chars"
-    )
-    return merged
-
-
-def _ground_text_via_a11y(
-    target: str, screen_w: int, screen_h: int
-) -> tuple[int, int] | None:
-    """Dump the normalized a11y tree and find a node whose text / desc /
-    resource-id matches `target`. Returns the center of the matching node's
-    bounds in screen pixels, or None on miss.
-
-    Match policy (tightest first):
-      1. exact text or desc match
-      2. substring match (text contains target, or vice versa)
-      3. resource-id endswith target
-
-    All matches are restricted to clickable / focusable / visible nodes when
-    possible — falls back to any node if no clickable match exists.
-    """
-    nodes = get_backend().dump_ui_tree(dump_timeout=8, pull_timeout=5)
-    if nodes is None:
-        logger.warning(f"a11y grounding unavailable: UI dump failed for {target!r}")
-        return None
-
-    def _visible_center(n) -> tuple[int, int] | None:
-        c = n.center  # None already filters absent/zero-area bounds
-        if c is None:
-            return None
-        cx, cy = c
-        if cx < 0 or cy < 0 or cx > screen_w or cy > screen_h:
-            return None
-        return c
-
-    def _candidates(predicate) -> list[tuple[int, tuple[int, int]]]:
-        out: list[tuple[int, tuple[int, int]]] = []
-        for n in nodes:
-            if not predicate(n):
-                continue
-            c = _visible_center(n)
-            if c is None:
-                continue
-            # Prefer clickable / focusable nodes — higher score = better.
-            score = 0
-            if n.clickable:
-                score += 4
-            if n.focusable:
-                score += 2
-            if n.enabled:
-                score += 1
-            out.append((score, c))
-        out.sort(reverse=True)
-        return out
-
-    # Tier 1: exact text or desc
-    hits = _candidates(lambda n: n.text == target or n.desc == target)
-    # Tier 2: substring either way
-    if not hits:
-        hits = _candidates(
-            lambda n: (n.text and target in n.text)
-            or (n.desc and target in n.desc)
-            or (n.text and n.text in target and len(n.text) > 1)
-        )
-    # Tier 3: resource-id endswith
-    if not hits:
-        hits = _candidates(lambda n: n.resource_id.split("/")[-1] == target)
-    if not hits:
-        logger.info(
-            f"a11y dump ok ({len(nodes)} nodes) but no match for {target!r}"
-        )
-        return None
-    logger.info(
-        f"a11y hit for {target!r}: bounds-center={hits[0][1]} "
-        f"(score={hits[0][0]}, {len(hits)} candidates)"
-    )
-    return hits[0][1]
-
-
-def _extract_xy(raw: str) -> tuple[int | None, int | None]:
-    """Tolerant extractor for VLM grounding outputs.
-
-    Handles, in order of preference:
-      - {"x": <int>, "y": <int>}                                (spec)
-      - {"point": [x, y]} / {"bbox": [x1,y1,x2,y2]}             (some VLMs)
-      - [{"x": [x, y]}, ...]  (Qwen-VL: 'x' field holds [x, y]) (Qwen-VL)
-      - [[x, y]] / [x, y]                                       (raw point)
-    Falls back to a regex over the first two integers if all else fails.
-    """
-    import ast
-
-    # 1. Try the spec-shaped fenced object first.
-    m = _JSON_FENCE.search(raw)
-    if m:
-        try:
-            d = json.loads(m.group(1))
-            if isinstance(d, dict) and "x" in d and "y" in d and not isinstance(d["x"], list):
-                return d["x"], d["y"]
-        except json.JSONDecodeError:
-            pass
-
-    # 2. Otherwise grab whatever is inside any fenced block, or the raw text.
-    m2 = _FENCE_ANY.search(raw)
-    payload = (m2.group(1) if m2 else raw).strip()
-
-    data = None
-    for loader in (json.loads, ast.literal_eval):
-        try:
-            data = loader(payload)
-            break
-        except (json.JSONDecodeError, ValueError, SyntaxError):
-            continue
-
-    def _unwrap(d):
-        if isinstance(d, dict):
-            # {"x": int, "y": int}
-            if isinstance(d.get("x"), (int, float)) and isinstance(d.get("y"), (int, float)):
-                return int(d["x"]), int(d["y"])
-            # Qwen-VL: {"x": [x, y]}
-            if isinstance(d.get("x"), (list, tuple)) and len(d["x"]) >= 2:
-                return int(d["x"][0]), int(d["x"][1])
-            # {"point": [x, y]} / {"coordinate": [x, y]}
-            for k in ("point", "coordinate", "coordinates", "position", "center"):
-                v = d.get(k)
-                if isinstance(v, (list, tuple)) and len(v) >= 2:
-                    return int(v[0]), int(v[1])
-            # {"bbox": [x1, y1, x2, y2]} → center
-            for k in ("bbox", "bbox_2d", "box"):
-                v = d.get(k)
-                if isinstance(v, (list, tuple)) and len(v) >= 4:
-                    return int((v[0] + v[2]) / 2), int((v[1] + v[3]) / 2)
-            # {"x": null, "y": null} → not found
-            if "x" in d and "y" in d and d["x"] is None:
-                return None, None
-        return None
-
-    if isinstance(data, list) and data:
-        head = data[0]
-        if isinstance(head, (int, float)) and len(data) >= 2:
-            return int(data[0]), int(data[1])
-        if isinstance(head, (list, tuple)) and len(head) >= 2:
-            return int(head[0]), int(head[1])
-        if isinstance(head, dict):
-            r = _unwrap(head)
-            if r is not None:
-                return r
-    if isinstance(data, dict):
-        r = _unwrap(data)
-        if r is not None:
-            return r
-
-    # 3. Last-ditch: pull the first two integers out of the text.
-    nums = re.findall(r"-?\d+", payload)
-    if len(nums) >= 2:
-        return int(nums[0]), int(nums[1])
-    return None, None
-
-
-def _sanitize_messages_for_log(messages: list[dict]) -> list[dict]:
-    """Strip giant base64 image_url payloads so traj.json stays readable."""
-    out: list[dict] = []
-    for msg in messages:
-        content = msg.get("content")
-        if isinstance(content, list):
-            parts: list[dict] = []
-            for part in content:
-                if not isinstance(part, dict):
-                    parts.append({"type": "raw", "value": repr(part)[:200]})
-                    continue
-                if part.get("type") == "image_url":
-                    url = (part.get("image_url") or {}).get("url", "")
-                    if isinstance(url, str) and url.startswith("data:"):
-                        parts.append({"type": "image_url", "image_url": {
-                            "url": f"<base64 image, {len(url)} chars>"
-                        }})
-                    else:
-                        parts.append(part)
-                else:
-                    parts.append(part)
-            out.append({**msg, "content": parts})
-        else:
-            out.append(msg)
-    return out
-
-
-def _sanitize_kwargs_for_log(kwargs: dict) -> dict:
-    return {k: v for k, v in kwargs.items()
-            if k in ("temperature", "max_tokens", "max_completion_tokens", "stream")}
-
-
-def _llm_purpose_from_messages(messages: list[dict]) -> str:
-    """Best-effort label for a call site (capability-router / grounding /
-    reply-watch / other), inferred from the system prompt."""
-    if not messages:
-        return "unknown"
-    sys_msg = next((m for m in messages if m.get("role") == "system"), None)
-    sys = (sys_msg or {}).get("content")
-    if not isinstance(sys, str):
-        return "unknown"
-    if sys.startswith(_GROUNDING_SYSTEM[:40]):
-        return "grounding"
-    if sys.startswith(_REPLY_WATCH_SYSTEM[:40]):
-        return "reply_watch"
-    if "capability id" in sys:
-        return "capability_router"
-    return "other"
 
 
 class RelayAgent(_MCPAgentBase):
@@ -926,7 +441,7 @@ class RelayAgent(_MCPAgentBase):
 
         if self.record_dir:
             try:
-                from agents import _recorder
+                from agents.runtime import _recorder
                 self._recorder = _recorder.start(Path(self.record_dir))
                 logger.info(f"screen recording (agent-owned) → {self.record_dir}")
             except Exception as e:  # recording must never abort the task
