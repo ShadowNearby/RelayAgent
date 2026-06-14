@@ -12,7 +12,7 @@ queue-noise-normalized wall-clock, and ``ok`` the uniform VLM judge verdict
 (``verdict.status == "success"``). Missing side → blank cells.
 
 Usage:
-    scripts/wall_clock_table.py traj_logs/phaseB/*/results_normalized.jsonl \
+    scripts/eval/wall_clock_table.py traj_logs/phaseB/*/results_normalized.jsonl \
         --out traj_logs/phaseB/wall_clock_table.csv
 """
 from __future__ import annotations

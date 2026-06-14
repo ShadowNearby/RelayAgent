@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase B 定点 rerun：跑指定 (benchmark, system, task) 组合，只产出归一化时间 + token，
-**不判成败**（成败之后用 scripts/manual_judge.py 人工补）。
+**不判成败**（成败之后用 scripts/eval/manual_judge.py 人工补）。
 
 做什么
 ------
@@ -19,9 +19,9 @@
 
 用法
 ----
-    uv run python scripts/phaseB_rerun_cases.py --queue traj_logs/phaseB/rerun2.tsv
-    uv run python scripts/phaseB_rerun_cases.py --queue ... --no-run     # 只重算报表，不跑
-    uv run python scripts/phaseB_rerun_cases.py --pair androiddaily:relay:AD-002 \\
+    uv run python scripts/eval/phaseB_rerun_cases.py --queue traj_logs/phaseB/rerun2.tsv
+    uv run python scripts/eval/phaseB_rerun_cases.py --queue ... --no-run     # 只重算报表，不跑
+    uv run python scripts/eval/phaseB_rerun_cases.py --pair androiddaily:relay:AD-002 \\
         --pair androiddaily:mw:AD-002
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 PHASEB = REPO / "traj_logs" / "phaseB"
 BENCH_ORDER = ["relaybench", "androiddaily", "mobileworld"]
 SYS_ORDER = ["mw", "relay"]  # 与 _phaseB_rerun.sh 一致：每个 bench 先 mw 后 relay
@@ -230,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         rec: dict[str, Any] = {
             "benchmark": bench, "id": task_id, "system": system,
             "fresh": "yes" if idx >= pre_lines[bench] else "no",
-            "success": "",  # 人工判：scripts/manual_judge.py
+            "success": "",  # 人工判：scripts/eval/manual_judge.py
             **normalize_row(row, gamma, alpha, beta),
             "prompt_tokens": row.get("prompt_tokens"),
             "completion_tokens": row.get("completion_tokens"),
@@ -258,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
               f"{rec['fresh']:5s} {_s('elapsed_s_raw'):>8} "
               f"{_s('elapsed_s_norm'):>8} {_s('total_tokens'):>8}")
     print(f"\nwrote {out_csv}  ({len(report)} rows; success 列留空，"
-          f"用 scripts/manual_judge.py 人工判后再汇总)")
+          f"用 scripts/eval/manual_judge.py 人工判后再汇总)")
 
     # ---- 可选：原地更新汇总表 data.csv 的 time/norm/token 列（success 列不动）----
     data_csv = args.phaseb_dir / "data.csv" if args.data_csv is None else args.data_csv

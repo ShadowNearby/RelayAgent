@@ -6,10 +6,10 @@ uiautomator dump + screencap working, and the apps a given benchmark needs are
 installed. Companion doc: docs/device_setup.md / docs/device_setup.zh.md.
 
 Usage:
-    uv run python scripts/check_device_env.py                      # core checks + all manifest apps
-    uv run python scripts/check_device_env.py --benchmark relaybench
-    uv run python scripts/check_device_env.py --apps com.aliyun.tongyi,com.autonavi.minimap
-    RELAY_ANDROID_SERIAL=<serial> uv run python scripts/check_device_env.py
+    uv run python scripts/validate/check_device_env.py                      # core checks + all manifest apps
+    uv run python scripts/validate/check_device_env.py --benchmark relaybench
+    uv run python scripts/validate/check_device_env.py --apps com.aliyun.tongyi,com.autonavi.minimap
+    RELAY_ANDROID_SERIAL=<serial> uv run python scripts/validate/check_device_env.py
 
 Exit code 0 = no FAIL (WARNs allowed), 1 = at least one FAIL.
 """
@@ -22,10 +22,10 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from agents._adb import adb_base  # noqa: E402
+from agents.runtime._adb import adb_base  # noqa: E402
 
 IME_PACKAGE = "com.android.adbkeyboard"
 IME_ID = "com.android.adbkeyboard/.AdbIME"

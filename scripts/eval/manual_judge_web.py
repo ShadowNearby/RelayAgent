@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local web UI for human review of PhaseB VLM verdicts.
 
-Thin browser front-end over ``scripts/manual_judge.py``: shows each ``(id, system)``
+Thin browser front-end over ``scripts/eval/manual_judge.py``: shows each ``(id, system)``
 cell with its final screenshot, the task instruction, and the VLM verdict, and lets
 you click SUCCESS / FAILURE / revert-to-VLM. Decisions persist to the same sidecar
 ``traj_logs/phaseB/<bench>/manual_overrides.json`` (re-runnable, auditable), and the
@@ -10,8 +10,8 @@ exactly like the CLI ``apply`` — so nothing here is a separate code path.
 
 Run::
 
-    uv run python scripts/manual_judge_web.py --bench mobileworld          # http://127.0.0.1:8765
-    uv run python scripts/manual_judge_web.py --bench mobileworld --port 9000
+    uv run python scripts/eval/manual_judge_web.py --bench mobileworld          # http://127.0.0.1:8765
+    uv run python scripts/eval/manual_judge_web.py --bench mobileworld --port 9000
 
 stdlib only (http.server). Binds to 127.0.0.1 by default.
 """
@@ -24,9 +24,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(REPO / "scripts"))          # run_benchmark_test (repo-root scripts/)
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling manual_judge in scripts/eval/
 
 import manual_judge as mj  # noqa: E402
 

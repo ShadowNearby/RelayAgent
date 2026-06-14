@@ -12,9 +12,9 @@ the trace has confidently learned so a human can decide whether to fold them in:
 
 Pure logic — no device, no LLM, no network. Run:
 
-    uv run python scripts/promote_routes.py                 # report
-    uv run python scripts/promote_routes.py --csv           # + review rows as CSV
-    uv run python scripts/promote_routes.py --min-hits 3    # loosen the bar
+    uv run python scripts/routes/promote_routes.py                 # report
+    uv run python scripts/routes/promote_routes.py --csv           # + review rows as CSV
+    uv run python scripts/routes/promote_routes.py --min-hits 3    # loosen the bar
 
 The promotion bar is intentionally *higher* than the live solidification bar
 (MIN_HITS/RATE) so only well-established routes are suggested.
@@ -28,11 +28,11 @@ import os
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from agents.capability_matrix_router import load_matrix  # noqa: E402
-from agents.route_overlay import RouteOverlay  # noqa: E402
+from agents.routing.capability_matrix_router import load_matrix  # noqa: E402
+from agents.routing.route_overlay import RouteOverlay  # noqa: E402
 
 
 def _collect(store: dict, min_hits: int, min_rate: float) -> list[dict]:

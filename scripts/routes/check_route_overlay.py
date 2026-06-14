@@ -4,7 +4,7 @@ Pure logic — no device, no LLM, no network. Exercises the solidification
 thresholds, the consecutive-failure pause, the stale-pair guard in the router,
 the disable flag, and corrupt-store tolerance. Run:
 
-    uv run python scripts/check_route_overlay.py
+    uv run python scripts/routes/check_route_overlay.py
 
 Exits 0 on PASS, non-zero on the first failed assertion.
 """
@@ -24,10 +24,10 @@ os.environ.setdefault("RELAY_ROUTE_SOLIDIFY_HITS", "3")
 os.environ.setdefault("RELAY_ROUTE_SOLIDIFY_RATE", "0.8")
 os.environ.setdefault("RELAY_ROUTE_MAX_FAILS", "2")
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import agents.capability_matrix_router as R  # noqa: E402
-from agents.route_overlay import (  # noqa: E402
+import agents.routing.capability_matrix_router as R  # noqa: E402
+from agents.routing.route_overlay import (  # noqa: E402
     RouteOverlay,
     compute_route_key,
     route_key,

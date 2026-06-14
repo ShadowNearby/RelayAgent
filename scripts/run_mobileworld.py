@@ -27,9 +27,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agents import _recorder  # noqa: E402
-from agents._adb import adb_base, force_stop  # noqa: E402
-from agents.runtime_config import load_dotenv  # noqa: E402
+from agents.runtime import _recorder  # noqa: E402
+from agents.runtime._adb import adb_base, force_stop  # noqa: E402
+from agents.runtime.runtime_config import load_dotenv  # noqa: E402
 
 DEFAULT_MOBILEWORLD_SUBMODULE = REPO_ROOT / "third_party" / "MobileWorld"
 DEFAULT_ENV_FILE = Path(".env")
@@ -197,7 +197,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--llm-calls-out", "--llm_calls_out", dest="llm_calls_out", default=None,
                    metavar="PATH",
                    help="Write per-LLM-call records (latency + prompt/completion/cached tokens) "
-                        "as JSON to PATH. Activates a non-invasive probe (agents.mw_llm_probe) in "
+                        "as JSON to PATH. Activates a non-invasive probe (agents.llm.mw_llm_probe) in "
                         "the mw test subprocess; MobileWorld's own source is left untouched.")
     return p
 

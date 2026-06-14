@@ -8,11 +8,11 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agents.card_catalog import build_catalog
+from agents.routing.card_catalog import build_catalog
 
 TASKS_PATH = REPO_ROOT / "benchmark" / "relaybench_tasks.yaml"
 

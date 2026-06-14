@@ -40,8 +40,8 @@ prefill time, i.e. ``beta * sum(c) = W * alpha * sum(p_eff)`` →
 
 Usage
 -----
-    scripts/normalize_wall_clock.py traj_logs/phaseB/*/results.jsonl
-    scripts/normalize_wall_clock.py traj_logs/phaseB/mobileworld/results.jsonl \
+    scripts/eval/normalize_wall_clock.py traj_logs/phaseB/*/results.jsonl
+    scripts/eval/normalize_wall_clock.py traj_logs/phaseB/mobileworld/results.jsonl \
         --anchor p10 --decode-prefill-ratio 1.0
 
 Writes ``<dir>/results_normalized.jsonl`` (each row gains ``elapsed_s_raw``,

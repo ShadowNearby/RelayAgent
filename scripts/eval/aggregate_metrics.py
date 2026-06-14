@@ -17,7 +17,7 @@ Metrics per run (from traj.json `llm_calls`, which carry per-call `purpose`,
 Wall-clock end-to-end seconds come from the run_all_caps summary.tsv if given.
 
 Usage:
-    scripts/aggregate_metrics.py PATH [PATH ...] [--summary summary.tsv] [--json]
+    scripts/eval/aggregate_metrics.py PATH [PATH ...] [--summary summary.tsv] [--json]
     # PATH may be a traj.json, a run dir containing one, or a tree to walk.
 """
 from __future__ import annotations

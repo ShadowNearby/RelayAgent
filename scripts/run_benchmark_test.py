@@ -20,7 +20,7 @@ Per (task, system) it records:
   - LLM token usage (prompt / completion / total);
   - per-LLM-call records (latency + prompt/completion/cached tokens) under
     ``llm_calls``. For ``mw`` these come from a non-invasive probe
-    (``agents.mw_llm_probe``) injected into the mw test subprocess, since
+    (``agents.llm.mw_llm_probe``) injected into the mw test subprocess, since
     MobileWorld's own logger persists only the run-level aggregate.
 
 Time/token aggregates are reported over the COMPLETED tasks only.
@@ -43,7 +43,7 @@ trims to the tasks whose apps RelayAgent can actually attempt.
 Relay tokens are read from run_plan's authoritative ``<flow_root>/token_usage.json``
 (``total`` includes the plan-synthesis phase; ``by_phase`` splits plan/flow/agent).
 Per-call latency+tokens land in each row's ``llm_calls``: for ``relay`` from that
-file, for ``mw`` from a non-invasive probe (``agents.mw_llm_probe``). Full per-call
+file, for ``mw`` from a non-invasive probe (``agents.llm.mw_llm_probe``). Full per-call
 text (messages/response) is persisted on disk for both — relay in each leg's
 ``traj.json``, mw in ``<sys>/user_task/llm_calls.json`` — not in the lean results row.
 
@@ -95,16 +95,16 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from openai import OpenAI  # noqa: E402
 
-from agents import leg_judge  # noqa: E402
-from agents._adb import (  # noqa: E402
+from agents.flow import leg_judge  # noqa: E402
+from agents.runtime._adb import (  # noqa: E402
     force_stop,
     foreground_package,
     keyevent,
     kill_all_apps,
     reset_airplane_mode,
 )
-from agents._adb import screencap as adb_screencap  # noqa: E402
-from agents.runtime_config import ensure_llm_env  # noqa: E402
+from agents.runtime._adb import screencap as adb_screencap  # noqa: E402
+from agents.runtime.runtime_config import ensure_llm_env  # noqa: E402
 
 # Server lifecycle + MobileWorld runtime resolution are reused from the existing
 # single-goal driver so the two stay in lockstep.
@@ -131,7 +131,7 @@ MW_APP_TO_RA = {
 # Token-throughput model constants for re-pricing per-call LLM time, so each
 # results.jsonl row carries a gateway-queue-free wall-clock the moment it lands
 # (instead of only after a batch normalize pass). Same formula/constants as
-# scripts/normalize_wall_clock.py + phaseB_summary.py:
+# scripts/eval/normalize_wall_clock.py + scripts/eval/phaseB_summary.py:
 #   model_time = gamma + alpha*(prompt-cached) + beta*completion
 # Default file is the calibrated/rounded fit dropped under traj_logs/phaseB.
 NORM_FIT_FILE = TRAJ_LOGS / "phaseB" / "wall_norm_rounded.json"
@@ -421,7 +421,7 @@ _CATALOG_APP_IDS: frozenset[str] | None = None
 def _catalog_app_ids() -> frozenset[str]:
     global _CATALOG_APP_IDS
     if _CATALOG_APP_IDS is None:
-        from agents.card_catalog import build_catalog
+        from agents.routing.card_catalog import build_catalog
         _CATALOG_APP_IDS = frozenset(a["app_id"] for a in build_catalog()["apps"])
     return _CATALOG_APP_IDS
 
@@ -559,7 +559,7 @@ def _run_mw(task: dict[str, Any], sys_dir: Path, ctx: RunCtx) -> dict[str, Any]:
         "--timeout", str(int(ctx.timeout_s) if ctx.timeout_s else 600),
         "--output", str(sys_dir),           # forwarded to `mw test` → <sys_dir>/user_task/
         # Per-call latency + prompt/completion tokens, written beside traj.json by the
-        # non-invasive probe (agents.mw_llm_probe) injected into the mw test subprocess.
+        # non-invasive probe (agents.llm.mw_llm_probe) injected into the mw test subprocess.
         "--llm-calls-out", str(sys_dir / "user_task" / "llm_calls.json"),
     ]
     if ctx.mw_prelaunch and task.get("app"):
@@ -759,7 +759,7 @@ def _leg_kind(step: dict[str, Any]) -> str | None:
     stype = step.get("type")
     if stype == "ask_user":
         return None
-    if stype == "mobileworld":  # agents.flow_planner.MW_STEP_TYPE
+    if stype == "mobileworld":  # agents.flow.flow_planner.MW_STEP_TYPE
         return "mw"
     cap = step.get("capability")
     if cap == "foundation_llm":
@@ -874,9 +874,9 @@ def _run_plan_only(selected: list[tuple[int, dict[str, Any]]], env: dict[str, st
     decomposed into a RelayAgent flow (which app+capability per leg), or why it is
     unsatisfiable / invalid. Mirrors run_plan.py's planning stage (--no-cache).
     """
-    from agents.card_catalog import build_catalog
-    from agents.capability_matrix_router import load_matrix
-    from agents.flow_planner import FlowPlanner, PlanValidationError
+    from agents.routing.card_catalog import build_catalog
+    from agents.routing.capability_matrix_router import load_matrix
+    from agents.flow.flow_planner import FlowPlanner, PlanValidationError
 
     catalog = build_catalog()
     matrix = load_matrix()

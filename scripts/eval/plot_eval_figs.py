@@ -14,7 +14,7 @@ Figures (see docs/eval_figs/):
   fig7_paired_time.{png,pdf}   — both-success intersection: per-task RA vs baseline wall-clock
   fig5_outcome_table.{png,pdf} — 2x2 outcome matrix (RA × baseline success/fail), per bench
 
-Run:  uv run python scripts/plot_eval_figs.py
+Run:  uv run python scripts/eval/plot_eval_figs.py
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO_ROOT / "docs" / "eval_figs"
 DATA_DIR = REPO_ROOT / "traj_logs" / "phaseB"
 LEAKS_FILE = DATA_DIR / "leak_suspects.txt"

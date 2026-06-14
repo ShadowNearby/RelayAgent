@@ -43,20 +43,20 @@ for _p in (REPO_ROOT, SCRIPTS_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from agents import _recorder  # noqa: E402
-from agents import nl_flow  # noqa: E402
-from agents.card_catalog import build_catalog  # noqa: E402
-from agents.capability_matrix_router import load_matrix  # noqa: E402
-from agents.flow_planner import FlowPlanner  # noqa: E402
-from agents.flow_runner import _RecordingLLM  # noqa: E402
-from agents.llm_client import make_llm_client  # noqa: E402
-from agents.nl_flow import normalize_request as _normalize  # noqa: E402
-from agents.runtime_config import ensure_llm_env  # noqa: E402
+from agents.runtime import _recorder  # noqa: E402
+from agents.flow import nl_flow  # noqa: E402
+from agents.routing.card_catalog import build_catalog  # noqa: E402
+from agents.routing.capability_matrix_router import load_matrix  # noqa: E402
+from agents.flow.flow_planner import FlowPlanner  # noqa: E402
+from agents.flow.flow_runner import _RecordingLLM  # noqa: E402
+from agents.llm.llm_client import make_llm_client  # noqa: E402
+from agents.flow.nl_flow import normalize_request as _normalize  # noqa: E402
+from agents.runtime.runtime_config import ensure_llm_env  # noqa: E402
 
 ENV_FILE = REPO_ROOT / ".env"
 RECORD_TAIL_SECONDS = 10.0
 
-# Cache / persist / pre-kill / execution live in agents.nl_flow (shared with
+# Cache / persist / pre-kill / execution live in agents.flow.nl_flow (shared with
 # the Android entrypoint); this script keeps only the CLI frontend.
 
 
@@ -370,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     flow_traj_root: Path | None = None
     try:
         # 1) cache lookup, else 2) synthesize + validate + persist — shared
-        # pipeline in agents.nl_flow; this frontend only renders the outcome.
+        # pipeline in agents.flow.nl_flow; this frontend only renders the outcome.
         result = nl_flow.plan_request(
             args.nl, planner=planner, use_cache=not args.no_cache
         )
