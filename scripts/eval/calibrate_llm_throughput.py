@@ -23,15 +23,15 @@ medians so transient spikes don't bend the fit.
 
 Usage
 -----
-    scripts/calibrate_llm_throughput.py                       # defaults
-    scripts/calibrate_llm_throughput.py --reps 5 \
+    scripts/eval/calibrate_llm_throughput.py                       # defaults
+    scripts/eval/calibrate_llm_throughput.py --reps 5 \
         --prefill-sizes 500,2000,5000,9000 --decode-tokens 400 \
         --out traj_logs/phaseB/llm_calib.json
 
 Writes a fit JSON with ``gamma_s_per_call``, ``alpha_s_per_prefill_tok``,
 ``beta_s_per_decode_tok`` (+ raw samples). Feed it to the normalizer:
 
-    scripts/normalize_wall_clock.py traj_logs/phaseB/*/results.jsonl \
+    scripts/eval/normalize_wall_clock.py traj_logs/phaseB/*/results.jsonl \
         --fit-file traj_logs/phaseB/llm_calib.json
 """
 from __future__ import annotations
@@ -47,10 +47,10 @@ from pathlib import Path
 from openai import OpenAI
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agents.runtime_config import resolve_llm_config  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from agents.runtime.runtime_config import resolve_llm_config  # noqa: E402
 
-ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 def _stream_once(client: OpenAI, model: str, prompt: str, max_tokens: int):

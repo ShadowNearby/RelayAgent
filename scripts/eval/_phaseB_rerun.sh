@@ -40,7 +40,7 @@ run_group () {  # $1=bench  $2=system(relay|mw)
   [ -s "$ids" ] || { echo "  (no ids for $b/$s, skip)"; return 0; }
   echo "===== RERUN $b  systems=$s  n=$(grep -c . "$ids")  ($(date +%H:%M:%S)) ====="
   # --no-judge: skip the LLM leg-judge (gateway stalls it for many minutes); the
-  # final screen is still captured, judged later by hand via scripts/manual_judge.py
+  # final screen is still captured, judged later by hand via scripts/eval/manual_judge.py
   uv run python scripts/run_benchmark_test.py --benchmark "$b" \
     --ids-file "$ids" --systems "$s" --out-dir "$PB/$b" --no-judge || true
 }

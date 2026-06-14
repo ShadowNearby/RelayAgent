@@ -10,12 +10,12 @@ Three layers, all device-less and LLM-less (CI-safe):
    `platforms`, and `app_ids` is consistent with `app_id`/`platforms`.
    Plus a NON-FATAL portability lint: a card declaring ios/harmonyos whose
    selector carries only the Android-only `resource_id` prints a WARN.
-3. Catalog build (`agents.card_catalog.build_catalog`), which adds the
+3. Catalog build (`agents.routing.card_catalog.build_catalog`), which adds the
    load-time `prompt_template` / `prompt_slots` consistency checks and
    capability-id uniqueness.
 
 Usage:
-    uv run python scripts/validate_manifests.py [manifest.yaml ...]
+    uv run python scripts/validate/validate_manifests.py [manifest.yaml ...]
 
 With no arguments validates all of `manifests/*.yaml` (skipping `_`-prefixed
 entries such as `_generated/`). Exit code 0 = all valid.
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 SCHEMA_PATH = ROOT / "spec" / "schema.json"
@@ -144,7 +144,7 @@ def main(argv: list[str]) -> int:
 
     # Layer 3: catalog build (prompt_template consistency, capability-id
     # uniqueness).
-    from agents.card_catalog import ManifestValidationError, build_catalog
+    from agents.routing.card_catalog import ManifestValidationError, build_catalog
 
     try:
         catalog = build_catalog()

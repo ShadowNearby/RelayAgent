@@ -22,12 +22,12 @@ Overrides file shape::
 
 Typical loop (eyeball the screenshots, then record your calls)::
 
-    uv run python scripts/manual_judge.py sheet --bench mobileworld
+    uv run python scripts/eval/manual_judge.py sheet --bench mobileworld
     # open the listed *_final.png, decide, then for each wrong one:
-    uv run python scripts/manual_judge.py set  --bench mobileworld \
+    uv run python scripts/eval/manual_judge.py set  --bench mobileworld \
         --id CheckConferenceDurationTask --system relay --status success \
         --reason "alarm visibly set to 14:30 — judge misread the list"
-    uv run python scripts/manual_judge.py apply --bench mobileworld   # writes results + summary
+    uv run python scripts/eval/manual_judge.py apply --bench mobileworld   # writes results + summary
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts"))
 

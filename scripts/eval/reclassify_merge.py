@@ -8,7 +8,7 @@ the stage-3 escape only downgrades foundation-fallback steps), so old covered ro
 are carried verbatim and only the non-covered set is re-run. AndroidDaily's old
 report was lost, so it is a full rerun (no covered rows to merge).
 
-Run AFTER the reruns finish:  uv run python scripts/reclassify_merge.py
+Run AFTER the reruns finish:  uv run python scripts/eval/reclassify_merge.py
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts"))
 

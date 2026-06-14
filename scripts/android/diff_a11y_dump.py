@@ -13,7 +13,7 @@ Usage:
     #    (app side: trigger uiDumpXml() via the app's debug surface and pull
     #     the file, or paste from logcat)
     # 2. host:
-    uv run python scripts/diff_a11y_dump.py ua.xml app.xml
+    uv run python scripts/android/diff_a11y_dump.py ua.xml app.xml
 
 Exit code: 0 when the reply-relevant node sets match, 1 otherwise.
 """

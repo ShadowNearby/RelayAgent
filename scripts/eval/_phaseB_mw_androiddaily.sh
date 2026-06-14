@@ -2,7 +2,7 @@
 # AndroidDaily 未测任务 MW 补测 supervisor（mw-only）— 自愈 + 断点续跑。
 # 与 _phaseB_run.sh 同构，区别：done 判定 = results.jsonl 里该 id 有 system=="mw" 行
 # （A/B 版要求每 id ≥2 行，mw-only 不适用）。
-# 用法：BATCH=easy scripts/_phaseB_mw_androiddaily.sh
+# 用法：BATCH=easy scripts/eval/_phaseB_mw_androiddaily.sh
 #   BATCH ∈ easy / easy_seeded / medium / medium_seeded，
 #   对应 traj_logs/phaseB/androiddaily_${BATCH}_ids.txt。
 set -u

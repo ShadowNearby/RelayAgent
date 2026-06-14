@@ -27,8 +27,8 @@ ra_mw_legs = "MW leg 数/总 leg 数"。判定依据：results.jsonl 行里的 f
       traj_logs/phaseB/wall_norm_rounded.json（gamma/alpha/beta）。
 
 用法：
-    uv run python scripts/phaseB_summary.py
-    uv run python scripts/phaseB_summary.py --out traj_logs/phaseB/summary.csv \
+    uv run python scripts/eval/phaseB_summary.py
+    uv run python scripts/eval/phaseB_summary.py --out traj_logs/phaseB/summary.csv \
         --norm-fit traj_logs/phaseB/wall_norm_rounded.json
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 PHASEB = REPO / "traj_logs" / "phaseB"
 BENCH_DIR = REPO / "benchmark"
 

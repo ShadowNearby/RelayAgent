@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """从 phaseB_summary.py 产出的 summary.csv 画 fig1 / fig6 / fig7。
 
-输入：traj_logs/phaseB/summary.csv（`scripts/phaseB_summary.py` 的产物）。
+输入：traj_logs/phaseB/summary.csv（`scripts/eval/phaseB_summary.py` 的产物）。
 输出：docs/eval_figs/{fig1_coverage,fig6_paired_tokens,fig7_paired_time}.{png,pdf}
 
   fig1_coverage      — 各 benchmark 的 covered/fallback 分层堆叠条（plan-only）。
@@ -23,8 +23,8 @@
 `--raw-time` 改用原始墙钟（*_time_s）。
 
 用法：
-    uv run python scripts/plot_summary_figs.py
-    uv run python scripts/plot_summary_figs.py --csv traj_logs/phaseB/summary.csv --raw-time
+    uv run python scripts/eval/plot_summary_figs.py
+    uv run python scripts/eval/plot_summary_figs.py --csv traj_logs/phaseB/summary.csv --raw-time
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO / "docs" / "eval_figs"
 DEFAULT_CSV = REPO / "traj_logs" / "phaseB" / "summary.csv"
 
@@ -215,7 +215,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if not args.csv.exists():
-        raise SystemExit(f"找不到 {args.csv}；先跑 scripts/phaseB_summary.py")
+        raise SystemExit(f"找不到 {args.csv}；先跑 scripts/eval/phaseB_summary.py")
 
     paired = load_paired(args.csv, use_raw_time=args.raw_time)
     print(f"rendering fig1/6/7 from {args.csv} -> {OUT_DIR}")
