@@ -7,7 +7,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 /**
  * Serializes the accessibility tree in **uiautomator dump format**, so the
  * Python XML consumers (tap_text grounding, reply-text extraction, text-hash
- * done detection, permission-popup scan in agents/relay_agent.py) parse it
+ * done detection, permission-popup scan in agents/agent/relay_agent.py) parse it
  * unchanged. uiautomator dump is itself built on AccessibilityNodeInfo, so
  * parity is structural, not approximated.
  *

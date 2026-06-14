@@ -25,14 +25,23 @@
 
 ## Spike 清单（按序验证，详见总计划 §风险）
 
-- **Spike A（Chaquopy 可行性）**：App 启动 → Python 起来 → `import agents.action_model, yaml, PIL, loguru` 成功 → 设置页填网关 → 跑一次 `relay_android.entry` 里的 LLM 直连（`RELAY_LLM_HTTP=1` 走 stdlib HTTP shim）。
+- **Spike A（Chaquopy 可行性）**：App 启动 → Python 起来 → `import agents.agent.action_model, yaml, PIL, loguru` 成功 → 设置页填网关 → 跑一次 `relay_android.entry` 里的 LLM 直连（`RELAY_LLM_HTTP=1` 走 stdlib HTTP shim）。
 - **Spike A2（后台启动豁免）**：App 退到后台时 `DeviceBridge.launchApp("com.aliyun.tongyi")` 能把千问拉到前台（a11y 上下文 + 前台服务 + SYSTEM_ALERT_WINDOW）。
 - **Spike B（dump 保真度）**：同一屏幕分别取 `adb shell uiautomator dump` 与 App 内 `uiDumpXml()`，宿主脚本 diff (text, content-desc, bounds) 节点集；迭代 `A11yXmlSerializer` 直到回复相关节点对齐。
+
+## App 界面
+
+Material 3 主题（`res/values/themes.xml` + `colors.xml`，品牌色靛紫），viewBinding：
+
+- **主页 `MainActivity`**：状态卡（无障碍 / LLM 网关）、任务输入框（`TextInputLayout`）、运行 / 停止、**任务示例** / **运行日志** 入口、实时日志卡。设置 / 无障碍入口收进 toolbar 菜单（`menu/main.xml`）。
+- **任务示例 `ExamplesActivity`**：读 `res/raw/examples.json`（50 条：30 RelayBench + 20 AndroidDaily，由 `scripts/android/gen_app_examples.py` 从 `benchmark/` 生成），卡片 + 标签（来源 / App / 类别 / 难度），点按回填任务框。改基准后重跑脚本即可刷新。
+- **运行日志（结构化查看器）**：三级——`LogActivity`（运行列表：任务原文 / 时间 / App 标签 / 子任务数，新→旧）→ `RunDetailActivity`（一次运行的任务卡 + 各子任务卡：状态徽章 / 步数 / 墙钟 / token / 回复预览）→ `LegDetailActivity`（步骤时间线：每步标注截图缩略图 + action 类型 + 坐标/参数 + thought，点缩略图全屏看帧）。解析在 `TrajLog.kt`（吃 `meta.json` / `summary.json` / `wall_clock.json` / `agent_reply.json` / `leg_verdict.json` / `steps/steps.json`，缺字段优雅降级），App 名映射在 `AppLabels.kt`。原始文件树退到 toolbar 溢出菜单「查看原始文件」→ `RawLogActivity`（+ `LogDetailActivity` 渲染单文件：JSON 美化 / PNG 进 ImageView）。`entry.py` 落 `meta.json`（任务原文 + kind），查看器才能显示「这是什么任务」。主页实时日志卡只是当次运行的 tail。
+- **实时日志**：`RunLog` 单例滚动缓冲。`OverlayController.postStatus` 把 `emit_status` 事件（`leg_start` / `leg_end` / `step`）格式成中文短行，同时喂悬浮 chip 和主页日志卡。悬浮 chip / ask_user 面板用圆角 drawable。
 
 ## 接线状态
 
 - **`agents.device` 注入缝已落地并接线**：`relay_android/backend.py:install()` 经 `set_default_backend` 注入 `OnDeviceAndroidBackend`，已在模拟器上跑通（CPython 启动 → backend 注入 → MediaProjection 截帧 → 三段式路由 → flow 规划 → in-process leg 执行 → traj/wall_clock 落 filesDir）。模拟器搭建与 APK 安装步骤见 [`../docs/emulator_testing.zh.md`](../docs/emulator_testing.zh.md) §7。
-- 主机侧复用件：`run_leg` 进程内执行、`InProcessLegExecutor`、`InteractionProvider`、`make_llm_client` HTTP shim、`nl_flow.plan_request/execute_plan`、`RELAY_TRAJ_ROOT` 重定向。`native_runner._agent_spec` 在磁盘无 `agents/relay_agent.py` 时（Chaquopy AssetFinder 打包形态）回落包内 module spec 加载 agent。
+- 主机侧复用件：`run_leg` 进程内执行、`InProcessLegExecutor`、`InteractionProvider`、`make_llm_client` HTTP shim、`nl_flow.plan_request/execute_plan`、`RELAY_TRAJ_ROOT` 重定向。`native_runner._agent_spec` 在磁盘无 `agents/agent/relay_agent.py` 时（Chaquopy AssetFinder 打包形态）回落包内 module spec 加载 agent。
 
 ## 运行时数据布局（filesDir）
 

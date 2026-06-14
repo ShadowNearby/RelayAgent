@@ -3,6 +3,7 @@ package com.relayagent.app
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -39,6 +40,7 @@ class ScreenCaptureService : Service() {
         private const val NOTIF_ID = 1001
         private const val EXTRA_RESULT_CODE = "resultCode"
         private const val EXTRA_RESULT_DATA = "resultData"
+        const val ACTION_STOP = "com.relayagent.app.action.STOP_RUN"
 
         @Volatile
         var instance: ScreenCaptureService? = null
@@ -67,6 +69,14 @@ class ScreenCaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) return START_NOT_STICKY
+        if (intent.action == ACTION_STOP) {
+            // User tapped 停止 on the capture notification — signal the run loop
+            // (polled at each step / leg boundary). The flow tears the service
+            // and overlay down itself when it unwinds.
+            Log.i(TAG, "stop requested via notification")
+            DeviceBridge.requestStop()
+            return START_NOT_STICKY
+        }
         startForeground(
             NOTIF_ID, buildNotification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
@@ -158,11 +168,21 @@ class ScreenCaptureService : Service() {
                 NotificationManager.IMPORTANCE_LOW,
             )
         )
+        val stopIntent = PendingIntent.getService(
+            this, 0,
+            Intent(this, ScreenCaptureService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(getString(R.string.notif_capture_text))
             .setOngoing(true)
+            .addAction(
+                Notification.Action.Builder(
+                    null, getString(R.string.action_stop), stopIntent
+                ).build()
+            )
             .build()
     }
 }

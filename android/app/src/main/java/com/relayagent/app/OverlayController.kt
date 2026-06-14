@@ -11,6 +11,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
@@ -19,10 +20,13 @@ import java.util.concurrent.atomic.AtomicReference
  * service's window (TYPE_ACCESSIBILITY_OVERLAY — no extra permission, and it
  * stays visible while the agent drives other apps in the foreground).
  *
- * - postStatus(json): updates the chip with the current step / leg.
+ * - postStatus(json): updates the chip with the current step / leg. The chip
+ *   window is FLAG_NOT_TOUCHABLE so the agent's injected gestures pass through
+ *   it; Stop lives on the capture notification, not the chip.
  * - askUserBlocking(text): expands an answer panel; blocks the calling
- *   (Python worker) thread until 回答 (answer) or 接管 (take over -> null).
- * - The 停止 button flips DeviceBridge.shouldStop, polled at loop boundaries.
+ *   (Python worker) thread until 回答 (answer) or 接管 (take over -> null). This
+ *   panel IS touchable, but only shows while the agent waits for input (not
+ *   while it is dispatching gestures), so it never steals a tap.
  */
 object OverlayController {
 
@@ -41,11 +45,14 @@ object OverlayController {
         val wm = service.getSystemService(WindowManager::class.java)
         val view = TextView(service).apply {
             text = "RelayAgent 待命"
-            setPadding(28, 14, 28, 14)
             setTextColor(Color.WHITE)
-            setBackgroundColor(0xCC222222.toInt())
+            setBackgroundResource(R.drawable.bg_overlay_chip)
             textSize = 12f
-            setOnClickListener { DeviceBridge.requestStop() }
+            // NOT clickable on purpose: the chip window is FLAG_NOT_TOUCHABLE so
+            // the agent's injected gestures (dispatchGesture) pass THROUGH it to
+            // the app underneath. A touchable chip sitting on top would steal
+            // those taps — a tap landing on it used to fire requestStop and end
+            // the run silently. Stop now lives on the capture notification.
         }
         wm.addView(view, chipLayoutParams())
         chip = view
@@ -57,10 +64,31 @@ object OverlayController {
         chip = null
     }
 
-    fun postStatus(json: String) = main.post {
-        // Minimal rendering for now: show the raw event's interesting bits.
-        // A structured chip (step n / leg id / thought) lands with Phase 2 UX.
-        chip?.text = "RelayAgent ▶ ${json.take(120)}（点按停止）"
+    fun postStatus(json: String) {
+        val line = humanize(json)
+        // Mirror every status event into the live log tail (MainActivity pane).
+        RunLog.append(line)
+        main.post { chip?.text = "RelayAgent ▶ $line" }
+    }
+
+    /** Turn a status event JSON into a short human line for the chip + log. */
+    private fun humanize(json: String): String = try {
+        val o = JSONObject(json)
+        when (o.optString("event")) {
+            "leg_start" -> {
+                val app = o.optString("app").takeIf { it.isNotEmpty() }
+                "▷ 子任务 ${o.optString("id")}" + (if (app != null) "：$app" else "")
+            }
+            "leg_end" -> "✓ 子任务 ${o.optString("id")} 完成"
+            "step" -> {
+                val thought = o.optString("thought").replace("\n", " ").take(80)
+                "步骤 ${o.optInt("step")} · ${o.optString("action_type")}" +
+                    (if (thought.isNotEmpty()) " · $thought" else "")
+            }
+            else -> json.take(120)
+        }
+    } catch (e: Exception) {
+        json.take(120)
     }
 
     /**
@@ -78,19 +106,28 @@ object OverlayController {
             val wm = service.getSystemService(WindowManager::class.java)
             val panel = LinearLayout(service).apply {
                 orientation = LinearLayout.VERTICAL
-                setBackgroundColor(0xEE333333.toInt())
-                setPadding(32, 24, 32, 24)
+                setBackgroundResource(R.drawable.bg_overlay_panel)
+                setPadding(44, 36, 44, 36)
             }
             val label = TextView(service).apply {
                 setTextColor(Color.WHITE)
+                textSize = 15f
                 this.text = text
             }
             val input = EditText(service).apply {
                 setTextColor(Color.WHITE)
+                setHintTextColor(0x99FFFFFF.toInt())
+                setBackgroundResource(R.drawable.bg_overlay_input)
                 hint = "输入回答…"
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = 20; bottomMargin = 20 }
+                layoutParams = lp
             }
             val buttons = LinearLayout(service).apply {
                 orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
             }
             fun finish(value: String?) {
                 answer.set(value)
@@ -120,7 +157,12 @@ object OverlayController {
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+        // NOT_TOUCHABLE is the critical flag: the agent injects taps via
+        // dispatchGesture, and an overlay that consumes touches at those screen
+        // coords would steal them (and could trip its own click handler). Keep
+        // the chip purely informational so every gesture reaches the app below.
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
         android.graphics.PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.TOP or Gravity.END

@@ -4,4 +4,42 @@
     <string name="a11y_service_description">RelayAgent 通过无障碍服务读取屏幕内容并代你操作其他 App（点击 / 滑动 / 输入），以完成你下达的自然语言任务。仅在你主动发起任务时工作。</string>
     <string name="notif_channel_capture">屏幕采集</string>
     <string name="notif_capture_text">RelayAgent 正在采集屏幕以驱动任务</string>
+
+    <!-- Main -->
+    <string name="title_main">RelayAgent</string>
+    <string name="goal_hint">用一句话描述任务</string>
+    <string name="goal_helper">例如：帮我找一台适合学生的平板电脑，预算2000以内</string>
+    <string name="action_run">运行</string>
+    <string name="action_stop">停止</string>
+    <string name="action_examples">任务示例</string>
+    <string name="action_logs">运行日志</string>
+    <string name="action_settings">设置</string>
+    <string name="action_open_a11y">打开无障碍设置</string>
+    <string name="section_status">运行状态</string>
+    <string name="section_live_log">实时日志</string>
+    <string name="status_a11y_on">无障碍服务已连接</string>
+    <string name="status_a11y_off">无障碍服务未开启（必须）</string>
+    <string name="status_gateway_on">LLM 网关已配置</string>
+    <string name="status_gateway_off">LLM 网关未配置（去设置填写）</string>
+
+    <!-- Settings -->
+    <string name="title_settings">设置 · LLM 网关</string>
+    <string name="settings_hint">这些值是端侧版的 .env，保存在加密存储里，仅用于连接 LLM 网关。</string>
+    <string name="action_save">保存</string>
+
+    <!-- Examples -->
+    <string name="title_examples">任务示例</string>
+    <string name="examples_hint">来自 RelayBench / AndroidDaily 基准，点按填入任务框</string>
+
+    <!-- Logs -->
+    <string name="title_logs">运行日志</string>
+    <string name="title_run">运行详情</string>
+    <string name="title_leg">子任务详情</string>
+    <string name="logs_empty">还没有运行记录。跑一个任务后，轨迹日志会出现在这里。</string>
+    <string name="steps_empty">这条子任务没有逐步截图（步骤日志可能被关闭）。</string>
+    <string name="label_request">任务</string>
+    <string name="label_legs">子任务</string>
+    <string name="label_steps">步骤轨迹</string>
+    <string name="label_reply">回复</string>
+    <string name="action_raw_files">查看原始文件</string>
 </resources>

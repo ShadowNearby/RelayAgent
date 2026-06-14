@@ -50,7 +50,7 @@ object PythonRuntime {
     }
 
     /** Single-app debug entry (relay_android.entry.run_single) — the
-     * on-device `python -m agents.native_runner <pkg> <goal>`. */
+     * on-device `python -m agents.runtime.native_runner <pkg> <goal>`. */
     fun runSingle(
         context: Context, pkg: String, goal: String, config: JSONObject,
         onDone: (String) -> Unit,
