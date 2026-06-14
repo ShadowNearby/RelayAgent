@@ -39,9 +39,9 @@ from typing import Any
 
 from loguru import logger
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Verdict statuses, mirrored from agents.leg_judge (kept as literals to avoid a
+# Verdict statuses, mirrored from agents.flow.leg_judge (kept as literals to avoid a
 # hard import cycle; leg_judge does not import this module).
 _SUCCESS = "success"
 _FAILURE = "failure"

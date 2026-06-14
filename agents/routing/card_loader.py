@@ -16,7 +16,7 @@ from loguru import logger
 
 from agents.device import current_platform
 
-MANIFESTS_DIR = Path(__file__).resolve().parent.parent / "manifests"
+MANIFESTS_DIR = Path(__file__).resolve().parent.parent.parent / "manifests"
 
 
 def load_all_cards(manifests_dir: Path | None = None) -> list[dict[str, Any]]:

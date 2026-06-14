@@ -14,8 +14,8 @@ from typing import Any
 
 from loguru import logger
 
-from agents.action_model import JSONAction
-from agents.llm_client import make_llm_client
+from agents.agent.action_model import JSONAction
+from agents.llm.llm_client import make_llm_client
 
 
 class BaseAgent(ABC):
@@ -57,7 +57,7 @@ class BaseAgent(ABC):
 
     def build_openai_client(self, base_url: str, api_key: str) -> None:
         """Build the chat-completions client (OpenAI SDK on host, stdlib HTTP
-        shim when the SDK is unavailable — see agents.llm_client)."""
+        shim when the SDK is unavailable — see agents.llm.llm_client)."""
         self.openai_client = make_llm_client(base_url, api_key, timeout=120.0)
         logger.debug(f"built the LLM client with base_url={base_url}")
 

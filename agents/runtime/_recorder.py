@@ -5,7 +5,7 @@ thread, writing chunks to the device and pulling each one as it finishes.
 On `.stop()` we wait for the in-flight chunk to flush, pull it, and
 optionally concat all chunks with ffmpeg into a single mp4.
 
-Honors `RELAY_ANDROID_SERIAL` via `agents._adb.adb_base()`.
+Honors `RELAY_ANDROID_SERIAL` via `agents.runtime._adb.adb_base()`.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from agents._adb import adb_base
+from agents.runtime._adb import adb_base
 
 _CHUNK_SECONDS = 180
 _DEVICE_DIR = "/sdcard"

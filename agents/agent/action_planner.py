@@ -125,7 +125,7 @@ def build_plan(
 
     plan: list[Step] = []
 
-    # Caller (e.g. agents.native_runner) may already have cold-launched
+    # Caller (e.g. agents.runtime.native_runner) may already have cold-launched
     # the app before invoking the agent. In that case we skip the
     # redundant open_app + settle wait at the top of the plan.
     if not skip_open_app:

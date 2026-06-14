@@ -14,7 +14,7 @@ from typing import Any
 
 from loguru import logger
 
-from agents.locale_policy import first_locale, locale_policy_text
+from agents.routing.locale_policy import first_locale, locale_policy_text
 
 _FORCE_CAP_ENV = "RELAY_FORCE_CAPABILITY"
 _FORCE_INVOCATION_ENV = "RELAY_INVOCATION_TEXT"

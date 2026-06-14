@@ -12,9 +12,9 @@ from typing import Any
 
 from loguru import logger
 
-from agents.card_loader import load_all_cards
+from agents.routing.card_loader import load_all_cards
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 MANIFEST_DIR = REPO_ROOT / "manifests"
 
 # Any `{placeholder}` token in an *authored* template. At manifest-authoring
