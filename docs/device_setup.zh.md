@@ -3,7 +3,7 @@
 > English: [`device_setup.md`](device_setup.md)
 
 > 跑 RelayAgent（单 App 调试 / NL flow / A/B benchmark）之前，设备侧需要准备什么。
-> 一键体检：`uv run python scripts/check_device_env.py [--benchmark relaybench|androiddaily|mobileworld|all]`（无 FAIL 退出码为 0）。
+> 一键体检：`uv run python scripts/validate/check_device_env.py [--benchmark relaybench|androiddaily|mobileworld|all]`（无 FAIL 退出码为 0）。
 > 模拟器（无真机）路径见 [`emulator_testing.zh.md`](emulator_testing.zh.md)。
 
 ## 1. 主机侧
@@ -20,7 +20,7 @@
 | 项 | 要求 | 说明 |
 | --- | --- | --- |
 | 连接 | USB 调试或 Wi-Fi adb（`adb tcpip 5555` + `adb connect`）| Phase B 实测用 Wi-Fi adb；**涉及飞行模式的任务会杀掉 Wi-Fi adb 传输，已从任务集剔除** |
-| 多设备 | `RELAY_ANDROID_SERIAL=<serial>` | 所有 adb 调用都遵守（`agents/_adb.py`）|
+| 多设备 | `RELAY_ANDROID_SERIAL=<serial>` | 所有 adb 调用都遵守（`agents/runtime/_adb.py`）|
 | 输入法 | **ADBKeyBoard**（`com.android.adbkeyboard`，[senzhk/ADBKeyBoard](https://github.com/senzhk/ADBKeyBoard)）已安装 | runner 启动时自己 `ime enable/set`，退出 `ime reset` 复位；只要求"已安装" |
 | a11y dump | `uiautomator dump` 可用 | tap_text 定位与回复 scrape 的主路径；不可用时全部回落 VLM（慢、贵）|
 | 截图 | `adb exec-out screencap -p` 可用 | 真机实测 ~1.5s/帧，是单步最大成本 |
@@ -74,10 +74,10 @@ MW 的任务跑在 **MobileWorld 自带的应用环境**（Mail、Messages、Mas
 
 ```bash
 # 体检（核心检查 + 10 个 manifest App 是否安装）
-uv run python scripts/check_device_env.py
+uv run python scripts/validate/check_device_env.py
 
 # 指定 benchmark / 指定 App 集 / 指定设备
-uv run python scripts/check_device_env.py --benchmark mobileworld
-uv run python scripts/check_device_env.py --apps com.aliyun.tongyi,com.autonavi.minimap
-uv run python scripts/check_device_env.py --serial 46180DLAQ004LW
+uv run python scripts/validate/check_device_env.py --benchmark mobileworld
+uv run python scripts/validate/check_device_env.py --apps com.aliyun.tongyi,com.autonavi.minimap
+uv run python scripts/validate/check_device_env.py --serial 46180DLAQ004LW
 ```

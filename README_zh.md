@@ -46,7 +46,7 @@ RelayAgent 背后的观察是：大多数超级 App **本身就已经内置了�
 ## 工作原理——三块拼图
 
 1. **发现（Discovery）—— 卡片。** 每个 App 一份 YAML manifest（`manifests/*.yaml`，由 `spec/schema.json` 做 JSON-Schema 校验），描述进入内置助手的 launcher 入口路径、能力列表、示例 prompt、延迟提示和 handoff 策略。*（规范见 §4。）*
-2. **接入（Access）—— 中继适配器。** `agents/relay_agent.py` 直 adb 把一张卡片落地为确定性的设备动作：冷启动 → 走入口路径 → 输入 prompt → 等待回复 → 抓取文本 → handoff。优先走无障碍树（accessibility tree），且对各家 VLM 通用。*（§5。）*
+2. **接入（Access）—— 中继适配器。** `agents/agent/relay_agent.py` 直 adb 把一张卡片落地为确定性的设备动作：冷启动 → 走入口路径 → 输入 prompt → 等待回复 → 抓取文本 → handoff。优先走无障碍树（accessibility tree），且对各家 VLM 通用。*（§5。）*
 3. **安全（Safety）—— handoff 契约。** 标了 `handoff_to_user_required: true` 的能力*必须*在**任何不可逆操作之前**——支付、确认叫车、提交订单——发出 `ask_user` 并交还控制权。可逆的准备工作由内置助手完成；不可逆的那一步由人来授权。*（§4.1。）*
 
 ### 一张卡片是怎么用的
@@ -118,9 +118,9 @@ RelayAgent/
 
 ## 运行（真机、多 VLM）
 
-`agents/relay_agent.py` 在进程内 `obs → predict → execute` 循环里直 adb 驱动 RelayAgent（无 server）。VLM 对各家通用（Claude、Gemini、Qwen-VL、Kimi……）；卡片负责提供确定性的入口路径和 handoff 策略。
+`agents/agent/relay_agent.py` 在进程内 `obs → predict → execute` 循环里直 adb 驱动 RelayAgent（无 server）。VLM 对各家通用（Claude、Gemini、Qwen-VL、Kimi……）；卡片负责提供确定性的入口路径和 handoff 策略。
 
-需要 **Python 3.12**，主机为 Linux/WSL 装好 adb，外加一台开启 USB 调试的手机（或模拟器——见[模拟器测试](docs/emulator_testing.zh.md)），设备上装好 `com.android.adbkeyboard/.AdbIME`。完整设备准备 + 各 benchmark 的 App 需求见[端侧环境](docs/device_setup.zh.md)；跑前体检：`uv run python scripts/check_device_env.py`。
+需要 **Python 3.12**，主机为 Linux/WSL 装好 adb，外加一台开启 USB 调试的手机（或模拟器——见[模拟器测试](docs/emulator_testing.zh.md)），设备上装好 `com.android.adbkeyboard/.AdbIME`。完整设备准备 + 各 benchmark 的 App 需求见[端侧环境](docs/device_setup.zh.md)；跑前体检：`uv run python scripts/validate/check_device_env.py`。
 
 ```bash
 # 1. 建 venv（靠 `uv run` 跑源码，不安装本项目）
@@ -128,10 +128,10 @@ uv venv --python 3.12
 uv sync --no-install-project
 
 # 2. 填好 .env（LLM_BASE_URL / LLM_API_KEY / LLM_MODEL），然后跑一个目标
-uv run python -m agents.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python -m agents.runtime.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-`agents.native_runner` 会 load `.env`、激活 AdbKeyboard 输入法、通过 `agents/_adb.py` 冷启动目标 App（force-stop + monkey LAUNCHER）、设置 `RELAY_SKIP_OPEN_APP=1` 让 planner 跳过自己的 `open_app` 步、在进程内直 adb 跑循环，并把额外 flag（如 `--max-step 40`）原样转发给 agent。不走 `.env` 时可用 `--model` / `--base-url` / `--api-key` 覆盖 LLM 配置。
+`agents.runtime.native_runner` 会 load `.env`、激活 AdbKeyboard 输入法、通过 `agents/runtime/_adb.py` 冷启动目标 App（force-stop + monkey LAUNCHER）、设置 `RELAY_SKIP_OPEN_APP=1` 让 planner 跳过自己的 `open_app` 步、在进程内直 adb 跑循环，并把额外 flag（如 `--max-step 40`）原样转发给 agent。不走 `.env` 时可用 `--model` / `--base-url` / `--api-key` 覆盖 LLM 配置。
 
 `--model` 对各家通用——指向任意 OpenAI 兼容的 VLM 即可（`qwen/qwen3-vl-235b-a22b`、`anthropic/claude-sonnet-4-5`、`google/gemini-3`……）。每个任务里 VLM 用得很省（这正是 §8 成本数字的来源）：
 
@@ -173,7 +173,7 @@ uv sync --no-install-project
 uv run python -m unittest discover -s tests -v       # 无设备；planner/runner 单元测试，不需要 adb
 ```
 
-真机运行（不是单元测试）直接走入口脚本——见[运行](#运行真机多-vlm)：单 App 用 `python -m agents.native_runner <pkg> "<goal>"`，NL flow 用 `scripts/run_plan.py --yes`，A/B 基准用 `scripts/run_benchmark_test.py`。需要连好的安卓设备、装好目标 App，`com.android.adbkeyboard/.AdbIME` 可用（runner 自己启用/复位输入法）。
+真机运行（不是单元测试）直接走入口脚本——见[运行](#运行真机多-vlm)：单 App 用 `python -m agents.runtime.native_runner <pkg> "<goal>"`，NL flow 用 `scripts/run_plan.py --yes`，A/B 基准用 `scripts/run_benchmark_test.py`。需要连好的安卓设备、装好目标 App，`com.android.adbkeyboard/.AdbIME` 可用（runner 自己启用/复位输入法）。
 
 把 `.env.example` 复制成 `.env` 并填好（LLM endpoint 必填）。`test-results/` 和 `traj_logs/` 已 gitignore —— 不要提交含用户数据的轨迹。
 

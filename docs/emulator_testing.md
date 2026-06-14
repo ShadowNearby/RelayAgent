@@ -2,7 +2,7 @@
 
 > 中文: [`emulator_testing.zh.md`](emulator_testing.zh.md)
 
-The runtime is **pure Python over adb** (`screencap` / `uiautomator dump` / `input` / `monkey`, see `agents/native_runtime.py`) and depends on nothing device-specific — an Android emulator (AVD) is natively compatible, and screenshots are usually much faster than the ~1.5 s/frame of real devices. This page covers what you can test without a real device and how to set it up.
+The runtime is **pure Python over adb** (`screencap` / `uiautomator dump` / `input` / `monkey`, see `agents/runtime/native_runtime.py`) and depends on nothing device-specific — an Android emulator (AVD) is natively compatible, and screenshots are usually much faster than the ~1.5 s/frame of real devices. This page covers what you can test without a real device and how to set it up.
 
 ## 1. What runs with no device at all (pure LLM, zero adb)
 
@@ -59,7 +59,7 @@ adb shell settings put global stay_on_while_plugged_in 7
 export RELAY_ANDROID_SERIAL=emulator-5554
 
 # health check
-uv run python scripts/check_device_env.py
+uv run python scripts/validate/check_device_env.py
 ```
 
 `check_device_env.py` detects and labels emulators via `ro.kernel.qemu` / `ro.boot.qemu`; all other checks are identical to a real device.
@@ -69,7 +69,7 @@ uv run python scripts/check_device_env.py
 1. `check_device_env.py` all green (IME / uiautomator / screencap).
 2. Install + sign in to one international app (Copilot is the lightest), then run the single-app entry point:
    ```bash
-   uv run python -m agents.native_runner com.microsoft.copilot "What is the tallest building in the world?"
+   uv run python -m agents.runtime.native_runner com.microsoft.copilot "What is the tallest building in the world?"
    ```
    This exercises the full obs→predict→execute loop: cold-launch, entry taps, AdbKeyboard input, `wait_for_reply` text-hash done detection, reply scraping.
 3. (Optional) real NL-flow run: `uv run python scripts/run_plan.py --yes "Ask Copilot ..."`.

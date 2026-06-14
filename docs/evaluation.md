@@ -3,7 +3,7 @@
 > Design and implementation record for the paper's Evaluation chapter. Decisions dated 2026-06-09.
 > 中文: [`evaluation.zh.md`](evaluation.zh.md)（权威版本 / authoritative）
 
-> Companion code: `scripts/run_benchmark_test.py` (A/B driver + plan-only), `scripts/plot_eval_figs.py` (figures).
+> Companion code: `scripts/run_benchmark_test.py` (A/B driver + plan-only), `scripts/eval/plot_eval_figs.py` (figures).
 
 ## 1. One sentence
 
@@ -58,7 +58,7 @@ RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, Xiaohongshu, WPS, Boo
 ## 7. Protocol / honesty items (must be disclosed in the paper)
 
 1. **Self-judging**: the judge is RA's own leg_judge → manually verify a 30–50 task subsample and report agreement.
-2. **Relay token accounting (fixed, task #8 ✓)**: relay total tokens now read the authoritative `<flow_root>/token_usage.json` written by `run_plan.py`; `total` **includes the plan-synthesis phase** (+ repair rounds), `by_phase` splits plan/flow/agent → the planning tax is directly quantifiable (measured on one Amap POI covered task: plan 16975 / flow 698 / agent 0 tokens — the planning phase dominates). **Per-call logs aligned on both sides**: each results.jsonl row's `llm_calls` holds per-call metrics (tokens+latency+model+purpose); full bodies (messages/response) are persisted — relay in each leg's `traj.json`, mw via the non-invasive probe `agents.mw_llm_probe` writing `<sys>/user_task/llm_calls.json`.
+2. **Relay token accounting (fixed, task #8 ✓)**: relay total tokens now read the authoritative `<flow_root>/token_usage.json` written by `run_plan.py`; `total` **includes the plan-synthesis phase** (+ repair rounds), `by_phase` splits plan/flow/agent → the planning tax is directly quantifiable (measured on one Amap POI covered task: plan 16975 / flow 698 / agent 0 tokens — the planning phase dominates). **Per-call logs aligned on both sides**: each results.jsonl row's `llm_calls` holds per-call metrics (tokens+latency+model+purpose); full bodies (messages/response) are persisted — relay in each leg's `traj.json`, mw via the non-invasive probe `agents.llm.mw_llm_probe` writing `<sys>/user_task/llm_calls.json`.
 3. **Completed-only bias**: `_aggregate` currently aggregates time/tokens over each system's own completed tasks → must be co-reported with all-tasks **+ the both-success paired intersection**. The three accountings are biased in opposite directions (completed-only: each system on its own set, unpaired; all-tasks: contains MW timeout ceilings → overestimates RA; intersection: conditions on baseline success → deletes RA's biggest wins → underestimates RA), so only all three together are honest. **Implementation TODO**: `_aggregate` aggregates per system; the paired intersection needs a per-`task_id` join of both-success tasks and per-task ratios (not a ratio of means).
 4. **Fairness switches at test time**: see §8.
 
@@ -79,7 +79,7 @@ RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, Xiaohongshu, WPS, Boo
 
 ## 9. Figure set
 
-Code: `scripts/plot_eval_figs.py`, output `docs/eval_figs/{png,pdf}`. **Data is currently MOCK**; the schema matches the real outputs — swapping in real values only touches the `MOCK` block at the top of the script. Fixed palette: relay blue `#0072B2` / baseline orange `#D55E00`, covered dark green, fallback light green/purple.
+Code: `scripts/eval/plot_eval_figs.py`, output `docs/eval_figs/{png,pdf}`. **Data is currently MOCK**; the schema matches the real outputs — swapping in real values only touches the `MOCK` block at the top of the script. Fixed palette: relay blue `#0072B2` / baseline orange `#D55E00`, covered dark green, fallback light green/purple.
 
 - **Fig.1 coverage stratification**: one horizontal stacked bar per benchmark (covered/foundation/mixed/mw/invalid), N on the right. Data ← each `plan_summary.json["by_tier"]`.
 - **Fig.2 covered-tier efficiency**: relay vs baseline time/token/steps triptych on the covered tier, `n×` saving on top of each bar, success% gate at the bottom. Data ← `summary.json` (covered-subset aggregate).
@@ -111,7 +111,7 @@ Layout rules: success and efficiency always share a panel; the three benchmarks 
 - The new logic (stage-3 escape hatch) is in effect: MobileWorld's old foundation_fallback 102 → now **mw 90** (device/OS actions Gemini's foundation agent cannot do correctly degrade to the MW fallback); covered 61 includes legitimate Gemini mail/calendar/SMS (declared in the manifest, sole provider in the matrix) + 3 newly added by reruns. AndroidDaily has many apps without manifests (Didi/JD/Meituan/Pinduoduo/Bilibili…) → mw 143.
 - Final covered ids (Phase B real-device set): `traj_logs/reclassify/final/<bench>_covered_ids.txt` (27 / 71 / 61, total **159**).
 
-**Real-device A/B (Phase B, in progress)**: running relay + mw general_e2e on the 159 covered cases above (logging fixed: plan-synthesis tokens + per-call on both sides). relaybench 8/27 done, rest running (resume-aware: `scripts/_phaseB_run.sh` resumes from results.jsonl). Real efficiency/success values will backfill Fig.2/4/6/7.
+**Real-device A/B (Phase B, in progress)**: running relay + mw general_e2e on the 159 covered cases above (logging fixed: plan-synthesis tokens + per-call on both sides). relaybench 8/27 done, rest running (resume-aware: `scripts/eval/_phaseB_run.sh` resumes from results.jsonl). Real efficiency/success values will backfill Fig.2/4/6/7.
 
 ## 12. Open TODOs
 

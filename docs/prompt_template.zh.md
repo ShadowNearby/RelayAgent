@@ -60,7 +60,7 @@
 
 样板：Gemini `live_navigation` = `Navigate to {place}[ by {mode}].`（必填 `place` + 可选 `mode`）；高德 `live_navigation` = `导航去{place}`。其余结构化能力（订餐/订票/闹钟）后续按同 pattern 增量加，无需改代码。
 
-## 3. 落地链路（`agents/flow_planner.py`）
+## 3. 落地链路（`agents/flow/flow_planner.py`）
 
 数据流：`FlowPlanner.plan()` LLM 合成自由 prompt → `resolve_app_routes()` 逐 step 路由出 app+capability → **填充** → `step["prompt"]` 经 `render()` 替换 `{var}` 后作为 `RELAY_INVOCATION_TEXT` 传子进程。
 
@@ -83,7 +83,7 @@
 
 ### catalog 透传
 
-`build_catalog`（`agents/card_catalog.py`）默认裁剪 capability 字段。`prompt_template` / `prompt_slots` **仅在存在时**透传进 catalog digest，让 `FlowPlanner._caps` 取得到。
+`build_catalog`（`agents/routing/card_catalog.py`）默认裁剪 capability 字段。`prompt_template` / `prompt_slots` **仅在存在时**透传进 catalog digest，让 `FlowPlanner._caps` 取得到。
 
 **加载期校验。** 构建 catalog 时 `_validate_prompt_template` 逐个检查 templated 能力，命中即抛 `ManifestValidationError`（fail-fast）：占位符 `{}` 未声明（如拼错 `{palce}`）、声明了却没用到的死槽、**required** 槽只出现在 `[...]` 段内（会被 drop）、**optional** 槽没包进 `[...]`（会留空隙）、或括号不配对/嵌套。把作者笔误从"该 step 跑到时才 `PromptTemplateError`"提前到加载期。
 
@@ -92,7 +92,7 @@
 | 决策 | 取值 | 理由 |
 | --- | --- | --- |
 | 缺 required 槽 | **硬失败** | 宁可不跑，也不把残缺/瞎编 prompt 提交给 App agent；保证提交措辞/意图路由确定（槽位**取值**仍由 LLM 抽，故保证的是意图路由、非取值正确） |
-| v1 覆盖范围 | **仅 NL flow**（`run_plan.py`/`FlowPlanner`） | prompt 被自由合成、最易漂移的路径；直连 `python -m agents.native_runner <pkg> <goal>` 用用户原话，暂不模板化 |
+| v1 覆盖范围 | **仅 NL flow**（`run_plan.py`/`FlowPlanner`） | prompt 被自由合成、最易漂移的路径；直连 `python -m agents.runtime.native_runner <pkg> <goal>` 用用户原话，暂不模板化 |
 | planner system prompt | **不改** | planner 此时尚不知路由结果，无法知道哪条套模板；抽槽器从合成 prompt 取值即可，零 planner 改动、风险最低 |
 | `example_prompts` | **保留** | 作为模板缺失时的 few-shot 回退 |
 

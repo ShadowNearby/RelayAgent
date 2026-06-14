@@ -13,36 +13,44 @@
 
 ## 跑测试
 
-**指定 App 调试入口** `python -m agents.native_runner <pkg> "<goal>"`（自己 load `.env`、设 deferred-launch env、激活 AdbKeyboard、进程内跑 `obs→predict→execute` 循环，直 adb）：
+**指定 App 调试入口** `python -m agents.runtime.native_runner <pkg> "<goal>"`（自己 load `.env`、设 deferred-launch env、激活 AdbKeyboard、进程内跑 `obs→predict→execute` 循环，直 adb）：
 
 ```bash
-uv run python -m agents.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python -m agents.runtime.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电脑，预算2000以内"   # NL flow 入口（每步用三段式路由选 app + capability）
 ```
 
-- 旧的测试入口 / NL 入口 / 单 App 脚本入口已删除；新代码直接用 `python -m agents.native_runner`（指定 app）或 `run_plan.py --yes` / `run_plan.py --dry-run`（NL flow）。
+- 旧的测试入口 / NL 入口 / 单 App 脚本入口已删除；新代码直接用 `python -m agents.runtime.native_runner`（指定 app）或 `run_plan.py --yes` / `run_plan.py --dry-run`（NL flow）。
 - **NL 跨 App Flow 架构**（合成 / 三段式路由 / 校验 / 执行 / leg judge / handoff）详见 [`docs/nl_flow.zh.md`](docs/nl_flow.zh.md)（English: [`docs/nl_flow.md`](docs/nl_flow.md)）；pipeline / CLI 用法 / 缓存 / 真机示例见 [`docs/cross_app_planner.zh.md`](docs/cross_app_planner.zh.md)。
 - **capability 不覆盖 → MobileWorld 兜底**：任何 unsatisfiable（coverage gap 修复用尽 / LLM 判整条不可满足 / **repair 用尽仍 invalid** / **stage-3 判设备动作非 foundation 任务**）不再放弃，而是把那条 leg（或整条请求）转成 `type: mobileworld` leg，交给 MobileWorld 无 manifest 的 `general_e2e` 执行（经 `scripts/run_mobileworld.py`，answer 文本回灌 blackboard）。默认开，`RELAY_MW_FALLBACK=0` / `run_plan.py --no-mw-fallback` 关；`RELAY_MW_MAX_ROUND`(25)/`RELAY_MW_TIMEOUT`(600)。详见 nl_flow §10。
   - **stage-3 逃生口**：三段式 router 的 foundation 兜底不再是无条件 catch-all——若任务要求聊天助手做不了的设备/OS 副作用动作（文件管理、改系统设置、驱动别的 App），`_stage3_foundation` 返回 `none` → 抛 `FoundationNotApplicable` → 当 coverage gap → MW，而不是硬塞进 `foundation_llm`。
   - **plan-only tier 用 leg-kind 分档**（`run_benchmark_test.py`）：`covered`（每条 leg 都是真垂类 capability）/ `foundation_fallback`（无 MW leg 但有 `foundation_llm` leg）/ `mw`（全是 MW leg）/ `mixed`（MW + 非 MW 混合）。`plan_summary.json` 的 `mw_fallback` 块给 task 级 + leg 级 MW 占比（`task_touch_rate`/`mw_leg_rate`/`mixed_task_mw_ratios`）。
 - 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.5）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
 
-需要 adb + 真机 USB 调试（或模拟器，见 `docs/emulator_testing.zh.md`）。**`agents.native_runner` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
+需要 adb + 真机 USB 调试（或模拟器，见 `docs/emulator_testing.zh.md`）。**`agents.runtime.native_runner` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
 
-- **跑前体检**：`uv run python scripts/check_device_env.py [--benchmark ...]`（设备/IME/uiautomator/screencap/App 安装态，端侧需求文档见 `docs/device_setup.zh.md`）。
-- **manifest 校验**（schema + prompt_template 规则，CI gate）：`uv run python scripts/validate_manifests.py`。
+- **跑前体检**：`uv run python scripts/validate/check_device_env.py [--benchmark ...]`（设备/IME/uiautomator/screencap/App 安装态，端侧需求文档见 `docs/device_setup.zh.md`）。
+- **manifest 校验**（schema + prompt_template 规则，CI gate）：`uv run python scripts/validate/validate_manifests.py`。
 - **无设备单测**：`uv run python -m unittest discover -s tests -v`（unittest 风格，CI 跑同一条）。
 
 ## Native 运行时
 
+**`agents/` 目录按功能域分包**（2026-06 重整，原扁平模块全部归入子包，import 用全路径如 `from agents.runtime.native_runner import ...`，无 shim）：
+- `agents/device/` — DeviceBackend 抽象层（多平台后端）。
+- `agents/llm/` — provider client（`llm_client`）、重试（`llm_retry`）、MW 探针（`mw_llm_probe`）。
+- `agents/runtime/` — 进程入口 + 设备循环：`native_runner`、`native_runtime`、`runtime_config`、`interaction`、低层 `_adb`/`_img`/`_recorder`。
+- `agents/routing/` — capability/card 解析 + 路由固化：`capability_matrix_router`、`capability_router`、`card_catalog`、`card_loader`、`locale_policy`、`route_overlay`。
+- `agents/agent/` — 端内 VLM agent + action 层：`relay_agent`（核心类）+ 拆出的 `relay_grounding`/`relay_reply`/`relay_permissions`/`relay_llm_log`、`agent_base`、`action_model`、`action_planner`、`a11y_agent`。
+- `agents/flow/` — NL 跨 App flow：`flow_planner`（+`flow_planner_mw`/`flow_planner_util`）、`flow_runner`（facade，+`flow_runner_util`/`flow_recording_llm`/`flow_leg_executor`）、`nl_flow`、`leg_judge`。`flow_runner`/`flow_planner` 仍是公共门面，re-export 拆出的公共名（`FlowRunner`/`InProcessLegExecutor`/`_RecordingLLM`/`MW_STEP_TYPE`…）。
+
 运行时是纯 Python，**无 server、无框架冷启动**；设备 I/O 全部走 **`agents/device/` 后端抽象层**（Android=直 adb），由以下模块组成：
 
-- `agents/device/` — **DeviceBackend 抽象层**：`base.py`（ABC + `UINode` 归一化 a11y 节点 + `Key`）、`android.py`（adb 实现，唯一真实后端；含 IME、`dump_ui_tree`、权限弹窗 `dismiss_permission_popup`）、`ios.py`/`harmony.py`（WDA/hdc 骨架，调用抛 NotImplementedError）、`factory.py`（`get_backend()` 按 `RELAY_PLATFORM`（默认 android）分发，serial 是实例属性）、`vendor_profiles.py`（厂商权限表 + `RELAY_VENDOR_PROFILE` JSON overlay）。多平台能力映射见 [`docs/device_backends.zh.md`](docs/device_backends.zh.md)。**`agents/_adb.py` 已退化为同名委托 shim**（旧 import 面兼容；新代码持 backend 实例）。
-- `agents/action_model.py` — `JSONAction` + action-type 常量（validator/`__eq__`/`model_dump`）。
-- `agents/agent_base.py` — `BaseAgent` + `MCPAgent`（OpenAI client、token 计数、`openai_chat_completions_create` 含 claude/gpt/o1/kimi 分支）。`relay_agent` 经 `from agents.agent_base import MCPAgent as _MCPAgentBase`（别名排序见文件头注释，让 loader 选 RelayAgent）。
-- `agents/_img.py` — `pil_to_base64`。
-- `agents/native_runtime.py` — **`NativeEnv`**（`JSONAction`→backend 手势：swipe 几何、scroll 方向反转留在这层，tap/键盘/启动落到 backend；`skip_screenshot` 复用上一帧）+ 进程内 `obs→predict→execute` 循环 + **输入通道激活**（Android=AdbKeyboard；不可用时 ASCII 降级 `input text`，中文 loud fail，`native_runner` 对含中文 goal 直接 env_fail 早退）。
-- `agents/native_runner.py` — 单 app 模块入口；`run_plan` / `run_benchmark_test` 按 task spawn `python -m agents.native_runner` 子进程（无 server）。agent 经 `RELAY_WALL_OUT`/`RELAY_REPLY_OUT` 落 `wall_clock.json`/`reply.json`，这正是这些消费方读的。
+- `agents/device/` — **DeviceBackend 抽象层**：`base.py`（ABC + `UINode` 归一化 a11y 节点 + `Key`）、`android.py`（adb 实现，唯一真实后端；含 IME、`dump_ui_tree`、权限弹窗 `dismiss_permission_popup`）、`ios.py`/`harmony.py`（WDA/hdc 骨架，调用抛 NotImplementedError）、`factory.py`（`get_backend()` 按 `RELAY_PLATFORM`（默认 android）分发，serial 是实例属性）、`vendor_profiles.py`（厂商权限表 + `RELAY_VENDOR_PROFILE` JSON overlay）。多平台能力映射见 [`docs/device_backends.zh.md`](docs/device_backends.zh.md)。**`agents/runtime/_adb.py` 已退化为同名委托 shim**（旧 import 面兼容；新代码持 backend 实例）。
+- `agents/agent/action_model.py` — `JSONAction` + action-type 常量（validator/`__eq__`/`model_dump`）。
+- `agents/agent/agent_base.py` — `BaseAgent` + `MCPAgent`（OpenAI client、token 计数、`openai_chat_completions_create` 含 claude/gpt/o1/kimi 分支）。`relay_agent` 经 `from agents.agent.agent_base import MCPAgent as _MCPAgentBase`（别名排序见文件头注释，让 loader 选 RelayAgent）。
+- `agents/runtime/_img.py` — `pil_to_base64`。
+- `agents/runtime/native_runtime.py` — **`NativeEnv`**（`JSONAction`→backend 手势：swipe 几何、scroll 方向反转留在这层，tap/键盘/启动落到 backend；`skip_screenshot` 复用上一帧）+ 进程内 `obs→predict→execute` 循环 + **输入通道激活**（Android=AdbKeyboard；不可用时 ASCII 降级 `input text`，中文 loud fail，`native_runner` 对含中文 goal 直接 env_fail 早退）。
+- `agents/runtime/native_runner.py` — 单 app 模块入口；`run_plan` / `run_benchmark_test` 按 task spawn `python -m agents.runtime.native_runner` 子进程（无 server）。agent 经 `RELAY_WALL_OUT`/`RELAY_REPLY_OUT` 落 `wall_clock.json`/`reply.json`，这正是这些消费方读的。
 
 **平台化要点**：manifest 的 `platforms` 字段在 `card_loader.load_all_cards` 按 `RELAY_PLATFORM` 过滤（不含当前平台的卡对路由/规划不可见）；可选 `app_ids: {android, ios, harmonyos}` 映射同一逻辑 App 的多平台 id（`card_loader.resolve_app_id` 解析，fallback `app_id`）；`validate_manifests.py` 对声明 ios/harmonyos 但 selector 只有 `resource_id` 的卡发非致命 WARN。a11y 消费方（grounding/文本 hash/回复 scrape/权限弹窗/a11y baseline）一律吃 `UINode`，不碰 uiautomator XML。状态栏/输入栏裁剪比例 `RELAY_CROP_TOP`(0.08)/`RELAY_CROP_BOTTOM`(0.18) 可调。
 
@@ -61,12 +69,12 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 > **提速真瓶颈**（非框架）：~1.5s `adb exec-out screencap` 是单步最大成本，直 adb 换不动它；要砍得换流式抓帧后端（minicap/scrcpy，~30-50ms/帧）。这是独立优化，native 里换 `_adb.screencap()` 一个函数即可。
 
-## Adapter 设计要点（`agents/relay_agent.py` + `agents/action_planner.py`）
+## Adapter 设计要点（`agents/agent/relay_agent.py` + `agents/agent/action_planner.py`）
 
 1. **`open_app` 要 launcher label 不是包名**（千问=`千问`）：`card.embedded_agent.name` → `card.app_name` → 包名。
 2. **`tap_text` 优先 uiautomator XML，VLM 兜底。** `_ground_text_via_uiautomator` 按 text/content-desc/resource-id 匹配 bounds 中心。3 次重试 + 0.8s 间隔吃动画。失败路径一律 info/warning 别 debug。
 3. **Grounding 输出形态宽**：`_extract_xy()` 容忍 `{x,y}`/`{point:[x,y]}`/`[{x:[x,y]}]`/`{bbox:...}`/纯数字。坐标 `>999` 当像素，否则归一乘 `screen/999`。
-4. **冷启动 / deferred-launch**：脚本设 `RELAY_SKIP_OPEN_APP=1` + `RELAY_AGENT_LAUNCH=1`。agent 第一帧 `predict` 调 `_begin_task_once()`：记 `t0` → 起录屏（若 `RELAY_RECORD_DIR`）→ `cold_launch()`（`agents/_adb.py`：force-stop + monkey LAUNCHER + settle 1.0s）。deferred-launch 把启动放到 agent 首帧（native 无框架冷启动，但 IME 激活 / 子进程启动等仍在 t0 前），落在 wall_s 外。atexit 写 `wall_clock.json`（`{wall_s, phase:"task"}`）到 `RELAY_WALL_OUT` 或 `traj_logs/user_task/`。**agent 是 wall_s 唯一写者。** settle 1.0s 清品牌 splash。
+4. **冷启动 / deferred-launch**：脚本设 `RELAY_SKIP_OPEN_APP=1` + `RELAY_AGENT_LAUNCH=1`。agent 第一帧 `predict` 调 `_begin_task_once()`：记 `t0` → 起录屏（若 `RELAY_RECORD_DIR`）→ `cold_launch()`（`agents/runtime/_adb.py`：force-stop + monkey LAUNCHER + settle 1.0s）。deferred-launch 把启动放到 agent 首帧（native 无框架冷启动，但 IME 激活 / 子进程启动等仍在 t0 前），落在 wall_s 外。atexit 写 `wall_clock.json`（`{wall_s, phase:"task"}`）到 `RELAY_WALL_OUT` 或 `traj_logs/user_task/`。**agent 是 wall_s 唯一写者。** settle 1.0s 清品牌 splash。
 5. **fresh conversation**：`build_plan(fresh_conversation=True)` 在 open_app 后插清历史步。`RELAY_FRESH_CONV=0` 关。
 6. **`wait_for_reply` 文本-hash 判 done**：done 判定纯靠 uiautomator 文本 hash 稳定性（连续 3 拍 byte-identical），**不调 VLM 判 done**（见代码 `NOTE(no-vlm-done)`：qwen 当 judge 不可靠，对稳定回复反复返回 done=false 吊到超时）。VLM（`_poll_agent_reply`）仅在 scrape 落空时兜底**读回复文本**，只返回 `text`，不再带 `done` 字段。超时按墙钟 `max_seconds = x_max_wait_seconds or max(5×typical_latency, 60)`。text 注入 handoff 的 `ask_user`。
 7. **两段式 precheck 省 dump**：Stage 1(~25ms) 截图区域 hash（裁顶 8% 状态栏、底 18% 输入区），变了=streaming 跳过。Stage 2(~2.5s，仅屏稳定才跑) uiautomator 文本 hash，连续 `STABLE_DUMPS_FOR_DONE`(=3) 拍相等才判 done（**不调 VLM**）。熔断：连续 ≥`MAX_DUMP_FAILS`(2) 次 dump 失败关本次 dump。看门狗：连续 ≥`MAX_SKIPS_BEFORE_FORCE`(5) 次 skip 强跑一次文本 dump。
@@ -111,14 +119,14 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 **输出目录由 `RELAY_TRAJ_DIR` 决定**（traj.json + `steps/` + `agent_reply.json` 都落这里；`native_runner.TRAJ_DIR` / `relay_agent._TRAJ_DIR` / `StepLogger` 三处统一读它）：
 
-- **不设**（standalone `python -m agents.native_runner`）：默认 `traj_logs/user_task/`。每次启动（`_rotate_traj_dir`）把上次 `traj_logs/user_task/` 搬到 `traj_logs/user_task_backup_<ts>/`，再 mkdir + seed 空 `traj.json`。`ls -td ...backup_* | head -1` 是**上一次**的内容。
+- **不设**（standalone `python -m agents.runtime.native_runner`）：默认 `traj_logs/user_task/`。每次启动（`_rotate_traj_dir`）把上次 `traj_logs/user_task/` 搬到 `traj_logs/user_task_backup_<ts>/`，再 mkdir + seed 空 `traj.json`。`ls -td ...backup_* | head -1` 是**上一次**的内容。
 - **设**（NL flow 每条 leg，`flow_runner` 设 `RELAY_TRAJ_DIR=<flow_root>/NN_<id>`）：子进程直接写进该 leg 目录，**不碰全局 `user_task`、不轮转、无 copytree**。flow 输出形如 `traj_logs/<ts>_plan_<apps>/NN_<id>/{traj.json, steps/, agent_reply.json, wall_clock.json, summary.json, leg_verdict.json}`（**没有 `user_task/` 子层**）。`wall_clock.json`/`summary.json` 仍各经 `RELAY_WALL_OUT`/`RELAY_SUMMARY_OUT` 指到同一 leg 目录。
 - flow 级 LLM call（leg judge / bind extract）由 `FlowRunner._RecordingLLM` 记录，fold 进每条 leg 的 `traj.json` 顶层 `flow_llm_calls`（与 in-app agent 的 `["0"]["llm_calls"]` 区分）。
 - `scripts/run_benchmark_test.py` 的 **relay 侧**经 `run_plan.py` 跑 NL flow，从产出的每条 leg 目录 harvest（`summary.json` + `traj.json` 的 `flow_llm_calls` + `leg_verdict.json` + `agent_reply.json`）；**mw 侧**（MobileWorld）写自己的 `mw/user_task/`，是外部 runtime 约定，不归 `RELAY_TRAJ_DIR` 管。
 
 ### Step 日志（逐步轨迹）
 
-`agents/native_runtime.py:StepLogger`，在 `run_task` 循环里每步落盘，**默认开**：记下 agent 这一步**看到的截图**、它返回的 **action**、以及**点击位置**。
+`agents/runtime/native_runtime.py:StepLogger`，在 `run_task` 循环里每步落盘，**默认开**：记下 agent 这一步**看到的截图**、它返回的 **action**、以及**点击位置**。
 
 - 落 `<RELAY_TRAJ_DIR>/steps/`（跟 traj.json 同目录；standalone 默认 `traj_logs/user_task/steps/`，flow 则在 leg 目录下）。`RELAY_STEP_LOG_DIR` 显式覆写优先级最高。
 - 每步：`step_<n>.png`（agent 行动所依据的那帧，pre-action obs，所以 action 的 `(x,y)` 就落在这帧上）+ `step_<n>_marked.png`（在帧上画标记：tap/long_press/double_tap 画红点+十字，swipe/scroll/drag 画红箭头；无坐标的 action 如 input_text 不出 marked 帧）+ `steps.json`（索引：step、ts、action_type、完整 action dict、`click=[x,y]`、agent 的 thought、两张图文件名）。`steps.json` 每步整体重写，跑崩了也是合法 JSON。
@@ -133,11 +141,12 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 纯无障碍方案 + Chaquopy 嵌 Python，把整个 NL flow 装进独立 App（无电脑无 adb）。骨架与映射表见 [`android/README.md`](android/README.md)。**主机行为零漂移**：以下接缝默认值全部保持原行为，只有 Android 侧换实现。
 
-- **LLM client**：一律经 `agents/llm_client.py:make_llm_client`（主机=真 openai SDK；`RELAY_LLM_HTTP=1` 或 SDK 缺失=stdlib HTTP shim，无 streaming）。`JSONAction` 已去 pydantic（纯 Python，行为由 `tests/test_action_model.py` 钉死）。
-- **交互**：终端 `input()` 已抽成 `agents/interaction.py:InteractionProvider`（`ask_user` 返回 None=EOF/接管=handoff 成功终止；`should_stop` 在循环边界轮询）。Android 实现=悬浮窗。
+- **LLM client**：一律经 `agents/llm/llm_client.py:make_llm_client`（主机=真 openai SDK；`RELAY_LLM_HTTP=1` 或 SDK 缺失=stdlib HTTP shim，无 streaming）。`JSONAction` 已去 pydantic（纯 Python，行为由 `tests/test_action_model.py` 钉死）。
+- **交互**：终端 `input()` 已抽成 `agents/runtime/interaction.py:InteractionProvider`（`ask_user` 返回 None=EOF/接管=handoff 成功终止；`should_stop` 在循环边界轮询）。Android 实现=悬浮窗。
 - **leg 执行**：`flow_runner` 经 LegExecutor 接缝——`SubprocessLegExecutor`（默认，字节级等价）/ `InProcessLegExecutor`（`RELAY_LEG_EXECUTOR=inprocess`，Chaquopy 无法 spawn 子进程；env 快照/还原）。`native_runner.run_leg()` 可 import，`RELAY_TRAJ_DIR` 按调用解析（不再 import 期冻结）。
-- **NL pipeline**：`agents/nl_flow.py:plan_request/execute_plan`（结构化结果），`run_plan.py` 只剩 CLI 前端。`plan_request(allow_mw_legs=False)`=Android 禁缓存 MW plan；`FlowPlanner(mw_fallback=False)`=不可覆盖 leg 直接 unsatisfiable。
+- **NL pipeline**：`agents/flow/nl_flow.py:plan_request/execute_plan`（结构化结果），`run_plan.py` 只剩 CLI 前端。`plan_request(allow_mw_legs=False)`=Android 禁缓存 MW plan；`FlowPlanner(mw_fallback=False)`=不可覆盖 leg 直接 unsatisfiable。
 - **路径**：`RELAY_TRAJ_ROOT` 重定向 traj_logs 基目录（Android 指 filesDir；主机默认 `<repo>/traj_logs` 不变）。
-- **Spike B 工具**：`scripts/diff_a11y_dump.py` 对比 App 内 a11y 序列化 与真 `uiautomator dump` 的 (text/content-desc/bounds) 节点集 + text-hash 流。
+- **Spike B 工具**：`scripts/android/diff_a11y_dump.py` 对比 App 内 a11y 序列化 与真 `uiautomator dump` 的 (text/content-desc/bounds) 节点集 + text-hash 流。
 - **已知语义漂移（端侧接受）**：无 shell 拿不到真 force-stop，冷启动以 `FLAG_ACTIVITY_CLEAR_TASK` 重启近似——端上运行不与 benchmark 对比。
-- **已接线 + 模拟器验证**：`relay_android/backend.py:install()` 注入 `OnDeviceAndroidBackend` 已在 AVD 上跑通（CPython→backend 注入→MediaProjection 截帧→路由/规划→in-process leg→traj 落 filesDir）。`native_runner._agent_spec` 在磁盘无 `agents/relay_agent.py`（Chaquopy AssetFinder 打包形态）时回落包内 module spec 加载 agent。debug APK 的 abiFilters 含 x86_64 可装模拟器；搭建与安装步骤见 `docs/emulator_testing.zh.md` §3/§7（scrcpy 远程观察 §6）。
+- **App 界面**（Material 3 + viewBinding，见 `android/README.md` §App 界面）：主页（状态卡 / 任务框 / 运行 / 任务示例 / 运行日志 / 实时日志）、`ExamplesActivity`（读 `res/raw/examples.json`，50 条由 `scripts/android/gen_app_examples.py` 从 `benchmark/` 生成，改基准后重跑刷新）、结构化运行日志查看器（`LogActivity` 运行列表 → `RunDetailActivity` 子任务 → `LegDetailActivity` 步骤时间线含截图缩略图；解析 `TrajLog.kt`，App 名 `AppLabels.kt`，原始文件树退到 `RawLogActivity`+`LogDetailActivity`；`entry.py` 落 `meta.json` 存任务原文）。实时日志走 `RunLog` 单例，`OverlayController.postStatus` 把 `emit_status` 事件喂 chip + 主页日志卡。
+- **已接线 + 模拟器验证**：`relay_android/backend.py:install()` 注入 `OnDeviceAndroidBackend` 已在 AVD 上跑通（CPython→backend 注入→MediaProjection 截帧→路由/规划→in-process leg→traj 落 filesDir）。`native_runner._agent_spec` 在磁盘无 `agents/agent/relay_agent.py`（Chaquopy AssetFinder 打包形态）时回落包内 module spec 加载 agent。debug APK 的 abiFilters 含 x86_64 可装模拟器；搭建与安装步骤见 `docs/emulator_testing.zh.md` §3/§7（scrcpy 远程观察 §6）。

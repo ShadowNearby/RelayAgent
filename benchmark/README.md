@@ -34,7 +34,7 @@ See [`docs/evaluation.md`](../docs/evaluation.md) for the full evaluation design
 
 ```bash
 # validate task-set structure / balance / disambiguation
-uv run python scripts/validate_relaybench.py
+uv run python scripts/validate/validate_relaybench.py
 
 # smoke test (1 task per app, 10 by default)
 uv run python scripts/run_benchmark_test.py --benchmark relaybench --dry-list
@@ -55,10 +55,10 @@ uv run python scripts/run_benchmark_test.py --benchmark relaybench --plan-only
 
 ```bash
 # single task (app_id + instruction)
-uv run python -m agents.native_runner com.xingin.xhs "上海有什么值得一去的小众咖啡馆，推荐5家"
+uv run python -m agents.runtime.native_runner com.xingin.xhs "上海有什么值得一去的小众咖啡馆，推荐5家"
 
 # shopping capabilities now live under Qwen (app_id=com.aliyun.tongyi)
-uv run python -m agents.native_runner com.aliyun.tongyi "帮我找一台适合学生用的平板电脑，预算2000以内"
+uv run python -m agents.runtime.native_runner com.aliyun.tongyi "帮我找一台适合学生用的平板电脑，预算2000以内"
 
 # natural-language flow (plan + per-step routing only, no device execution)
 uv run python scripts/run_plan.py --dry-run "帮我找一台适合学生用的平板电脑，预算2000以内"

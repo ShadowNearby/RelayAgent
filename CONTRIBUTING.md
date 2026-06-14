@@ -24,7 +24,7 @@ This project lives or dies on **card quality**, not card count — please read t
    - Date (`provenance.last_verified`)
 4. **Validate locally** (CI runs the same check):
    ```bash
-   uv run python scripts/validate_manifests.py manifests/<your-card>.yaml
+   uv run python scripts/validate/validate_manifests.py manifests/<your-card>.yaml
    ```
    This validates against `spec/schema.json` and the load-time `prompt_template` consistency rules.
 5. **Open a PR** with:
@@ -35,7 +35,7 @@ This project lives or dies on **card quality**, not card count — please read t
 
 Reviewers will look for:
 
-- [ ] `scripts/validate_manifests.py` passes (schema + `prompt_template` rules; CI gate).
+- [ ] `scripts/validate/validate_manifests.py` passes (schema + `prompt_template` rules; CI gate).
 - [ ] `spec_version` matches current SPEC.
 - [ ] All required fields present, no unknown top-level keys.
 - [ ] Every `capability` has ≥2 real example prompts (not paraphrased from the description).

@@ -3,7 +3,7 @@
 > 中文: [`device_setup.zh.md`](device_setup.zh.md)
 
 > What the device side needs before running RelayAgent (single-app debugging / NL flow / A/B benchmark).
-> One-shot health check: `uv run python scripts/check_device_env.py [--benchmark relaybench|androiddaily|mobileworld|all]` (exit code 0 when nothing FAILs).
+> One-shot health check: `uv run python scripts/validate/check_device_env.py [--benchmark relaybench|androiddaily|mobileworld|all]` (exit code 0 when nothing FAILs).
 > For the emulator (no real device) path see [`emulator_testing.md`](emulator_testing.md).
 
 ## 1. Host side
@@ -20,7 +20,7 @@
 | Item | Requirement | Notes |
 | --- | --- | --- |
 | Connection | USB debugging or Wi-Fi adb (`adb tcpip 5555` + `adb connect`) | Phase B ran over Wi-Fi adb; **tasks that toggle flight mode kill the Wi-Fi adb transport and are excluded from the task set** |
-| Multi-device | `RELAY_ANDROID_SERIAL=<serial>` | honored by every adb call (`agents/_adb.py`) |
+| Multi-device | `RELAY_ANDROID_SERIAL=<serial>` | honored by every adb call (`agents/runtime/_adb.py`) |
 | IME | **ADBKeyBoard** (`com.android.adbkeyboard`, [senzhk/ADBKeyBoard](https://github.com/senzhk/ADBKeyBoard)) installed | the runner does `ime enable/set` itself at startup and `ime reset` on exit; only "installed" is required |
 | a11y dump | `uiautomator dump` works | primary path for tap_text grounding and reply scraping; without it everything falls back to the VLM (slow, expensive) |
 | Screenshot | `adb exec-out screencap -p` works | measured ~1.5 s/frame on real devices — the dominant per-step cost |
@@ -74,10 +74,10 @@ MW tasks run inside **MobileWorld's own app environment** (Mail, Messages, Masto
 
 ```bash
 # Health check (core checks + are the 10 manifest apps installed)
-uv run python scripts/check_device_env.py
+uv run python scripts/validate/check_device_env.py
 
 # Per benchmark / custom app set / specific device
-uv run python scripts/check_device_env.py --benchmark mobileworld
-uv run python scripts/check_device_env.py --apps com.aliyun.tongyi,com.autonavi.minimap
-uv run python scripts/check_device_env.py --serial 46180DLAQ004LW
+uv run python scripts/validate/check_device_env.py --benchmark mobileworld
+uv run python scripts/validate/check_device_env.py --apps com.aliyun.tongyi,com.autonavi.minimap
+uv run python scripts/validate/check_device_env.py --serial 46180DLAQ004LW
 ```

@@ -16,8 +16,8 @@ agents/device/
 └── vendor_profiles.py Android vendor tables (+ RELAY_VENDOR_PROFILE overlay)
 ```
 
-`agents/_adb.py` remains as a module-level shim delegating to the default
-backend — the legacy import surface (`from agents._adb import screencap`)
+`agents/runtime/_adb.py` remains as a module-level shim delegating to the default
+backend — the legacy import surface (`from agents.runtime._adb import screencap`)
 keeps working while call sites migrate. New code should hold an instance:
 
 ```python
@@ -81,7 +81,7 @@ gaps vs Android: no system back key (edge-swipe substitute), and no
 on-device file recording equivalent of `screenrecord`. Manifests must be
 re-authored against the iOS build of each app (`app_ids.ios` + portable
 selectors — prefer `accessibility_id`/`text` over `resource_id`;
-`scripts/validate_manifests.py` warns on Android-only selectors in cards
+`scripts/validate/validate_manifests.py` warns on Android-only selectors in cards
 that declare ios).
 
 ## Multi-device runs

@@ -312,14 +312,14 @@ NL request ─▶ Capability Router ─▶ Card (entry + capability + handoff)
 ```
 
 A request enters as natural language. The **capability router**
-(`agents/capability_router.py`) consults a catalog of cards and picks one
+(`agents/routing/capability_router.py`) consults a catalog of cards and picks one
 capability. The chosen card names a **launcher entry path** and a **capability**
 with its slots, latency hint, and handoff policy. The **relay adapter**
-(`agents/relay_agent.py`, built on a planner in `agents/action_planner.py`)
+(`agents/agent/relay_agent.py`, built on a planner in `agents/agent/action_planner.py`)
 materializes that card into a deterministic action sequence: cold-launch the app,
 open a fresh conversation, type the prompt, wait for the in-app agent's reply to
 complete, scrape the reply text, and — when the capability is marked irreversible
-— hand control back to the user. A shared adb helper (`agents/_adb.py`) backs
+— hand control back to the user. A shared adb helper (`agents/runtime/_adb.py`) backs
 cold-launch, swipes, and device selection.
 
 The remainder of the paper details the card spec (§4), the adapter mechanisms
@@ -371,11 +371,11 @@ ever crossing it (§8, safety checks).
 ## 5. The Relay Adapter
 
 The adapter is the execution engine; this is where the system-contribution rigor
-lives. Source of truth: `agents/relay_agent.py` + `agents/action_planner.py`.
+lives. Source of truth: `agents/agent/relay_agent.py` + `agents/agent/action_planner.py`.
 
 ### 5.1 Cold launch & entry-path materialization
 
-Every task begins with a cold launch (`agents/_adb.py:cold_launch()`:
+Every task begins with a cold launch (`agents/runtime/_adb.py:cold_launch()`:
 `am force-stop` + monkey LAUNCHER + settle) so the first observation is a clean app
 home, independent of prior state. The run scripts perform the launch and set
 `RELAY_SKIP_OPEN_APP=1`; the planner then omits its own `open_app` step. (When
@@ -436,7 +436,7 @@ failure, and is how the benchmark's non-interactive runs end.
 
 ## 6. Natural-Language Routing
 
-**NL routing** (`scripts/run_plan.py` + `agents/capability_matrix_router.py`) builds
+**NL routing** (`scripts/run_plan.py` + `agents/routing/capability_matrix_router.py`) builds
 a catalog of all app cards, synthesizes a flow, and resolves each app step
 through the matrix-backed router, with a `--dry-run` mode for inspection. Each
 app leg is then delegated to the native single-app runner with
@@ -530,7 +530,7 @@ result — cost *predictability* — emerges from the repetitions.
   run-to-run band). Token counts come from per-run `traj.json`
   (`llm_calls.usage_delta` for RA; aggregate `token_usage` for general_e2e/flow
   legs). Raw runs: `test-results/ab/n3/`; driver: `test-results/ab/run_n3.sh`;
-  per-run aggregation: `scripts/aggregate_metrics.py`.
+  per-run aggregation: `scripts/eval/aggregate_metrics.py`.
 
 The deep token / wall-clock / predictability study (§8.2–8.4) uses the two
 tasks above. Functional **coverage** across the full card catalog is reported
@@ -914,7 +914,7 @@ them, so the claims above are read at their actual strength.
    even the one success (15,789 tokens) is still ~4× RA optimized. So the 3-image
    config is general_e2e's load-bearing working setup, not inflated padding, and
    RA's gap is not an artifact of an over-heavy baseline. We then tested the input
-   *modality* directly with an **a11y-text baseline** (`agents/a11y_agent.py`,
+   *modality* directly with an **a11y-text baseline** (`agents/agent/a11y_agent.py`,
    `test-results/ab/a11y/`, n=3): a pure re-driving agent fed the accessibility
    tree as text instead of screenshots, everything else held constant (uses the
    assistant, free-form per-step decisions, same task/model/gateway, and a
@@ -1021,7 +1021,7 @@ when apps ship endpoints, cards become a thin shim or disappear (SPEC §14).
 
 ## Appendix A. Reproducibility
 
-- **Entry points.** `python -m agents.native_runner <pkg> "<goal>"` (single app) and
+- **Entry points.** `python -m agents.runtime.native_runner <pkg> "<goal>"` (single app) and
   `scripts/run_plan.py "<goal>"` (routed flow). Both cold-launch the target and set
   `RELAY_SKIP_OPEN_APP=1`.
 - **A/B flags.** `RELAY_PRECHECK=0 RELAY_SCRAPE=0` reproduces the pre-optimization
@@ -1029,7 +1029,7 @@ when apps ship endpoints, cards become a thin shim or disappear (SPEC §14).
 - **Pure-VLM baselines.** `mw test "<instr>" --agent-type general_e2e` (uses the
   in-app assistant) or with a "do not use any AI assistant" instruction
   (manual-UI). Cold-launch the app first.
-- **Aggregation.** `scripts/aggregate_metrics.py <run-dirs>` (token / VLM-purpose /
+- **Aggregation.** `scripts/eval/aggregate_metrics.py <run-dirs>` (token / VLM-purpose /
   wall_s, with baseline→optimized delta). Driver `test-results/ab/run_n3.sh`
   (3 configs × 2 tasks × 3 reps → `test-results/ab/n3/`). Raw runs in
   `test-results/ab/` (gitignored); frozen data in `report/benchmark-data-n3.md`
@@ -1133,8 +1133,8 @@ single irreversible payment tap.
 - [x] Add §8.9 Threats to Validity (baseline cost, eval scope, predictability provenance, safety, cross-round, a11y hit-rate).
 
 Threats-to-validity follow-ups (newly opened, §8.9):
-- [x] **Manifest-isolation ablation** — `RELAY_NO_MANIFEST=1` (`agents/relay_agent.py`); n=3 `test-results/ab/nm/`. → §8.9 item 1 (no-manifest ≈14k, splits 19× into ≈5.5× delegation + ≈3.5× manifest).
-- [x] **Frugal pure-VLM baseline** — `HISTORY_N_IMAGES=1` (`test-results/ab/n3_hist1/`) + **a11y-text-input baseline** (`agents/a11y_agent.py`, `test-results/ab/a11y/`, n=3; driver `test-results/ab/run_a11y.sh`, fresh-start `benchmark/fresh_conv.py`). → §8.9 item 2 (a11y-text median 47302 = 11.9× RA, only 1.6× under general_e2e; prompt/completion split + $ restatement in §8.2). *(set-of-marks still untested.)*
+- [x] **Manifest-isolation ablation** — `RELAY_NO_MANIFEST=1` (`agents/agent/relay_agent.py`); n=3 `test-results/ab/nm/`. → §8.9 item 1 (no-manifest ≈14k, splits 19× into ≈5.5× delegation + ≈3.5× manifest).
+- [x] **Frugal pure-VLM baseline** — `HISTORY_N_IMAGES=1` (`test-results/ab/n3_hist1/`) + **a11y-text-input baseline** (`agents/agent/a11y_agent.py`, `test-results/ab/a11y/`, n=3; driver `test-results/ab/run_a11y.sh`, fresh-start `benchmark/fresh_conv.py`). → §8.9 item 2 (a11y-text median 47302 = 11.9× RA, only 1.6× under general_e2e; prompt/completion split + $ restatement in §8.2). *(set-of-marks still untested.)*
 - [ ] **Reproduce the failure modes** — instrumented runs that trigger premature-exit (seeded stale conversation) and runaway, to put §8.4's sharp variance on tracked data.
 - [ ] **Adversarial handoff tests** — assistant auto-submits in one turn / mis-annotated flag / CTA label ≠ `stop_before`; show the contract holds or where it leaks.
 - [ ] **Catalog-wide a11y hit-rate** — % taps resolved by uiautomator vs VLM-fallback across the current manifest catalog.

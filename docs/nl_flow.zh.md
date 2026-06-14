@@ -5,7 +5,7 @@
 > 一句自然语言 → 自动合成的多 App 协作计划 → 执行。本文是**架构深挖**（合成 / 三段式路由 / 校验 / 执行 / leg judge / handoff / 路由固化）。
 > pipeline、CLI 用法、缓存、真机实跑示例见 [`cross_app_planner.zh.md`](cross_app_planner.zh.md)。
 >
-> 涉及代码：`agents/flow_planner.py` / `agents/flow_runner.py` / `agents/capability_matrix_router.py` / `agents/leg_judge.py` / `agents/route_overlay.py` / `scripts/run_plan.py`。
+> 涉及代码：`agents/flow/flow_planner.py` / `agents/flow/flow_runner.py` / `agents/routing/capability_matrix_router.py` / `agents/flow/leg_judge.py` / `agents/routing/route_overlay.py` / `scripts/run_plan.py`。
 
 ---
 
@@ -19,7 +19,7 @@ NL request
        ├─ 校验 + repair 回路        本地校验；命中错误就把错误清单喂回 LLM 重修（≤3 轮）→ 重路由 → 重校验
        └─ 落盘 manifests/_generated/*.yaml
   └─ FlowRunner.run()              按 step 顺序执行
-       ├─ app_step    → spawn `python -m agents.native_runner` 子进程（一 leg = 一 app + 一 capability）
+       ├─ app_step    → spawn `python -m agents.runtime.native_runner` 子进程（一 leg = 一 app + 一 capability）
        ├─ ask_user    → 终端收人类输入（可渲染 select_from 选择列表）
        └─ extract     → 文本 LLM 把上一 leg 回复解析成结构化 JSON
        blackboard：{var}/{var.field} 在 step 间传值
@@ -112,7 +112,7 @@ NL request
 
 **App step（`_run_app_step`）：**
 
-- 每个 leg 一个全新 `python -m agents.native_runner <app> <prompt>` 子进程。
+- 每个 leg 一个全新 `python -m agents.runtime.native_runner <app> <prompt>` 子进程。
 - 子进程 env：`RELAY_FORCE_CAPABILITY`/`RELAY_INVOCATION_TEXT`（旁路 router）、`RELAY_SKIP_OPEN_APP=1`+`RELAY_AGENT_LAUNCH=1`（deferred-launch：冷启动放 agent 首帧 predict，把进程/leg 启动开销排除在 leg 墙钟外）、`RELAY_TRAJ_DIR`（把 traj.json / steps/ / agent_reply.json 直写进本 leg 的 `NN_<id>/` 目录——无全局 `user_task` scratch、无跑后 copytree）、`RELAY_REPLY_OUT`（回复 JSON）、`RELAY_SUMMARY_OUT`（summary）、`RELAY_WALL_OUT`（agent 写 framework-excluded `wall_clock.json`）。
 - stdin 喂 `DEVNULL`：末尾 ask_user handoff 以 EOF 干净收尾，不阻塞 flow。
 - **每 leg traj 单独存**：每个 flow run 有自己的 traj root `traj_logs/<ts>_plan_<app1>_<app2>.../`，每 leg 一个 `NN_<id>/`。子进程经 `RELAY_TRAJ_DIR` 直接把轨迹写进该 leg 目录；native runner 被 pin 时跳过全局 backup 轮转。详见 [`trajectory_logging.zh.md`](trajectory_logging.zh.md)。
@@ -141,7 +141,7 @@ NL request
 
 ## 9. 路由固化（route overlay，trace-guided solidification）
 
-把 §7 的 leg verdict 从"只写日志"变成路由优化器的输入：被反复确认 `success` 的 `(意图 → app/capability)` 决策**固化成表查**，下次同意图零 LLM 命中；反复 `failure` 的自动失效、回落三段式。代码 `agents/route_overlay.py`，存储 `traj_logs/route_overlay.json`（git-ignored 学习产物，**非权威**；matrix CSV 仍是 source of truth，提升回 matrix 是独立人工 review 步骤）。
+把 §7 的 leg verdict 从"只写日志"变成路由优化器的输入：被反复确认 `success` 的 `(意图 → app/capability)` 决策**固化成表查**，下次同意图零 LLM 命中；反复 `failure` 的自动失效、回落三段式。代码 `agents/routing/route_overlay.py`，存储 `traj_logs/route_overlay.json`（git-ignored 学习产物，**非权威**；matrix CSV 仍是 source of truth，提升回 matrix 是独立人工 review 步骤）。
 
 **回路：**
 
@@ -178,7 +178,7 @@ route(route_key, overlay):                  _judge_leg 末尾:
 | route 固化 | 三段式 3 次 LLM | `success ≥ 3` 且 `rate ≥ 0.8` 且 `consec_fail < 2` | `route solidified -> ... (0 LLM)` |
 | (基线) 设备执行 | — | 始终发生 → 喂 leg judge → overlay | leg judge + overlay recorded |
 
-**Promote（`scripts/promote_routes.py`，只读）**：把 trace 学到的高置信路由摆出来供人工决定是否折回 matrix——**绝不写 matrix**（CSV 是手维护 source of truth）。扫 overlay，按更高的门槛（`RELAY_PROMOTE_MIN_HITS` 默认 5 / `RATE` 默认 0.9）筛出 `(intent → app/cap)`，标注每条在 matrix 里**已授权**（确认学到的偏好与 matrix 一致）还是**未列**（候选加 ✓ 或忽略的 stale 项）。`--csv` 额外吐 review 行供人粘贴。纯逻辑、无设备/LLM/网络。
+**Promote（`scripts/routes/promote_routes.py`，只读）**：把 trace 学到的高置信路由摆出来供人工决定是否折回 matrix——**绝不写 matrix**（CSV 是手维护 source of truth）。扫 overlay，按更高的门槛（`RELAY_PROMOTE_MIN_HITS` 默认 5 / `RATE` 默认 0.9）筛出 `(intent → app/cap)`，标注每条在 matrix 里**已授权**（确认学到的偏好与 matrix 一致）还是**未列**（候选加 ✓ 或忽略的 stale 项）。`--csv` 额外吐 review 行供人粘贴。纯逻辑、无设备/LLM/网络。
 
 **开关 / 阈值**：`RELAY_ROUTE_OVERLAY`(默认1) / `RELAY_ROUTE_OVERLAY_PATH` / `RELAY_ROUTE_KEY_MODE`(默认 `b`) / `RELAY_ROUTE_SOLIDIFY_HITS`(3) / `RELAY_ROUTE_SOLIDIFY_RATE`(0.8) / `RELAY_ROUTE_MAX_FAILS`(2) / `RELAY_PROMOTE_MIN_HITS`(5) / `RELAY_PROMOTE_MIN_RATE`(0.9)。
 

@@ -2,7 +2,7 @@
 
 > English: [`emulator_testing.md`](emulator_testing.md)
 
-运行时是**纯 Python over adb**（`screencap` / `uiautomator dump` / `input` / `monkey`，见 `agents/native_runtime.py`），不依赖任何真机特有接口——Android 模拟器（AVD）天然兼容，且截图通常比真机的 ~1.5s/帧 快得多。本文给出没有真机时能测什么、怎么搭。
+运行时是**纯 Python over adb**（`screencap` / `uiautomator dump` / `input` / `monkey`，见 `agents/runtime/native_runtime.py`），不依赖任何真机特有接口——Android 模拟器（AVD）天然兼容，且截图通常比真机的 ~1.5s/帧 快得多。本文给出没有真机时能测什么、怎么搭。
 
 ## 1. 没有设备也能跑的部分（纯 LLM，零 adb）
 
@@ -59,7 +59,7 @@ adb shell settings put global stay_on_while_plugged_in 7
 export RELAY_ANDROID_SERIAL=emulator-5554
 
 # 体检
-uv run python scripts/check_device_env.py
+uv run python scripts/validate/check_device_env.py
 ```
 
 `check_device_env.py` 会通过 `ro.kernel.qemu` / `ro.boot.qemu` 识别并标注模拟器，其余检查项与真机相同。
@@ -69,7 +69,7 @@ uv run python scripts/check_device_env.py
 1. `check_device_env.py` 全绿（IME / uiautomator / screencap）。
 2. 装 + 登录一个国际 App（Copilot 最轻），跑单 App 入口：
    ```bash
-   uv run python -m agents.native_runner com.microsoft.copilot "What is the tallest building in the world?"
+   uv run python -m agents.runtime.native_runner com.microsoft.copilot "What is the tallest building in the world?"
    ```
    覆盖完整 obs→predict→execute 循环：cold-launch、入口 tap、AdbKeyboard 输入、`wait_for_reply` 文本-hash 判 done、scrape 回复。
 3. （可选）NL flow 真跑：`uv run python scripts/run_plan.py --yes "Ask Copilot ..."`。
