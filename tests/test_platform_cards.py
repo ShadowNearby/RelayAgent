@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agents.card_loader import load_all_cards, resolve_app_id
+from agents.routing.card_loader import load_all_cards, resolve_app_id
 
 _ANDROID_CARD = 'app_id: "com.x.android"\nplatforms: ["android"]\n'
 _IOS_CARD = 'app_id: "com.x.iosonly"\nplatforms: ["ios"]\n'

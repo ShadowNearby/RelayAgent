@@ -9,10 +9,10 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from agents.a11y_agent import serialize_tree
+from agents.agent.a11y_agent import serialize_tree
 from agents.device import UINode
 from agents.device.android import AndroidBackend
-from agents.relay_agent import (
+from agents.agent.relay_agent import (
     _dump_visible_text_hash,
     _extract_reply_text_from_dump,
     _ground_text_via_a11y,
@@ -31,9 +31,29 @@ def _node(text="", desc="", rid="", cls="", pkg="", bounds=None,
 
 
 def _patch_tree(nodes):
+    # The scrape/grounding helpers now live in sibling modules and resolve
+    # get_backend in their own namespace, so patch both modules at once.
     backend = mock.Mock()
     backend.dump_ui_tree.return_value = nodes
-    return mock.patch("agents.relay_agent.get_backend", return_value=backend)
+
+    class _MultiPatch:
+        def __init__(self):
+            self._patchers = [
+                mock.patch(f"{mod}.get_backend", return_value=backend)
+                for mod in ("agents.agent.relay_reply", "agents.agent.relay_grounding")
+            ]
+
+        def __enter__(self):
+            for p in self._patchers:
+                p.start()
+            return backend
+
+        def __exit__(self, *exc):
+            for p in self._patchers:
+                p.stop()
+            return False
+
+    return _MultiPatch()
 
 
 class GroundingTests(unittest.TestCase):
@@ -149,7 +169,7 @@ class SerializeTreeTests(unittest.TestCase):
 class CropCutoffTests(unittest.TestCase):
     def test_defaults(self):
         import os
-        from agents.relay_agent import _crop_cutoffs
+        from agents.agent.relay_agent import _crop_cutoffs
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("RELAY_CROP_TOP", None)
             os.environ.pop("RELAY_CROP_BOTTOM", None)
@@ -157,7 +177,7 @@ class CropCutoffTests(unittest.TestCase):
 
     def test_env_override_and_clamp(self):
         import os
-        from agents.relay_agent import _crop_cutoffs
+        from agents.agent.relay_agent import _crop_cutoffs
         with mock.patch.dict(os.environ,
                              {"RELAY_CROP_TOP": "0.10", "RELAY_CROP_BOTTOM": "0.9"}):
             top, bot = _crop_cutoffs(1000)

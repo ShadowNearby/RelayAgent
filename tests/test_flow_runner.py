@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from agents.flow_runner import FlowRunner, _harvest_mw_traj
-from agents.leg_judge import final_frames
+from agents.flow.flow_runner import FlowRunner, _harvest_mw_traj
+from agents.flow.leg_judge import final_frames
 
 
 class FoldFlowLlmCallsTests(unittest.TestCase):
@@ -109,7 +109,7 @@ class NativeRunnerTrajDirTests(unittest.TestCase):
         marker.write_text("stay", encoding="utf-8")
         os.environ["RELAY_TRAJ_DIR"] = str(leg_dir)
         try:
-            import agents.native_runner as nr
+            import agents.runtime.native_runner as nr
 
             rotated = nr._rotate_traj_dir()
             self.assertEqual(rotated, leg_dir)
@@ -121,7 +121,7 @@ class NativeRunnerTrajDirTests(unittest.TestCase):
     def test_traj_dir_resolved_per_call_not_at_import(self) -> None:
         # In-process legs change RELAY_TRAJ_DIR between calls in ONE process;
         # the resolution must follow the env, not a value frozen at import.
-        import agents.native_runner as nr
+        import agents.runtime.native_runner as nr
 
         leg_a = Path(self._tmp) / "leg_a"
         leg_b = Path(self._tmp) / "leg_b"

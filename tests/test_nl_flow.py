@@ -1,4 +1,4 @@
-"""Tests for agents.nl_flow — the shared NL→flow pipeline core.
+"""Tests for agents.flow.nl_flow — the shared NL→flow pipeline core.
 
 Covers the plan_request outcome states (fresh / cached / unsatisfiable /
 validation-failed / MW-legs-disallowed) and the cache + persist helpers,
@@ -13,8 +13,8 @@ from pathlib import Path
 
 import yaml
 
-from agents.flow_planner import PlanValidationError
-from agents.nl_flow import (
+from agents.flow.flow_planner import PlanValidationError
+from agents.flow.nl_flow import (
     PlanResult,
     cache_lookup,
     normalize_request,

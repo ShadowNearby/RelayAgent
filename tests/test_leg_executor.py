@@ -10,8 +10,8 @@ from __future__ import annotations
 import os
 import unittest
 
-import agents.native_runner as native_runner
-from agents.flow_runner import (
+import agents.runtime.native_runner as native_runner
+from agents.flow.flow_runner import (
     InProcessLegExecutor,
     SubprocessLegExecutor,
     _default_leg_executor,

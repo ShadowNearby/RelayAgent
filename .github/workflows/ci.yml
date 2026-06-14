@@ -25,21 +25,21 @@ jobs:
         run: uv run python -m unittest discover -s tests -v
 
       - name: Validate manifests against spec/schema.json
-        run: uv run python scripts/validate_manifests.py
+        run: uv run python scripts/validate/validate_manifests.py
 
       - name: Validate RelayBench task suite
-        run: uv run python scripts/validate_relaybench.py
+        run: uv run python scripts/validate/validate_relaybench.py
 
       - name: Entry-point import smoke
         run: |
           uv run python - <<'EOF'
           import importlib
           for mod in (
-              "agents.native_runner",
-              "agents.relay_agent",
-              "agents.flow_planner",
-              "agents.flow_runner",
-              "agents.capability_matrix_router",
+              "agents.runtime.native_runner",
+              "agents.agent.relay_agent",
+              "agents.flow.flow_planner",
+              "agents.flow.flow_runner",
+              "agents.routing.capability_matrix_router",
           ):
               importlib.import_module(mod)
               print(f"ok: {mod}")
