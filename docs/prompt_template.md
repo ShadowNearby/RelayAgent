@@ -90,7 +90,7 @@ Seeds: Gemini `live_navigation` = `Navigate to {place}[ by {mode}].` (required
 structured capabilities (food ordering / ticketing / alarms) can be added
 incrementally with the same pattern, no code change needed.
 
-## 3. Where it plugs in (`agents/flow_planner.py`)
+## 3. Where it plugs in (`agents/flow/flow_planner.py`)
 
 Data flow: `FlowPlanner.plan()` LLM synthesizes a free prompt →
 `resolve_app_routes()` routes each step to app+capability → **fill** →
@@ -137,7 +137,7 @@ No `{slot}` survives plan time; runtime `render()` only handles cross-step
 
 ### Catalog pass-through
 
-`build_catalog` (`agents/card_catalog.py`) trims capability fields by default.
+`build_catalog` (`agents/routing/card_catalog.py`) trims capability fields by default.
 `prompt_template` / `prompt_slots` are passed into the catalog digest **only when
 present**, so `FlowPlanner._caps` can read them.
 
@@ -154,7 +154,7 @@ executed step trips `PromptTemplateError`" to load time.
 | Decision | Choice | Rationale |
 | --- | --- | --- |
 | Missing required slot | **Hard fail** | Better not to run than to submit a residual/hallucinated prompt; keeps the submitted wording/routing deterministic (slot *values* are still LLM-extracted, so this guarantees intent routing, not value correctness) |
-| v1 scope | **NL flow only** (`run_plan.py`/`FlowPlanner`) | The path where the prompt is freely synthesized and drifts most; the direct `python -m agents.native_runner <pkg> <goal>` entry uses the user's own words and is not templated yet |
+| v1 scope | **NL flow only** (`run_plan.py`/`FlowPlanner`) | The path where the prompt is freely synthesized and drifts most; the direct `python -m agents.runtime.native_runner <pkg> <goal>` entry uses the user's own words and is not templated yet |
 | planner system prompt | **Unchanged** | The planner doesn't yet know the routing result, so it can't know which step gets a template; the extractor pulls values from the synthesized prompt — zero planner change, lowest risk |
 | `example_prompts` | **Kept** | Few-shot fallback when no template is present |
 

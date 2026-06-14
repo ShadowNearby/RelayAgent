@@ -3,7 +3,7 @@
 > English: [`evaluation.md`](evaluation.md)
 
 > 论文 Evaluation 章的设计与实现记录。决策日期 2026-06-09。
-> 配套代码：`scripts/run_benchmark_test.py`（A/B driver + plan-only）、`scripts/plot_eval_figs.py`（图）。
+> 配套代码：`scripts/run_benchmark_test.py`（A/B driver + plan-only）、`scripts/eval/plot_eval_figs.py`（图）。
 
 ## 1. 一句话
 
@@ -58,7 +58,7 @@ RA 的 10 个手写 manifest：千问、高德、携程、微信、小红书、W
 ## 7. Protocol / 诚实点（论文必须交代）
 
 1. **self-judge**：judge 是 RA 自家 leg_judge → 抽 30–50 题人工核对，报一致率。
-2. **relay token 口径（已修，task #8 ✓）**：relay 总 token 现读 `run_plan.py` 写的权威 `<flow_root>/token_usage.json`，`total` **已含 plan-synthesis 相**（+ 修复轮），`by_phase` 拆 plan/flow/agent → 规划税可直接量化（实测一条高德 POI covered 任务：plan 16975 / flow 698 / agent 0 token，规划相占绝大头）。**两侧 per-call 日志对齐**：results.jsonl 每行 `llm_calls` 放 per-call 指标（tokens+latency+model+purpose），完整正文（messages/response）落盘——relay 在各 leg `traj.json`、mw 经非侵入探针 `agents.mw_llm_probe` 写 `<sys>/user_task/llm_calls.json`。
+2. **relay token 口径（已修，task #8 ✓）**：relay 总 token 现读 `run_plan.py` 写的权威 `<flow_root>/token_usage.json`，`total` **已含 plan-synthesis 相**（+ 修复轮），`by_phase` 拆 plan/flow/agent → 规划税可直接量化（实测一条高德 POI covered 任务：plan 16975 / flow 698 / agent 0 token，规划相占绝大头）。**两侧 per-call 日志对齐**：results.jsonl 每行 `llm_calls` 放 per-call 指标（tokens+latency+model+purpose），完整正文（messages/response）落盘——relay 在各 leg `traj.json`、mw 经非侵入探针 `agents.llm.mw_llm_probe` 写 `<sys>/user_task/llm_calls.json`。
 3. **completed-only 偏差**：现 `_aggregate` 时间/token 仅统计各系统自己完成的任务 → 必须并报全量 **+ 两系统都成功的交集配对**。三套口径方向相反地有偏（completed-only 各算各的、不可配对；全量含 MW 超时天花板→高估 RA；交集 conditioning on baseline-success→删掉 RA 最大赢点、低估 RA），故三者同列才诚实。**实现待办**：`_aggregate` 现按系统各自聚合，交集配对需按 `task_id` 求两系统成功交集再算 per-task ratio（不是均值相除）。
 4. **测试公平性开关**：见 §8。
 
@@ -79,7 +79,7 @@ RA 的 10 个手写 manifest：千问、高德、携程、微信、小红书、W
 
 ## 9. 图表集
 
-代码：`scripts/plot_eval_figs.py`，输出 `docs/eval_figs/{png,pdf}`。**数据当前为 MOCK**，schema 已对齐产出，换真值只动脚本顶部 `MOCK` 块。配色固定：relay 蓝 `#0072B2` / baseline 橙 `#D55E00`，covered 深绿、fallback 浅绿/紫。
+代码：`scripts/eval/plot_eval_figs.py`，输出 `docs/eval_figs/{png,pdf}`。**数据当前为 MOCK**，schema 已对齐产出，换真值只动脚本顶部 `MOCK` 块。配色固定：relay 蓝 `#0072B2` / baseline 橙 `#D55E00`，covered 深绿、fallback 浅绿/紫。
 
 - **Fig.1 覆盖分层**：每 benchmark 一条横向堆叠条（covered/foundation/mixed/mw/invalid），右标 N。数据 ← 各 `plan_summary.json["by_tier"]`。
 - **Fig.2 covered 层效率**：covered 层 relay vs baseline 的 time/token/steps 三联屏，柱顶 `n×` 省幅，底部 success% 守门。数据 ← `summary.json`（covered 子集聚合）。
@@ -111,7 +111,7 @@ RA 的 10 个手写 manifest：千问、高德、携程、微信、小红书、W
 - 新逻辑（stage-3 逃生口）生效：MobileWorld 旧 foundation_fallback 102 → 现 **mw 90**（Gemini foundation 做不了的设备/OS 动作正确降级到 MW 兜底）；covered 61 含合法的 Gemini 邮件/日程/短信（manifest 真声明、matrix 唯一提供方）+ 3 条重跑新增。AndroidDaily 大量无 manifest 的 app（滴滴/京东/美团/拼多多/B站…）→ mw 143。
 - 最终 covered ids（Phase B 真机集）：`traj_logs/reclassify/final/<bench>_covered_ids.txt`（27 / 71 / 61，合计 **159**）。
 
-**真机 A/B（Phase B，进行中）**：对上面 159 个 covered case 跑 relay + mw general_e2e（日志已修，含 plan-synthesis token + 两侧 per-call）。relaybench 已完成 8/27，其余跑中（resume-aware：`scripts/_phaseB_run.sh` 按 results.jsonl 断点续跑）。效率/成功率真值待跑完回填 Fig.2/4/6/7。
+**真机 A/B（Phase B，进行中）**：对上面 159 个 covered case 跑 relay + mw general_e2e（日志已修，含 plan-synthesis token + 两侧 per-call）。relaybench 已完成 8/27，其余跑中（resume-aware：`scripts/eval/_phaseB_run.sh` 按 results.jsonl 断点续跑）。效率/成功率真值待跑完回填 Fig.2/4/6/7。
 
 ## 12. 未决 TODO
 

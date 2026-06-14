@@ -4,7 +4,7 @@
 
 > 一句自然语言 → LLM **自动合成**一条跨 App 的 plan → 校验 → 落盘 → 预览确认 → 真机执行。
 >
-> 与已有入口的关系：`run_plan.py` 现在是自然语言入口；指定 App 的直跑用 `python -m agents.native_runner`。
+> 与已有入口的关系：`run_plan.py` 现在是自然语言入口；指定 App 的直跑用 `python -m agents.runtime.native_runner`。
 
 ---
 
@@ -21,7 +21,7 @@
 ```
 一句话
   │
-  ├─(1) build_catalog()            全量 app + capability（agents/card_catalog.py）
+  ├─(1) build_catalog()            全量 app + capability（agents/routing/card_catalog.py）
   │
   ├─(2) 缓存查找                    manifests/_generated/ 里精确串匹配；--no-cache 跳过
   │        命中 ┐
@@ -44,8 +44,8 @@
 | 文件 | 角色 |
 | --- | --- |
 | [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI 入口：缓存 / 落盘 / 预览 / 确认 / 录屏 / 派发 |
-| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`：catalog → prompt → LLM → JSON → 路由 + 校验 + LLM repair（≤3 轮） |
-| [`agents/flow_runner.py`](../agents/flow_runner.py) | 执行器：跑每个 leg、bind 回复、处理 ask_user / extract |
+| [`agents/flow/flow_planner.py`](../agents/flow/flow_planner.py) | `FlowPlanner`：catalog → prompt → LLM → JSON → 路由 + 校验 + LLM repair（≤3 轮） |
+| [`agents/flow/flow_runner.py`](../agents/flow/flow_runner.py) | 执行器：跑每个 leg、bind 回复、处理 ask_user / extract |
 | [`manifests/_generated/`](../manifests/_generated/) | 生成物 + 缓存目录，`.gitignore` 把内容排除出版本库 |
 
 ---
@@ -232,7 +232,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | 文件 | 内容 |
 | --- | --- |
-| `agents/flow_planner.py` | `FlowPlanner`：catalog → system prompt → LLM → fenced JSON → 路由 + 校验（`_validate`）+ LLM repair（`_repair`，≤3 轮）。`PlanValidationError` 携带错误清单。 |
+| `agents/flow/flow_planner.py` | `FlowPlanner`：catalog → system prompt → LLM → fenced JSON → 路由 + 校验（`_validate`）+ LLM repair（`_repair`，≤3 轮）。`PlanValidationError` 携带错误清单。 |
 | `scripts/run_plan.py` | CLI 入口：精确串缓存 / 合成 / 落盘 / 预览 / 确认 / 录屏 / 派发 `FlowRunner`。flag：`--dry-run` `--yes` `--no-cache` `--record` `-- <透传>`。 |
 | `manifests/_generated/.gitignore` | 把生成的 plan / 缓存排除出版本库，只保留 `.gitignore` 自身。 |
 | `docs/cross_app_planner.zh.md` | 本文档。 |
@@ -241,8 +241,8 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 | 文件 | 改动 |
 | --- | --- |
-| `agents/flow_runner.py` | ① `# TODO(phase-B):` 缝注释（`stdin=DEVNULL` 处）。② `_traj_stem()`：traj 目录名时间在前、再接 plan 涉及的 app——`<ts>_plan_<app1>_<app2>…`——而非冗长的 NL-slug 文件名。 |
-| `agents/relay_agent.py` | handoff 分支加 `# TODO(phase-B):` 缝注释（不改逻辑）。 |
+| `agents/flow/flow_runner.py` | ① `# TODO(phase-B):` 缝注释（`stdin=DEVNULL` 处）。② `_traj_stem()`：traj 目录名时间在前、再接 plan 涉及的 app——`<ts>_plan_<app1>_<app2>…`——而非冗长的 NL-slug 文件名。 |
+| `agents/agent/relay_agent.py` | handoff 分支加 `# TODO(phase-B):` 缝注释（不改逻辑）。 |
 | `CLAUDE.md` | `跑测试` 加 run_plan 入口；新增"自动跨 App 规划"速览节并指向本文档；"三个→四个入口脚本"。 |
 | `README_zh.md` | scripts 目录清单加 run_plan；`自然语言入口` 后加"自动合成跨 App plan"小节。 |
 

@@ -272,7 +272,7 @@ A **conforming router** MUST:
 2. Honor `handoff_to_user_required`.
 3. Refuse to use cards marked stale unless the user explicitly opts in.
 
-**Enforcement layers.** Card rules 1–2 are machine-checked: structure by `spec/schema.json` (layer 1), cross-field consistency (filename ↔ `app_id`, `platforms` ↔ `verified_os`, `app_ids` ↔ `app_id`/`platforms`) by `scripts/validate_manifests.py` (layer 2), and `prompt_template` consistency plus capability-id uniqueness at catalog load time (layer 3). Card rules 3–4 and all router rules are **not machine-checkable** — they are enforced by card review (rule 4 needs a human judgment about irreversibility) and by router implementations respectively.
+**Enforcement layers.** Card rules 1–2 are machine-checked: structure by `spec/schema.json` (layer 1), cross-field consistency (filename ↔ `app_id`, `platforms` ↔ `verified_os`, `app_ids` ↔ `app_id`/`platforms`) by `scripts/validate/validate_manifests.py` (layer 2), and `prompt_template` consistency plus capability-id uniqueness at catalog load time (layer 3). Card rules 3–4 and all router rules are **not machine-checkable** — they are enforced by card review (rule 4 needs a human judgment about irreversibility) and by router implementations respectively.
 
 ## 13. Out of scope for v0.1
 
@@ -285,7 +285,7 @@ A **conforming router** MUST:
 
 SPEC §3 (File format) reserves the `x_` prefix for vendor/implementation
 extensions that conforming SDKs MAY ignore. The reference adapter
-(`agents/relay_agent.py`) + planner (`agents/action_planner.py`) consume
+(`agents/agent/relay_agent.py`) + planner (`agents/agent/action_planner.py`) consume
 the following extensions in the ten shipped reference cards. They are
 **not normative** — a v0.1-conforming router is free to ignore any of them
 — but card authors targeting our adapter rely on them. Promotion to first-

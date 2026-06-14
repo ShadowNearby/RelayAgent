@@ -24,9 +24,9 @@
 
 | Writer | Writes | How it picks the dir |
 | --- | --- | --- |
-| `agents/native_runner.py:TRAJ_DIR` | seeds empty `traj.json` + rotation logic | `RELAY_TRAJ_DIR` or default `traj_logs/user_task` |
-| `agents/relay_agent.py:_TRAJ_DIR` | `_append_llm_call` → `traj.json`; `_maybe_persist_reply` → `agent_reply.json` | same |
-| `agents/native_runtime.py:StepLogger` | `steps/` (per-step PNGs + `steps.json`) | `RELAY_STEP_LOG_DIR` (explicit override, highest) > `RELAY_TRAJ_DIR` > default |
+| `agents/runtime/native_runner.py:TRAJ_DIR` | seeds empty `traj.json` + rotation logic | `RELAY_TRAJ_DIR` or default `traj_logs/user_task` |
+| `agents/agent/relay_agent.py:_TRAJ_DIR` | `_append_llm_call` → `traj.json`; `_maybe_persist_reply` → `agent_reply.json` | same |
+| `agents/runtime/native_runtime.py:StepLogger` | `steps/` (per-step PNGs + `steps.json`) | `RELAY_STEP_LOG_DIR` (explicit override, highest) > `RELAY_TRAJ_DIR` > default |
 
 `wall_clock.json` / `summary.json` / an external `reply.json` keep their own
 explicit envs (`RELAY_WALL_OUT` / `RELAY_SUMMARY_OUT` / `RELAY_REPLY_OUT`) —
@@ -66,7 +66,7 @@ touches the global `traj_logs/user_task/`.
 The in-app agent's LLM calls are written by `relay_agent` to `traj.json`'s
 `["0"]["llm_calls"]`. But the **flow process** itself also calls the LLM:
 
-- **leg judge** (`agents/leg_judge.py`, with screenshots; may run multiple times
+- **leg judge** (`agents/flow/leg_judge.py`, with screenshots; may run multiple times
   on a `loading` retry)
 - **bind extract** (`flow_runner._extract`, text-only slot extraction)
 
@@ -98,7 +98,7 @@ in-app `["0"]["llm_calls"]`). `purpose` is stamped at the call site
   subprocess `command.json`/`stdout.log`/`stderr.log` plus a pointer to the flow
   root. The **mw side** (MobileWorld) writes its own `mw/user_task/` — that is
   the external runtime's convention and is not governed by `RELAY_TRAJ_DIR`.
-- **standalone `python -m agents.native_runner <pkg> "<goal>"`**: leaves the env
+- **standalone `python -m agents.runtime.native_runner <pkg> "<goal>"`**: leaves the env
   unset, lands in the default `traj_logs/user_task/`, with backup rotation.
 
 ## 7. Related env cheat-sheet

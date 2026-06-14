@@ -17,9 +17,9 @@
 
 | 写入方 | 写什么 | 怎么取目录 |
 | --- | --- | --- |
-| `agents/native_runner.py:TRAJ_DIR` | seed 空 `traj.json` + 轮转逻辑 | `RELAY_TRAJ_DIR` 或默认 `traj_logs/user_task` |
-| `agents/relay_agent.py:_TRAJ_DIR` | `_append_llm_call` 写 `traj.json`、`_maybe_persist_reply` 写 `agent_reply.json` | 同上 |
-| `agents/native_runtime.py:StepLogger` | `steps/`（逐步截图 + `steps.json`）| `RELAY_STEP_LOG_DIR`（显式覆写，最高优先）> `RELAY_TRAJ_DIR` > 默认 |
+| `agents/runtime/native_runner.py:TRAJ_DIR` | seed 空 `traj.json` + 轮转逻辑 | `RELAY_TRAJ_DIR` 或默认 `traj_logs/user_task` |
+| `agents/agent/relay_agent.py:_TRAJ_DIR` | `_append_llm_call` 写 `traj.json`、`_maybe_persist_reply` 写 `agent_reply.json` | 同上 |
+| `agents/runtime/native_runtime.py:StepLogger` | `steps/`（逐步截图 + `steps.json`）| `RELAY_STEP_LOG_DIR`（显式覆写，最高优先）> `RELAY_TRAJ_DIR` > 默认 |
 
 `wall_clock.json` / `summary.json` / 外部 `reply.json` 仍各走自己的显式 env（`RELAY_WALL_OUT` / `RELAY_SUMMARY_OUT` / `RELAY_REPLY_OUT`）——调用方一般把它们也指到同一 leg 目录。
 
@@ -51,7 +51,7 @@ traj_logs/plan_bard_20260608_231751/
 
 in-app agent 的 LLM call 由 `relay_agent` 落在 `traj.json` 的 `["0"]["llm_calls"]`。但 **flow 进程**自己还会调 LLM：
 
-- **leg judge**（`agents/leg_judge.py`，带截图，loading 重试可能多次）
+- **leg judge**（`agents/flow/leg_judge.py`，带截图，loading 重试可能多次）
 - **bind extract**（`flow_runner._extract`，纯文本抽槽）
 
 这些走的是 flow 进程里一个**裸 OpenAI client**，本来不经过 agent 那层 instrument、也不进任何 traj。现在 `FlowRunner` 用 `_RecordingLLM` 包这个 client：每次 `chat.completions.create` 记一条（`purpose` / `model` / 脱敏后的 `messages`（base64 截图换成 `<base64 image, N chars>`）/ `usage` token / `elapsed_s` / `response`），按 leg 切片 fold 进该 leg `traj.json` 的**顶层 `flow_llm_calls`**（与 in-app 的 `["0"]["llm_calls"]` 区分）。`purpose` 由调用点打标（`leg_judge` / `bind_extract`）。
@@ -62,7 +62,7 @@ in-app agent 的 LLM call 由 `relay_agent` 落在 `traj.json` 的 `["0"]["llm_c
 
 - **`scripts/run_plan.py` / `FlowRunner`**：NL flow 主入口，按上面的约定每条 leg 一个扁平目录。
 - **`scripts/run_benchmark_test.py`（relay 侧）**：A/B benchmark 的 RelayAgent 半边经 `run_plan.py` 跑 NL flow，于是 flow 自己按上面约定产出 `traj_logs/<ts>_plan_<apps>/NN_<id>/` 每条 leg 一个扁平目录。benchmark 从 stderr 的 `flow traj root:` 定位 flow 根，再 `_harvest_relay_legs` 逐 leg 读 `summary.json`（in-app token）+ `traj.json` 的 `flow_llm_calls`（flow 进程 token）+ `leg_verdict.json` + `agent_reply.json` 汇总。benchmark 的 `relay/` 目录本身只放子进程 `command.json`/`stdout.log`/`stderr.log` + 指向 flow 根的指针。**mw 侧**（MobileWorld）写自己的 `mw/user_task/`，那是外部 runtime 的约定，不归 `RELAY_TRAJ_DIR` 管。
-- **standalone `python -m agents.native_runner <pkg> "<goal>"`**：不设 env，落默认 `traj_logs/user_task/`，享受 backup 轮转。
+- **standalone `python -m agents.runtime.native_runner <pkg> "<goal>"`**：不设 env，落默认 `traj_logs/user_task/`，享受 backup 轮转。
 
 ## 7. 相关 env 速查
 

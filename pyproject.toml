@@ -8,7 +8,7 @@ authors = [
     { name = "Jingsheng Yan", email = "yan.jingsheng@outlook.com" },
 ]
 # 3.12 floor kept for the runtime (matches the resolved lock / .venv). The
-# real-device runner is now pure-Python over adb (agents/native_runtime.py), so
+# real-device runner is now pure-Python over adb (agents/runtime/native_runtime.py), so
 # there is no longer an external runtime forcing the version.
 requires-python = ">=3.12,<3.13"
 dependencies = [

@@ -15,8 +15,8 @@ agents/device/
 └── vendor_profiles.py Android 厂商表（+ RELAY_VENDOR_PROFILE overlay）
 ```
 
-`agents/_adb.py` 保留为模块级 shim，委托默认后端——旧 import 面
-（`from agents._adb import screencap`）继续可用，调用方逐步迁移。新代码
+`agents/runtime/_adb.py` 保留为模块级 shim，委托默认后端——旧 import 面
+（`from agents.runtime._adb import screencap`）继续可用，调用方逐步迁移。新代码
 直接持实例：
 
 ```python
@@ -77,7 +77,7 @@ iPhone。WDA 以 XCUITest 形态跑在手机上，后端连它的 HTTP 端点（
 无 `screenrecord` 等价的端上文件录屏。manifest 须按各 App 的 iOS 版重新
 编写（`app_ids.ios` + 可移植 selector——优先 `accessibility_id`/`text`
 而非 `resource_id`；声明 ios 的卡若 selector 只有 Android 专属字段，
-`scripts/validate_manifests.py` 会 WARN）。
+`scripts/validate/validate_manifests.py` 会 WARN）。
 
 ## 多设备
 

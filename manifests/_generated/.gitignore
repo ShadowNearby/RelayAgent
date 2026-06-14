@@ -1,4 +1,4 @@
-# Auto-synthesized cross-app plans (scripts/run_plan.py + agents/flow_planner.py).
+# Auto-synthesized cross-app plans (scripts/run_plan.py + agents/flow/flow_planner.py).
 # These are generated artifacts / a local cache, not source — keep them out of git.
 *
 !.gitignore

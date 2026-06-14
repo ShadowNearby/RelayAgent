@@ -4,7 +4,7 @@
 
 > One NL sentence → LLM **auto-synthesizes** a cross-app plan → validate → persist → preview & confirm → run on a real device.
 >
-> How it relates to the existing entries: `run_plan.py` is now the NL entry. Direct app-pinned runs use `python -m agents.native_runner`.
+> How it relates to the existing entries: `run_plan.py` is now the NL entry. Direct app-pinned runs use `python -m agents.runtime.native_runner`.
 
 ---
 
@@ -21,7 +21,7 @@ The former single-app NL router could only route a sentence to **one** app + cap
 ```
 one sentence
   │
-  ├─(1) build_catalog()            full app + capability list (agents/card_catalog.py)
+  ├─(1) build_catalog()            full app + capability list (agents/routing/card_catalog.py)
   │
   ├─(2) cache lookup               exact string match in manifests/_generated/; skipped by --no-cache
   │        hit ┐
@@ -44,8 +44,8 @@ Files involved:
 | File | Role |
 | --- | --- |
 | [`scripts/run_plan.py`](../scripts/run_plan.py) | CLI entry: cache / persist / preview / confirm / recording / dispatch |
-| [`agents/flow_planner.py`](../agents/flow_planner.py) | `FlowPlanner`: catalog → prompt → LLM → JSON → route + validate + LLM repair (≤3 rounds) |
-| [`agents/flow_runner.py`](../agents/flow_runner.py) | the executor: runs each leg, binds replies, handles ask_user / extract |
+| [`agents/flow/flow_planner.py`](../agents/flow/flow_planner.py) | `FlowPlanner`: catalog → prompt → LLM → JSON → route + validate + LLM repair (≤3 rounds) |
+| [`agents/flow/flow_runner.py`](../agents/flow/flow_runner.py) | the executor: runs each leg, binds replies, handles ask_user / extract |
 | [`manifests/_generated/`](../manifests/_generated/) | generated-artifact + cache dir; `.gitignore` keeps its contents out of version control |
 
 ---
@@ -232,7 +232,7 @@ This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 
 | File | Content |
 | --- | --- |
-| `agents/flow_planner.py` | `FlowPlanner`: catalog → system prompt → LLM → fenced JSON → route + validate (`_validate`) + LLM repair (`_repair`, ≤3 rounds). `PlanValidationError` carries the error list. |
+| `agents/flow/flow_planner.py` | `FlowPlanner`: catalog → system prompt → LLM → fenced JSON → route + validate (`_validate`) + LLM repair (`_repair`, ≤3 rounds). `PlanValidationError` carries the error list. |
 | `scripts/run_plan.py` | CLI entry: exact-string cache / synthesize / persist / preview / confirm / recording / dispatch to `FlowRunner`. Flags: `--dry-run` `--yes` `--no-cache` `--record` `-- <forward>`. |
 | `manifests/_generated/.gitignore` | keeps generated plans / cache out of version control, retaining only `.gitignore` itself. |
 | `docs/cross_app_planner.md` / `docs/cross_app_planner.zh.md` | this document (English / Chinese). |
@@ -241,8 +241,8 @@ This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 
 | File | Change |
 | --- | --- |
-| `agents/flow_runner.py` | ① `# TODO(phase-B):` seam comment (at `stdin=DEVNULL`). ② `_traj_stem()`: names the traj dir with the timestamp first, then the apps a plan touches — `<ts>_plan_<app1>_<app2>…` — instead of the verbose NL-slug filename. |
-| `agents/relay_agent.py` | `# TODO(phase-B):` seam comment on the handoff branch (no logic change). |
+| `agents/flow/flow_runner.py` | ① `# TODO(phase-B):` seam comment (at `stdin=DEVNULL`). ② `_traj_stem()`: names the traj dir with the timestamp first, then the apps a plan touches — `<ts>_plan_<app1>_<app2>…` — instead of the verbose NL-slug filename. |
+| `agents/agent/relay_agent.py` | `# TODO(phase-B):` seam comment on the handoff branch (no logic change). |
 | `CLAUDE.md` | added the run_plan entry under `跑测试`; added an "auto cross-app planning" overview section pointing here; "three → four entry scripts". |
 | `README.md` / `README_zh.md` | added run_plan to the scripts listing; added an "auto-synthesize a cross-app plan" subsection after the NL entry point. |
 

@@ -5,7 +5,7 @@
 > One NL sentence → an auto-synthesized multi-app plan → execution. This doc is the **architecture deep-dive** (synthesis / three-stage routing / validation / execution / leg judge / handoff / route solidification).
 > For the pipeline, CLI usage, caching, and a real-device worked example, see [`cross_app_planner.md`](cross_app_planner.md).
 >
-> Code: `agents/flow_planner.py` / `agents/flow_runner.py` / `agents/capability_matrix_router.py` / `agents/leg_judge.py` / `agents/route_overlay.py` / `scripts/run_plan.py`.
+> Code: `agents/flow/flow_planner.py` / `agents/flow/flow_runner.py` / `agents/routing/capability_matrix_router.py` / `agents/flow/leg_judge.py` / `agents/routing/route_overlay.py` / `scripts/run_plan.py`.
 
 ---
 
@@ -19,7 +19,7 @@ NL request
        ├─ validate + repair loop   local validation; on error, feed the errors back to an LLM repair round (≤3), re-route, re-validate
        └─ persist to manifests/_generated/*.yaml
   └─ FlowRunner.run()              execute steps in order
-       ├─ app_step    → spawn `python -m agents.native_runner` subprocess (one leg = one app + one capability)
+       ├─ app_step    → spawn `python -m agents.runtime.native_runner` subprocess (one leg = one app + one capability)
        ├─ ask_user    → collect human input in the terminal (renders a select_from pick list)
        └─ extract     → text LLM parses the previous leg's reply into structured JSON
        blackboard: {var}/{var.field} carries values between steps
@@ -112,7 +112,7 @@ Steps run in order; the blackboard `self.bb` starts empty and grows with each st
 
 **App step (`_run_app_step`):**
 
-- Each leg is a fresh `python -m agents.native_runner <app> <prompt>` subprocess.
+- Each leg is a fresh `python -m agents.runtime.native_runner <app> <prompt>` subprocess.
 - Subprocess env: `RELAY_FORCE_CAPABILITY`/`RELAY_INVOCATION_TEXT` (bypass router), `RELAY_SKIP_OPEN_APP=1`+`RELAY_AGENT_LAUNCH=1` (deferred-launch: cold-launch happens in the agent's first predict, so process/leg startup is excluded from the leg's wall-clock), `RELAY_TRAJ_DIR` (pin traj.json / steps/ / agent_reply.json straight into this leg's `NN_<id>/` dir — no global `user_task` scratch, no post-run copytree), `RELAY_REPLY_OUT` (reply JSON), `RELAY_SUMMARY_OUT` (summary), `RELAY_WALL_OUT` (the agent writes the framework-excluded `wall_clock.json`).
 - stdin is `DEVNULL`: a trailing ask_user handoff closes cleanly on EOF instead of blocking the flow.
 - **Per-leg traj preserved**: each flow run has its own traj root `traj_logs/<ts>_plan_<app1>_<app2>.../`, one `NN_<id>/` per leg. The subprocess writes trajectory artifacts directly into that leg dir via `RELAY_TRAJ_DIR`; the native runner skips its global backup rotation when pinned. See [`trajectory_logging.md`](trajectory_logging.md).
@@ -141,7 +141,7 @@ A **leg** is one native-runner sub-run pinned to one app + one capability. The h
 
 ## 9. Route solidification (route overlay, trace-guided)
 
-Turns the §7 leg verdict from "log only" into an input to the router: an `(intent → app/capability)` decision the judge repeatedly confirms `success` is **solidified into a table lookup** so the next time the same intent shows up the router returns it with zero LLM calls; one that keeps `failure`-ing is auto-invalidated and falls back to the three stages. Code in `agents/route_overlay.py`, store at `traj_logs/route_overlay.json` (a git-ignored **learned, non-authoritative** artifact; the matrix CSV stays the source of truth, and promoting high-confidence entries back into it is a separate human-reviewed step).
+Turns the §7 leg verdict from "log only" into an input to the router: an `(intent → app/capability)` decision the judge repeatedly confirms `success` is **solidified into a table lookup** so the next time the same intent shows up the router returns it with zero LLM calls; one that keeps `failure`-ing is auto-invalidated and falls back to the three stages. Code in `agents/routing/route_overlay.py`, store at `traj_logs/route_overlay.json` (a git-ignored **learned, non-authoritative** artifact; the matrix CSV stays the source of truth, and promoting high-confidence entries back into it is a separate human-reviewed step).
 
 **The loop:**
 
@@ -178,7 +178,7 @@ route(route_key, overlay):                            end of _judge_leg:
 | route solidification | the 3 three-stage LLM calls | `success ≥ 3` and `rate ≥ 0.8` and `consec_fail < 2` | `route solidified -> ... (0 LLM)` |
 | (baseline) device execution | — | always happens → feeds leg judge → overlay | leg judge + overlay recorded |
 
-**Promote (`scripts/promote_routes.py`, read-only)**: surfaces the high-confidence routes the trace has learned so a human can decide whether to fold them into the matrix — it **never writes the matrix** (the CSV is the hand-maintained source of truth). It scans the overlay at a *higher* bar (`RELAY_PROMOTE_MIN_HITS` default 5 / `RATE` default 0.9), lists each `(intent → app/cap)` and whether it is **already authorized** in the matrix (the learned preference agrees) or **not listed** (a candidate ✓ or a stale entry to ignore). `--csv` also emits review rows to hand-paste. Pure logic — no device/LLM/network.
+**Promote (`scripts/routes/promote_routes.py`, read-only)**: surfaces the high-confidence routes the trace has learned so a human can decide whether to fold them into the matrix — it **never writes the matrix** (the CSV is the hand-maintained source of truth). It scans the overlay at a *higher* bar (`RELAY_PROMOTE_MIN_HITS` default 5 / `RATE` default 0.9), lists each `(intent → app/cap)` and whether it is **already authorized** in the matrix (the learned preference agrees) or **not listed** (a candidate ✓ or a stale entry to ignore). `--csv` also emits review rows to hand-paste. Pure logic — no device/LLM/network.
 
 **Switches / thresholds**: `RELAY_ROUTE_OVERLAY` (default 1) / `RELAY_ROUTE_OVERLAY_PATH` / `RELAY_ROUTE_KEY_MODE` (default `b`) / `RELAY_ROUTE_SOLIDIFY_HITS` (3) / `RELAY_ROUTE_SOLIDIFY_RATE` (0.8) / `RELAY_ROUTE_MAX_FAILS` (2) / `RELAY_PROMOTE_MIN_HITS` (5) / `RELAY_PROMOTE_MIN_RATE` (0.9).
 

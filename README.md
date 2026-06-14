@@ -46,7 +46,7 @@ A neighbor is emerging fast in 2026: vendors wiring their *own* assistant into t
 ## How it works — three pieces
 
 1. **Discovery — the card.** A per-app YAML manifest (`manifests/*.yaml`, JSON-Schema-validated by `spec/schema.json`) describing the launcher entry path into the embedded agent, its capabilities, example prompts, latency hints, and handoff policy. *(Spec: §4.)*
-2. **Access — the relay adapter.** `agents/relay_agent.py` materializes a card into deterministic device actions over direct adb: cold-launch → walk the entry path → type the prompt → wait for the reply → scrape it → hand off. Accessibility-tree-first, provider-agnostic across VLMs. *(§5.)*
+2. **Access — the relay adapter.** `agents/agent/relay_agent.py` materializes a card into deterministic device actions over direct adb: cold-launch → walk the entry path → type the prompt → wait for the reply → scrape it → hand off. Accessibility-tree-first, provider-agnostic across VLMs. *(§5.)*
 3. **Safety — the handoff contract.** A capability marked `handoff_to_user_required: true` *must* emit an `ask_user` and return control **before any irreversible action** — payment, ride confirmation, order submission. The in-app agent does the reversible preparation; the human authorizes the irreversible step. *(§4.1.)*
 
 ### A card in use
@@ -118,10 +118,10 @@ RelayAgent/
 
 ## Run it (real-device, multi-VLM)
 
-`agents/relay_agent.py` drives RelayAgent over direct adb in an in-process
+`agents/agent/relay_agent.py` drives RelayAgent over direct adb in an in-process
 `obs → predict → execute` loop (no server). The VLM is provider-agnostic (Claude, Gemini, Qwen-VL, Kimi, …); the card supplies the deterministic entry path and handoff policy.
 
-Requires **Python 3.12** and a Linux/WSL host with adb + a USB-debugging phone (or an emulator — see [emulator testing](docs/emulator_testing.md)) with `com.android.adbkeyboard/.AdbIME` installed. Full device prep + per-benchmark app requirements: [device setup](docs/device_setup.md); pre-flight check: `uv run python scripts/check_device_env.py`.
+Requires **Python 3.12** and a Linux/WSL host with adb + a USB-debugging phone (or an emulator — see [emulator testing](docs/emulator_testing.md)) with `com.android.adbkeyboard/.AdbIME` installed. Full device prep + per-benchmark app requirements: [device setup](docs/device_setup.md); pre-flight check: `uv run python scripts/validate/check_device_env.py`.
 
 ```bash
 # 1. set up the venv (run the sources directly via `uv run`, don't install the project)
@@ -129,10 +129,10 @@ uv venv --python 3.12
 uv sync --no-install-project
 
 # 2. fill in .env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL), then drive a goal
-uv run python -m agents.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python -m agents.runtime.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-`agents.native_runner` loads `.env`, activates the AdbKeyboard IME, cold-launches the target app via `agents/_adb.py` (force-stop + monkey LAUNCHER), sets `RELAY_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, runs the in-process loop over direct adb, and forwards any extra flags (e.g. `--max-step 40`) straight to the agent. Override the LLM config with `--model` / `--base-url` / `--api-key` if not using `.env`.
+`agents.runtime.native_runner` loads `.env`, activates the AdbKeyboard IME, cold-launches the target app via `agents/runtime/_adb.py` (force-stop + monkey LAUNCHER), sets `RELAY_SKIP_OPEN_APP=1` so the planner skips its own `open_app` step, runs the in-process loop over direct adb, and forwards any extra flags (e.g. `--max-step 40`) straight to the agent. Override the LLM config with `--model` / `--base-url` / `--api-key` if not using `.env`.
 
 `--model` is provider-agnostic — point it at any OpenAI-compatible VLM (`qwen/qwen3-vl-235b-a22b`, `anthropic/claude-sonnet-4-5`, `google/gemini-3`, …). Per task, the VLM is used sparingly (this is the source of the §8 cost numbers):
 
@@ -174,7 +174,7 @@ uv sync --no-install-project
 uv run python -m unittest discover -s tests -v       # device-less; planner/runner unit tests, no adb needed
 ```
 
-Real-device runs (not unit tests) go through the entry points directly — see [Run it](#run-it-real-device-multi-vlm): `python -m agents.native_runner <pkg> "<goal>"` for a single app, `scripts/run_plan.py --yes` for the NL flow, `scripts/run_benchmark_test.py` for the A/B benchmark. They require a connected Android device with the target apps installed and `com.android.adbkeyboard/.AdbIME` available (the runner enables/restores the IME itself).
+Real-device runs (not unit tests) go through the entry points directly — see [Run it](#run-it-real-device-multi-vlm): `python -m agents.runtime.native_runner <pkg> "<goal>"` for a single app, `scripts/run_plan.py --yes` for the NL flow, `scripts/run_benchmark_test.py` for the A/B benchmark. They require a connected Android device with the target apps installed and `com.android.adbkeyboard/.AdbIME` available (the runner enables/restores the IME itself).
 
 Copy `.env.example` to `.env` and fill in your values (LLM endpoint required). `test-results/` and `traj_logs/` are gitignored — do not commit trajectories containing user data.
 

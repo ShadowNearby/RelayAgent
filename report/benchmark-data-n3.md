@@ -2,7 +2,7 @@
 
 > 每档 3 次取**中位**，全程 `RELAY_TIMING=1` 记 wall-clock。跳过 MW manual-UI（无助手）。
 > 原始 21 个 run 目录在 `test-results/ab/n3/`，驱动脚本 `test-results/ab/run_n3.sh`，
-> 单 run 聚合 `scripts/aggregate_metrics.py`。
+> 单 run 聚合 `scripts/eval/aggregate_metrics.py`。
 > **本轮是在 perf-trim（每步 settle sleep 削减）+ 三个 MobileWorld fork 健壮性补丁
 > （`MW_WAIT_SECONDS` / `MW_ADB_TIMEOUT` / 自起 server 输出写文件修 PIPE 死锁，
 > 见 CLAUDE.md）合入 main 后重跑**。21 个 run 全部端到端完成、零卡死（健壮性补丁验证）。
@@ -128,7 +128,7 @@ token gap 19.4×**（~14% 压缩，源于 1:8 比 + RA opt completion 占比略�
 ## 附：RELAY_NO_MANIFEST 消融（manifest-isolation，2026-06-03 补）
 
 **目的**：拆开 Q2 的 19×——到底是「委派(delegation)」还是「手写 manifest」的功劳。
-新建 adapter 模式 `RELAY_NO_MANIFEST=1`（`agents/relay_agent.py`：**不加载任何 card**，
+新建 adapter 模式 `RELAY_NO_MANIFEST=1`（`agents/agent/relay_agent.py`：**不加载任何 card**，
 驱动同一委派骨架——开新对话→把整条用户请求一次性打进助手→wait_for_reply→accept-defaults
 推进→不可逆 CTA 前 handoff——但入口/输入框/发送/推进/CTA stop **全部运行时 VLM grounding**，
 唯一用到的 app 事实是包名，跟 general_e2e 一样）。T1 order_food，n=3，`test-results/ab/nm/`。
