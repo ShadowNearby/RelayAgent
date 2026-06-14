@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import unittest
 
-from agents.action_model import (
+from agents.agent.action_model import (
     ANSWER,
     ASK_USER,
     CLICK,

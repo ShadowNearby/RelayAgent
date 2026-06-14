@@ -5,7 +5,7 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from agents.flow_planner import (
+from agents.flow.flow_planner import (
     MW_STEP_TYPE,
     FlowPlanner,
     PlanValidationError,
@@ -167,7 +167,7 @@ class FlowPlannerFoundationFallbackTests(unittest.TestCase):
         )
 
     def test_route_step_marks_foundation_not_applicable_as_gap(self) -> None:
-        from agents.capability_matrix_router import FoundationNotApplicable
+        from agents.routing.capability_matrix_router import FoundationNotApplicable
 
         step = {
             "id": "rename",
@@ -176,7 +176,7 @@ class FlowPlannerFoundationFallbackTests(unittest.TestCase):
         errors: list[str] = []
         gaps: list[str] = []
         with patch(
-            "agents.flow_planner.route_app_capability",
+            "agents.flow.flow_planner.route_app_capability",
             side_effect=FoundationNotApplicable("file rename is a device action"),
         ):
             self.planner._route_one_step(step, 0, "rename files", set(), errors, gaps)
@@ -229,7 +229,7 @@ class FlowPlannerRepairTests(unittest.TestCase):
             ]
         }
         responses = [_llm_response(bad), _llm_response(good)]
-        with patch("agents.flow_planner.create_with_retry", side_effect=responses):
+        with patch("agents.flow.flow_planner.create_with_retry", side_effect=responses):
             planner = FlowPlanner(_minimal_catalog(), MagicMock(), "test-model")
             result = planner.plan("test request")
         self.assertEqual(planner._validate(result), [])
@@ -244,7 +244,7 @@ class FlowPlannerRepairTests(unittest.TestCase):
         bad = _unrepairable_plan()
         # planner.plan: 1 synth + _REPAIR_ROUNDS repairs, all returning `bad`.
         responses = [_llm_response(bad)] * 8
-        with patch("agents.flow_planner.create_with_retry", side_effect=responses):
+        with patch("agents.flow.flow_planner.create_with_retry", side_effect=responses):
             planner = FlowPlanner(
                 _minimal_catalog(), MagicMock(), "test-model", mw_fallback=True
             )
@@ -255,7 +255,7 @@ class FlowPlannerRepairTests(unittest.TestCase):
     def test_unrepairable_plan_without_mw_fallback_still_raises(self) -> None:
         bad = _unrepairable_plan()
         responses = [_llm_response(bad)] * 8
-        with patch("agents.flow_planner.create_with_retry", side_effect=responses):
+        with patch("agents.flow.flow_planner.create_with_retry", side_effect=responses):
             planner = FlowPlanner(
                 _minimal_catalog(), MagicMock(), "test-model", mw_fallback=False
             )
@@ -265,7 +265,7 @@ class FlowPlannerRepairTests(unittest.TestCase):
     def test_unsatisfiable_with_mw_fallback_becomes_whole_request_mw_leg(self) -> None:
         payload = {"unsatisfiable": True, "reason": "needs camera"}
         with patch(
-            "agents.flow_planner.create_with_retry",
+            "agents.flow.flow_planner.create_with_retry",
             return_value=_llm_response(payload),
         ):
             planner = FlowPlanner(

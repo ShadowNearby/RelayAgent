@@ -1,4 +1,4 @@
-"""Tests for agents.llm_client.HttpChatClient — the OpenAI-SDK-free shim.
+"""Tests for agents.llm.llm_client.HttpChatClient — the OpenAI-SDK-free shim.
 
 Runs a local http.server stub and checks the exact surface our callers
 consume: request shape (auth header, extra_body merge), response attribute
@@ -14,7 +14,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from agents.llm_client import HttpChatClient, LLMHTTPError, make_llm_client
+from agents.llm.llm_client import HttpChatClient, LLMHTTPError, make_llm_client
 
 _OK_RESPONSE = {
     "id": "chatcmpl-1",
@@ -178,7 +178,7 @@ class HttpChatClientTests(unittest.TestCase):
 
     # -- integration with flow_runner's recorder -------------------------------
     def test_recording_llm_proxy_compat(self):
-        from agents.flow_runner import _RecordingLLM
+        from agents.flow.flow_runner import _RecordingLLM
 
         rec = _RecordingLLM(self.client, retry=False)
         resp = rec.chat.completions.create(
