@@ -11,7 +11,7 @@ import json
 
 from java import jclass
 
-from agents.interaction import InteractionProvider
+from agents.runtime.interaction import InteractionProvider
 
 Bridge = jclass("com.relayagent.app.DeviceBridge")
 

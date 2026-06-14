@@ -1,25 +1,19 @@
 package com.relayagent.app
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.provider.Settings
 import android.text.method.ScrollingMovementMethod
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import org.json.JSONObject
+import androidx.core.widget.addTextChangedListener
+import com.relayagent.app.databinding.ActivityMainBinding
 
 /**
- * Minimal frontend: goal box + Run + onboarding state + a log pane.
- * Programmatic UI on purpose — the product surface for now is the runtime,
- * not the chrome; a designed UI lands in Phase 4.
+ * Designed frontend: goal box + Run + onboarding status + a live log pane,
+ * plus entries into the bundled task examples and on-device run logs.
  *
  * Run flow: ensure a11y service enabled -> request MediaProjection consent
  * (per session, Android 14) -> start capture service -> overlay chip ->
@@ -27,9 +21,7 @@ import org.json.JSONObject
  */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var goalInput: EditText
-    private lateinit var statusView: TextView
-    private lateinit var logView: TextView
+    private lateinit var ui: ActivityMainBinding
     private var pendingGoal: String? = null
 
     private val projectionConsent =
@@ -37,84 +29,105 @@ class MainActivity : AppCompatActivity() {
             val goal = pendingGoal ?: return@registerForActivityResult
             pendingGoal = null
             if (result.resultCode != Activity.RESULT_OK || result.data == null) {
-                appendLog("屏幕采集授权被拒绝，无法运行。")
+                RunLog.append("屏幕采集授权被拒绝，无法运行。")
                 return@registerForActivityResult
             }
             ScreenCaptureService.start(this, result.resultCode, result.data!!)
             launchFlow(goal)
         }
 
+    private val pickExample =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val instruction = result.data?.getStringExtra(ExamplesActivity.EXTRA_INSTRUCTION)
+            if (result.resultCode == Activity.RESULT_OK && !instruction.isNullOrBlank()) {
+                ui.goalInput.setText(instruction)
+                ui.goalInput.setSelection(instruction.length)
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ui = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(ui.root)
+        setSupportActionBar(ui.toolbar)
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 32, 32, 32)
+        ui.logView.movementMethod = ScrollingMovementMethod()
+        ui.logView.text = RunLog.snapshot()
+
+        ui.goalInput.addTextChangedListener { ui.goalLayout.error = null }
+        ui.runBtn.setOnClickListener { onRunClicked() }
+        ui.stopBtn.setOnClickListener {
+            DeviceBridge.requestStop()
+            RunLog.append("已请求停止。")
         }
-        statusView = TextView(this)
-        goalInput = EditText(this).apply {
-            hint = "用一句话描述任务，例如：帮我找一台适合学生的平板电脑，预算2000以内"
-            minLines = 2
+        ui.examplesBtn.setOnClickListener {
+            pickExample.launch(Intent(this, ExamplesActivity::class.java))
         }
-        val runBtn = Button(this).apply {
-            text = "运行"
-            setOnClickListener { onRunClicked() }
+        ui.logsBtn.setOnClickListener {
+            startActivity(Intent(this, LogActivity::class.java))
         }
-        val stopBtn = Button(this).apply {
-            text = "停止"
-            setOnClickListener { DeviceBridge.requestStop(); appendLog("已请求停止。") }
-        }
-        val settingsBtn = Button(this).apply {
-            text = "设置（LLM 网关）"
-            setOnClickListener {
-                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+        ui.toolbar.inflateMenu(R.menu.main)
+        ui.toolbar.setOnMenuItemClickListener {
+            when (it.itemId) {
+                R.id.action_settings -> {
+                    startActivity(Intent(this, SettingsActivity::class.java)); true
+                }
+                R.id.action_open_a11y -> {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); true
+                }
+                else -> false
             }
         }
-        val a11yBtn = Button(this).apply {
-            text = "打开无障碍设置"
-            setOnClickListener {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        }
-        logView = TextView(this).apply {
-            movementMethod = ScrollingMovementMethod()
-            textSize = 12f
-        }
-
-        root.addView(statusView)
-        root.addView(goalInput)
-        root.addView(runBtn)
-        root.addView(stopBtn)
-        root.addView(settingsBtn)
-        root.addView(a11yBtn)
-        root.addView(ScrollView(this).apply { addView(logView) })
-        setContentView(root)
     }
 
     override fun onResume() {
         super.onResume()
         refreshStatus()
+        // Live log: append new lines and keep scrolled to the bottom.
+        ui.logView.text = RunLog.snapshot()
+        scrollLogToBottom()
+        RunLog.listener = { line ->
+            if (line == null) ui.logView.text = RunLog.snapshot()
+            else ui.logView.append("\n$line")
+            scrollLogToBottom()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        RunLog.listener = null
+    }
+
+    private fun scrollLogToBottom() {
+        ui.logView.post {
+            val lines = ui.logView.layout?.lineCount ?: return@post
+            val y = ui.logView.layout.getLineTop(lines) - ui.logView.height
+            if (y > 0) ui.logView.scrollTo(0, y) else ui.logView.scrollTo(0, 0)
+        }
     }
 
     private fun refreshStatus() {
         val a11yOn = RelayAccessibilityService.instance != null
         val cfg = SettingsActivity.loadConfig(this)
         val gatewaySet = cfg.optString("LLM_BASE_URL").isNotEmpty()
-        statusView.text = buildString {
-            append(if (a11yOn) "✅ 无障碍服务已连接" else "❌ 无障碍服务未开启（必须）")
-            append('\n')
-            append(if (gatewaySet) "✅ LLM 网关已配置" else "❌ LLM 网关未配置（设置里填）")
-        }
+        ui.statusA11y.text =
+            (if (a11yOn) "✅ " else "❌ ") +
+                getString(if (a11yOn) R.string.status_a11y_on else R.string.status_a11y_off)
+        ui.statusGateway.text =
+            (if (gatewaySet) "✅ " else "❌ ") +
+                getString(if (gatewaySet) R.string.status_gateway_on else R.string.status_gateway_off)
     }
 
     private fun onRunClicked() {
-        val goal = goalInput.text.toString().trim()
+        val goal = ui.goalInput.text?.toString()?.trim().orEmpty()
         if (goal.isEmpty()) {
-            appendLog("请先输入任务。")
+            ui.goalLayout.error = "请先输入任务"
             return
         }
+        ui.goalLayout.error = null
         if (RelayAccessibilityService.instance == null) {
-            appendLog("请先在系统设置里开启 RelayAgent 的无障碍服务。")
+            RunLog.append("请先在系统设置里开启 RelayAgent 的无障碍服务。")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
         // Per-session projection consent (Android 14 requirement).
@@ -124,18 +137,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchFlow(goal: String) {
-        appendLog("▶ $goal")
+        RunLog.append("▶ $goal")
         OverlayController.show()
         PythonRuntime.runFlow(this, goal, SettingsActivity.loadConfig(this)) { result ->
             runOnUiThread {
-                appendLog("结果: $result")
+                RunLog.append("结果: $result")
                 OverlayController.hide()
                 ScreenCaptureService.stop(this)
             }
         }
     }
 
-    private fun appendLog(line: String) {
-        logView.append(line + "\n")
-    }
 }

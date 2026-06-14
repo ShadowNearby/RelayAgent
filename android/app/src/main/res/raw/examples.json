@@ -1,0 +1,457 @@
+{
+  "version": 1,
+  "generated": "2026-06-14",
+  "count": 50,
+  "examples": [
+    {
+      "id": "rb-sa-tongyi-llm-01",
+      "instruction": "用通义千问通俗解释一下什么是量子纠缠，200字左右",
+      "app": "通义千问",
+      "category": "info_qa",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-tongyi-shop-01",
+      "instruction": "用通义千问帮我找三台适合学生用的平板电脑，预算每台2000元以内，比较性能和续航",
+      "app": "通义千问",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-amap-poi-01",
+      "instruction": "用高德地图找人民广场附近3家适合安静办公的咖啡店，列出店名和地址",
+      "app": "高德地图",
+      "category": "info_qa",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-amap-route-01",
+      "instruction": "用高德地图查从人民广场到虹桥火车站的驾车路线，估算距离和大概时间",
+      "app": "高德地图",
+      "category": "navigation",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-ctrip-flight-01",
+      "instruction": "用携程旅行查下周一上海虹桥飞北京首都的下午出发航班，按价格从低到高排",
+      "app": "携程旅行",
+      "category": "transaction",
+      "difficulty": "hard",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-ctrip-trip-01",
+      "instruction": "用携程旅行规划一个成都3日游行程，包含景点、餐饮和住宿区域建议",
+      "app": "携程旅行",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-gemini-llm-01",
+      "instruction": "Use Gemini to explain the difference between RAG and fine-tuning in three short paragraphs.",
+      "app": "Gemini",
+      "category": "info_qa",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-gemini-route-01",
+      "instruction": "Use Gemini to estimate driving distance and time from Shanghai Hongqiao Railway Station to the Bund.",
+      "app": "Gemini",
+      "category": "navigation",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-wechat-search-01",
+      "instruction": "用微信搜索上海有什么值得一去的小众咖啡馆，推荐5家",
+      "app": "微信",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-wechat-poi-01",
+      "instruction": "用微信查找徐家汇地铁站14号口附近24小时便利店，列出2家",
+      "app": "微信",
+      "category": "info_qa",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-xhs-search-01",
+      "instruction": "用小红书搜索上海适合周末逛的小众书店，列出3家并简述特色",
+      "app": "小红书",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-wps-slides-01",
+      "instruction": "用 WPS 做一份5页关于「端侧AI助手的机会与风险」的 PPT 大纲",
+      "app": "WPS",
+      "category": "content_gen",
+      "difficulty": "hard",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-booking-hotel-01",
+      "instruction": "Use Booking.com to find hotels near the Louvre in Paris for next weekend under €150 per night.",
+      "app": "Booking.com",
+      "category": "transaction",
+      "difficulty": "hard",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-copilot-llm-01",
+      "instruction": "Use Copilot to summarize three pros and three cons of standing desks for home offices.",
+      "app": "Copilot",
+      "category": "info_qa",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-sa-reddit-search-01",
+      "instruction": "Use Reddit to find beginner tips for sourdough baking from r/Breadit and list the top three themes.",
+      "app": "Reddit",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-tongyi-reddit-01",
+      "instruction": "先用通义千问总结2026年选购学生平板要看哪五个参数；再用 Reddit 搜 r/android 里同等预算下的推荐讨论，归纳三点",
+      "app": "跨 App",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-amap-copilot-01",
+      "instruction": "First use Copilot to list three safety tips for cycling in urban China. Then use 高德地图 to estimate cycling distance and time from 西溪国家湿地公园周家村入口 to 阿里巴巴西溪园区C区.",
+      "app": "跨 App",
+      "category": "navigation",
+      "difficulty": "medium",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-ctrip-booking-01",
+      "instruction": "先用携程旅行查下周二上海浦东飞巴黎戴高乐的直飞航班参考价；再用 Booking.com 查戴高乐机场附近一晚住宿，预算每晚120欧元以内",
+      "app": "跨 App",
+      "category": "transaction",
+      "difficulty": "hard",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-gemini-wps-01",
+      "instruction": "First use Gemini to outline five slides on edge-AI privacy risks. Then use WPS 按该提纲生成一份5页 PPT 大纲。",
+      "app": "跨 App",
+      "category": "content_gen",
+      "difficulty": "hard",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-wechat-xhs-01",
+      "instruction": "先用小红书搜上海静安寺附近适合独自看书的咖啡馆5家；再用微信搜索同区域哪家有近期团购或优惠",
+      "app": "跨 App",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-tongyi-copilot-01",
+      "instruction": "First use Copilot to compare mechanical vs membrane keyboards for typing comfort. Then use 通义千问找三款200元以内的有线机械键盘并比较轴体。",
+      "app": "跨 App",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-reddit-booking-01",
+      "instruction": "First use Reddit to find which Tokyo neighborhoods first-time visitors recommend for hotels. Then use Booking.com to list three hotels in Shinjuku under $120 per night next month.",
+      "app": "跨 App",
+      "category": "transaction",
+      "difficulty": "hard",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-amap-wps-01",
+      "instruction": "先用高德地图找西湖周边适合拍照的3个景点及地址；再用 WPS 做一份「西湖摄影打卡点」5页 PPT 大纲",
+      "app": "跨 App",
+      "category": "content_gen",
+      "difficulty": "hard",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-ctrip-xhs-01",
+      "instruction": "先用携程旅行规划成都3日游行程含景点和住宿区域；再用小红书搜宽窄巷子必吃小吃攻略",
+      "app": "跨 App",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-gemini-wechat-01",
+      "instruction": "First use Gemini to summarize today's top three AI industry headlines in English. Then use 微信搜索相关中文解读或公众号文章各找一篇。",
+      "app": "跨 App",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-tongyi-booking-01",
+      "instruction": "先用 Booking.com 查苏黎世湖畔下周五入住一晚的酒店，预算每晚200瑞士法郎以内；再用通义千问查上海到苏黎世下周直飞航班大致价格",
+      "app": "跨 App",
+      "category": "transaction",
+      "difficulty": "hard",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-copilot-wps-01",
+      "instruction": "First use Copilot to draft six bullet points for a Q1 sales review deck. Then use WPS 生成一份对应主题的演示文稿大纲。",
+      "app": "跨 App",
+      "category": "content_gen",
+      "difficulty": "hard",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-reddit-xhs-01",
+      "instruction": "先用小红书搜京都岚山赏枫拍照机位推荐3处；再用 Reddit search Kyoto autumn photo spots 补充英文社区里的机位建议",
+      "app": "跨 App",
+      "category": "info_qa",
+      "difficulty": "medium",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-amap-wechat-01",
+      "instruction": "先用高德地图找阿里巴巴西溪园区C区1公里内的药店，列出2家；再用微信搜索附近24小时药店哪家还在营业",
+      "app": "跨 App",
+      "category": "info_qa",
+      "difficulty": "easy",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "rb-x-ctrip-gemini-01",
+      "instruction": "先用携程旅行查后天下午上海虹桥飞成都双流的经济舱航班；再用 Gemini 估算成都双流机场到春熙路酒店的驾车时间",
+      "app": "跨 App",
+      "category": "transaction",
+      "difficulty": "hard",
+      "type": "cross_app",
+      "source": "RelayBench"
+    },
+    {
+      "id": "ad-5",
+      "instruction": "在B站播放罗翔的刑法课视频。",
+      "app": "B站",
+      "category": "内容消费",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-1",
+      "instruction": "在铁路12306 App里买一张本周五晚上从广州南到长沙南的二等座高铁票。",
+      "app": "铁路12306",
+      "category": "出行交通",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-45",
+      "instruction": "帮我看看这个周末去苏州有什么不错的民宿推荐吗？最好是园林风格的。",
+      "app": "携程旅行",
+      "category": "本地服务",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-26",
+      "instruction": "发一条朋友圈,就说“今天好开心啊”",
+      "app": "微信",
+      "category": "社交通讯",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-14",
+      "instruction": "打开支付宝,看看我的蚂蚁森林能量有多少克",
+      "app": "支付宝",
+      "category": "购物消费",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-7",
+      "instruction": "在优酷上播放电视剧《甄嬛传》第15集。",
+      "app": "优酷",
+      "category": "内容消费",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-2",
+      "instruction": "看看今天下午去天津的火车,要快一点的。",
+      "app": "铁路12306",
+      "category": "出行交通",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-47",
+      "instruction": "帮我找下周末去杭州的民宿,要离西湖近一点的,在美团上找。",
+      "app": "美团",
+      "category": "本地服务",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-53",
+      "instruction": "发一条朋友圈,内容是'今天天气真好',并定位到我当前的位置。",
+      "app": "微信",
+      "category": "社交通讯",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-15",
+      "instruction": "在京东金融里查看一下我的白条总额度是多少",
+      "app": "京东金融",
+      "category": "购物消费",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-8",
+      "instruction": "打开喜马拉雅,播放郭德纲的相声《济公传》。",
+      "app": "喜马拉雅",
+      "category": "内容消费",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-3",
+      "instruction": "用高德地图打一辆出租车,从环中线大学城地铁站C口去南山区的万象天地。",
+      "app": "高德地图",
+      "category": "出行交通",
+      "difficulty": "medium",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-62",
+      "instruction": "打开大众点评,预定一个明晚7点半在海底捞(中骏世界城店)的四人位。",
+      "app": "大众点评",
+      "category": "本地服务",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-55",
+      "instruction": "帮我发个微博,就说今天很开心,看看有什么好玩的。",
+      "app": "微博",
+      "category": "社交通讯",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-16",
+      "instruction": "打开手机淘宝,搜索所有正在进行百亿补贴的iPhone 15 Pro,然后按价格从低到高排序",
+      "app": "淘宝",
+      "category": "购物消费",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-9",
+      "instruction": "在芒果TV搜索并播放《你好,星期六》的最新一期。",
+      "app": "芒果TV",
+      "category": "内容消费",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-4",
+      "instruction": "去携程上预订两张下周六上海迪士尼乐园的成人一日票。",
+      "app": "携程",
+      "category": "出行交通",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-76",
+      "instruction": "在今日头条里搜索一下今天的天气预报。",
+      "app": "今日头条",
+      "category": "本地服务",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-75",
+      "instruction": "在微博搜索用户“央视新闻”,进入他的主页,查看置顶的那条微博。",
+      "app": "微博",
+      "category": "社交通讯",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    },
+    {
+      "id": "ad-17",
+      "instruction": "在拼多多帮我搜索男士的短袖T恤。",
+      "app": "拼多多",
+      "category": "购物消费",
+      "difficulty": "easy",
+      "type": "single_app",
+      "source": "AndroidDaily"
+    }
+  ]
+}

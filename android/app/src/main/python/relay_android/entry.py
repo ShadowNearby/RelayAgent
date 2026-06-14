@@ -2,7 +2,7 @@
 
 Both install the Android device backend + overlay interaction, point every
 output path at the app's filesDir, then run the SAME pipeline as the host
-(`agents.native_runner.run_leg` / `agents.nl_flow`). Results return to
+(`agents.runtime.native_runner.run_leg` / `agents.flow.nl_flow`). Results return to
 Kotlin as a JSON string.
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ def _install_env(cfg: dict) -> Path:
 
 
 def _bootstrap(cfg: dict) -> Path:
-    from agents.interaction import set_interaction
+    from agents.runtime.interaction import set_interaction
 
     from relay_android.backend import install as install_backend
     from relay_android.interaction import OverlayInteraction
@@ -54,13 +54,29 @@ def _bootstrap(cfg: dict) -> Path:
     return run_root
 
 
+def _write_meta(root, **fields) -> None:
+    """Persist the human request + metadata at a run root so the log viewer
+    can show what each run was (the dir name only carries apps, not the goal).
+    Best-effort: never break a run over a failed write."""
+    try:
+        root = Path(str(root))
+        root.mkdir(parents=True, exist_ok=True)
+        meta = {"created_at": datetime.now().isoformat(timespec="seconds"), **fields}
+        (root / "meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        logger.warning("failed to write meta.json", exc_info=True)
+
+
 def run_single(pkg: str, goal: str, config_json: str) -> str:
-    """On-device `python -m agents.native_runner <pkg> <goal>`."""
+    """On-device `python -m agents.runtime.native_runner <pkg> <goal>`."""
     cfg = json.loads(config_json or "{}")
     run_root = _bootstrap(cfg)
     os.environ["RELAY_TRAJ_DIR"] = str(run_root / "single")
+    _write_meta(run_root, request=goal, kind="single", app=pkg)
     try:
-        from agents.native_runner import run_leg
+        from agents.runtime.native_runner import run_leg
 
         summary = run_leg(pkg, goal, max_step=int(cfg.get("max_step", -1)))
         return json.dumps({"ok": True, "summary": summary}, ensure_ascii=False)
@@ -74,14 +90,14 @@ def run_flow(nl: str, config_json: str) -> str:
     cfg = json.loads(config_json or "{}")
     _bootstrap(cfg)
     # Imported before the try: the except clauses below reference these names.
-    from agents import nl_flow
+    from agents.flow import nl_flow
 
     try:
-        from agents.capability_matrix_router import load_matrix
-        from agents.card_catalog import build_catalog
-        from agents.flow_planner import FlowPlanner
-        from agents.flow_runner import InProcessLegExecutor, _RecordingLLM
-        from agents.llm_client import make_llm_client
+        from agents.routing.capability_matrix_router import load_matrix
+        from agents.routing.card_catalog import build_catalog
+        from agents.flow.flow_planner import FlowPlanner
+        from agents.flow.flow_runner import InProcessLegExecutor, _RecordingLLM
+        from agents.llm.llm_client import make_llm_client
 
         files = _files_dir()
         relay = files / "relay"
@@ -121,6 +137,7 @@ def run_flow(nl: str, config_json: str) -> str:
             leg_executor=InProcessLegExecutor(),
             prekill=False,
         )
+        _write_meta(outcome.flow_traj_root, request=nl, kind="flow")
         return json.dumps(
             {
                 "ok": True,
@@ -131,6 +148,7 @@ def run_flow(nl: str, config_json: str) -> str:
         )
     except nl_flow.FlowExecutionError as e:
         logger.exception("run_flow leg failed")
+        _write_meta(e.flow_traj_root, request=nl, kind="flow", error=str(e.original))
         return json.dumps(
             {"ok": False, "error": str(e.original), "traj_root": str(e.flow_traj_root)},
             ensure_ascii=False,

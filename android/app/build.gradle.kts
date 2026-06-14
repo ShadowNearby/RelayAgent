@@ -78,6 +78,10 @@ android {
         }
     }
 
+    buildFeatures {
+        viewBinding = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -93,7 +97,7 @@ chaquopy {
         pip {
             // The full on-device dependency set. No openai, no pydantic —
             // Phase 0 removed both from the runtime import chain
-            // (agents/llm_client.py + pure-Python JSONAction).
+            // (agents/llm/llm_client.py + pure-Python JSONAction).
             install("pyyaml")
             install("pillow")
             install("loguru")
@@ -111,4 +115,9 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Material 3 components (also brings RecyclerView/ConstraintLayout in) for
+    // the designed UI: app bars, cards, text fields, buttons, list rows.
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
 }

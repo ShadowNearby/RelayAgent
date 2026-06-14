@@ -2,13 +2,10 @@ package com.relayagent.app
 
 import android.content.Context
 import android.os.Bundle
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.relayagent.app.databinding.ActivitySettingsBinding
 import org.json.JSONObject
 
 /**
@@ -21,7 +18,10 @@ class SettingsActivity : AppCompatActivity() {
 
     companion object {
         private const val PREFS = "relay_secure_settings"
-        private val KEYS = listOf("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
+        const val K_BASE_URL = "LLM_BASE_URL"
+        const val K_API_KEY = "LLM_API_KEY"
+        const val K_MODEL = "LLM_MODEL"
+        private val KEYS = listOf(K_BASE_URL, K_API_KEY, K_MODEL)
 
         private fun prefs(context: Context) = EncryptedSharedPreferences.create(
             context, PREFS,
@@ -39,30 +39,26 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    private val fields = mutableMapOf<String, EditText>()
+    private lateinit var ui: ActivitySettingsBinding
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 32, 32, 32)
-        }
+        ui = ActivitySettingsBinding.inflate(layoutInflater)
+        setContentView(ui.root)
+        ui.toolbar.setNavigationOnClickListener { finish() }
+
         val p = prefs(this)
-        for (key in KEYS) {
-            root.addView(TextView(this).apply { text = key })
-            val field = EditText(this).apply { setText(p.getString(key, "") ?: "") }
-            fields[key] = field
-            root.addView(field)
+        ui.fieldBaseUrl.setText(p.getString(K_BASE_URL, "") ?: "")
+        ui.fieldApiKey.setText(p.getString(K_API_KEY, "") ?: "")
+        ui.fieldModel.setText(p.getString(K_MODEL, "") ?: "")
+
+        ui.saveBtn.setOnClickListener {
+            p.edit()
+                .putString(K_BASE_URL, ui.fieldBaseUrl.text.toString().trim())
+                .putString(K_API_KEY, ui.fieldApiKey.text.toString().trim())
+                .putString(K_MODEL, ui.fieldModel.text.toString().trim())
+                .apply()
+            finish()
         }
-        root.addView(Button(this).apply {
-            text = "保存"
-            setOnClickListener {
-                val e = p.edit()
-                for ((k, f) in fields) e.putString(k, f.text.toString().trim())
-                e.apply()
-                finish()
-            }
-        })
-        setContentView(root)
     }
 }
