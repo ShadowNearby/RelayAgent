@@ -162,8 +162,7 @@ class NativeEnv:
         elif at == LONG_PRESS:
             self.backend.long_press(int(action.x), int(action.y))
         elif at == DOUBLE_TAP:
-            self.backend.tap(int(action.x), int(action.y))
-            self.backend.tap(int(action.x), int(action.y))
+            self.backend.double_tap(int(action.x), int(action.y))
         elif at == DRAG:
             self.backend.swipe_gesture(
                 int(action.start_x), int(action.start_y),
@@ -425,7 +424,8 @@ def run_task(goal: str, agent: Any, env: NativeEnv, max_step: int = -1) -> dict:
             shot = env.get_screenshot(wait_to_stabilize=True)
             obs = Observation(screenshot=shot, ask_user_response=user_response)
         elif at == ANSWER:
-            obs = env.execute_action(action)
+            # Terminal: ANSWER is a device no-op and the loop ends here, so
+            # skip execute_action's post-step screencap (~1.5s of dead time).
             break
         else:
             obs = env.execute_action(action)

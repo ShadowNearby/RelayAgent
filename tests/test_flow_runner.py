@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 from unittest.mock import MagicMock
 
 from agents.flow.flow_runner import FlowRunner, _harvest_mw_traj
@@ -39,6 +42,97 @@ class FoldFlowLlmCallsTests(unittest.TestCase):
         import shutil
 
         shutil.rmtree(self._tmp, ignore_errors=True)
+
+
+class ExtractTests(unittest.TestCase):
+    """Pins the bind/extract data path: _extract must RETURN the parsed value
+    (a refactor once dropped the trailing `return data`, silently binding None
+    into the blackboard for every extract step)."""
+
+    def _runner(self, content: str) -> FlowRunner:
+        runner = FlowRunner.__new__(FlowRunner)
+        runner.bb = {}
+        runner.env = {"LLM_MODEL": "qwen"}
+        resp = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+        runner._llm = MagicMock()
+        runner._llm.chat.completions.create.return_value = resp
+        return runner
+
+    def test_extract_returns_parsed_json(self) -> None:
+        runner = self._runner('```json\n{"items": [{"name": "A"}, {"name": "B"}]}\n```')
+        out = runner._extract("raw reply", {"prompt": "parse", "bind_to_array_key": "items"})
+        self.assertEqual(out, [{"name": "A"}, {"name": "B"}])
+
+    def test_extract_without_array_key_returns_object(self) -> None:
+        runner = self._runner('```json\n{"city": "上海"}\n```')
+        out = runner._extract("raw reply", {"prompt": "parse"})
+        self.assertEqual(out, {"city": "上海"})
+
+
+class MobileworldStepTests(unittest.TestCase):
+    """Runs one MW fallback leg end-to-end with the driver subprocess mocked.
+    Pins the command construction (a refactor once dropped `import sys`,
+    NameError-ing every MW leg) and the harvest→bind path."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmp = tempfile.mkdtemp()
+        os.environ["RELAY_LEG_JUDGE"] = "0"  # judging needs a device + LLM
+
+    def tearDown(self) -> None:
+        import shutil
+
+        os.environ.pop("RELAY_LEG_JUDGE", None)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_mw_step_builds_command_and_binds_answer(self) -> None:
+        runner = FlowRunner.__new__(FlowRunner)
+        runner.bb = {}
+        runner.env = {}
+        runner._llm = MagicMock(calls=[])
+        runner.flow_traj_root = Path(self._tmp)
+        runner._step_idx = 0
+        runner._mw_server_url = "http://127.0.0.1:1"
+        runner._mw_server_proc = object()  # pretend the flow already started one
+
+        def fake_call(cmd, **kwargs):
+            # The driver would write MobileWorld's traj; emulate its answer.
+            traj = Path(self._tmp) / "01_mw1" / "user_task" / "traj.json"
+            traj.parent.mkdir(parents=True, exist_ok=True)
+            traj.write_text(json.dumps({"0": {"traj": [
+                {"action": {"action_type": "answer", "text": "the answer"}},
+            ]}}), encoding="utf-8")
+            return 0
+
+        with mock.patch(
+            "agents.flow.flow_runner.subprocess.call", side_effect=fake_call
+        ) as call:
+            runner._run_mobileworld_step({"id": "mw1", "prompt": "do it", "bind": "out"})
+
+        self.assertEqual(runner.bb["out"], "the answer")
+        argv = call.call_args[0][0]
+        self.assertEqual(argv[0], sys.executable)
+        self.assertIn("--no-start-server", argv)
+        self.assertIn("--no-prelaunch", argv)
+
+
+class AskUserSelectFromTests(unittest.TestCase):
+    def test_select_from_tolerates_braced_var(self) -> None:
+        # The validator accepts `{var}` spellings; the runner must resolve the
+        # same way instead of using the braced string as a blackboard key.
+        runner = FlowRunner.__new__(FlowRunner)
+        runner.bb = {"pois": [{"name": "A"}, {"name": "B"}]}
+        with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
+            gi.return_value.ask_user.return_value = "2"
+            runner._run_ask_user({
+                "id": "pick", "type": "ask_user", "bind": "choice",
+                "select_from": "{pois}", "prompt_header": "pick one",
+                "item_label": "{name}",
+            })
+        self.assertEqual(runner.bb["choice"], {"name": "B"})
 
 
 class HarvestMwTrajTests(unittest.TestCase):

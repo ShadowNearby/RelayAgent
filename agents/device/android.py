@@ -237,6 +237,16 @@ class AndroidBackend(DeviceBackend):
         # duration is the canonical substitute.
         self.swipe_gesture(x, y, x, y, duration_ms=duration_ms)
 
+    def double_tap(self, x: int, y: int, *, timeout: float = 5.0) -> None:
+        # One shell invocation so the two taps land within the double-tap
+        # window; two separate adb round-trips are hundreds of ms apart and
+        # register as two single taps.
+        tap = f"input tap {int(x)} {int(y)}"
+        try:
+            self._run(["shell", f"{tap} && {tap}"], timeout=timeout)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            logger.warning(f"double_tap ({x},{y}) failed: {exc}")
+
     def swipe_gesture(
         self, x0: int, y0: int, x1: int, y1: int,
         *, duration_ms: int = 400, timeout: float = 10.0,
@@ -351,7 +361,10 @@ class AndroidBackend(DeviceBackend):
             procs = self._run(["shell", "ps", "-A", "-o", "NAME"], timeout=timeout)
             # process name may carry a `:service` suffix — the package is the prefix
             running = {ln.strip().split(":", 1)[0] for ln in procs.stdout.splitlines()}
-            targets = sorted(installed & running)
+            # Never stop the AdbKeyboard IME: it is a third-party package, and
+            # killing it leaves the input channel down until the next
+            # setup_input_channel().
+            targets = sorted((installed & running) - {_ADB_KEYBOARD_PACKAGE})
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning(f"kill_all_apps enumerate failed: {exc}")
             targets = []

@@ -175,6 +175,12 @@ class A11yTextAgent(RelayAgent):
         return self._screen
 
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
+        # Same first-predict hook as RelayAgent: anchors the task wall-clock
+        # (wall_clock.json — the agent is its sole writer) and performs the
+        # deferred cold-launch the runner delegates via RELAY_AGENT_LAUNCH=1.
+        # Without this the baseline never opens the target app and never
+        # writes wall_clock.json.
+        self._begin_task_once()
         self._nstep += 1
         if self._nstep > self.step_cap:
             return "step cap reached", JSONAction(

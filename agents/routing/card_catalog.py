@@ -10,8 +10,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from agents.routing.card_loader import load_all_cards
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
