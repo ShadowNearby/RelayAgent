@@ -120,6 +120,14 @@ class MobileworldStepTests(unittest.TestCase):
 
 
 class AskUserSelectFromTests(unittest.TestCase):
+    def test_select_from_path_normalization(self) -> None:
+        from agents.flow.flow_runner_util import _select_from_path
+
+        self.assertEqual(_select_from_path("pois"), ["pois"])
+        self.assertEqual(_select_from_path("{pois}"), ["pois"])
+        self.assertEqual(_select_from_path("{pois}.field"), ["pois", "field"])
+        self.assertEqual(_select_from_path(" { pois } . field "), ["pois", "field"])
+
     def test_select_from_tolerates_braced_var(self) -> None:
         # The validator accepts `{var}` spellings; the runner must resolve the
         # same way instead of using the braced string as a blackboard key.

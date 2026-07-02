@@ -67,6 +67,7 @@ from agents.flow.flow_runner_util import (
     _read_json_file,
     _redact,
     _resolve_choice,
+    _select_from_path,
     render,
 )
 
@@ -587,12 +588,12 @@ class FlowRunner:
         interaction = get_interaction()
 
         if "select_from" in step:
-            # The planner's validator accepts `{var}` / `var.field` spellings
-            # (it resolves to the root bind before checking); resolve the same
-            # way here so a plan that validates also runs.
-            arr_key = str(step["select_from"]).strip().strip("{}")
+            # Same normalization as the planner's validator (shared helper),
+            # so any select_from spelling that validates also runs.
+            path = _select_from_path(step["select_from"])
+            arr_key = ".".join(path)
             value: Any = self.bb
-            for part in arr_key.split("."):
+            for part in path:
                 value = value.get(part) if isinstance(value, dict) else None
             items = value or []
             if not items:

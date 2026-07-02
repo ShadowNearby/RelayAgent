@@ -50,6 +50,15 @@ class Recording:
                 except Exception:
                     pass
             self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            # A hung adb pull can outlive the deadline; finalizing now would
+            # rename/unlink chunk files the loop thread still touches. Leave
+            # the chunks unmerged rather than race it.
+            logger.warning(
+                "recorder: capture thread still busy after stop deadline; "
+                f"leaving raw chunks in {self.out_dir}"
+            )
+            return self.out_dir if self._chunks else None
         return self._finalize()
 
     def _finalize(self) -> Path | None:

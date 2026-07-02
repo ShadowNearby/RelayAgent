@@ -211,9 +211,9 @@ class RouteOverlay:
             yield
         finally:
             if fh is not None:
+                # fh is only non-None when the import above succeeded, so the
+                # local `fcntl` binding is guaranteed here.
                 with contextlib.suppress(Exception):
-                    import fcntl
-
                     fcntl.flock(fh, fcntl.LOCK_UN)
                 fh.close()
 

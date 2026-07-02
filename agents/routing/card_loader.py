@@ -66,10 +66,14 @@ def resolve_app_id(card: dict[str, Any], platform: str | None = None) -> str:
 
 
 def load_card_by_app_id(app_id: str, manifests_dir: Path | None = None) -> dict[str, Any]:
-    for card in load_all_cards(manifests_dir):
-        # Match the primary app_id or the current platform's mapped id, so a
-        # runner handed a platform-specific id (app_ids.<platform>) still
-        # resolves the card.
-        if card.get("app_id") == app_id or resolve_app_id(card) == app_id:
+    cards = load_all_cards(manifests_dir)
+    for card in cards:
+        if card.get("app_id") == app_id:
+            return card
+    # Second pass: the current platform's mapped id (app_ids.<platform>), so a
+    # runner handed a platform-specific id still resolves the card. Runs AFTER
+    # the exact pass so a mapped id can never shadow another card's primary id.
+    for card in cards:
+        if resolve_app_id(card) == app_id:
             return card
     raise FileNotFoundError(f"No manifest found for app_id={app_id!r} under {manifests_dir or MANIFESTS_DIR}")

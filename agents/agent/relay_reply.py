@@ -193,7 +193,10 @@ def _extract_reply_text_from_dump(
     for y, t in nodes:
         if cut_y >= 0 and y <= cut_y:
             continue
-        if t in excludes:
+        # Exact chrome match, tolerating a trailing ellipsis/dots — streaming
+        # buttons often render as "Stop generating…" while the label list
+        # carries the bare form.
+        if t in excludes or t.rstrip("…. ") in excludes:
             continue
         # Substring-match exclusion for noisy chrome variants ("AI 内容..." etc.)
         # — CJK labels only. English chrome words ("Stop", "Share", "More", …)
