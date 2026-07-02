@@ -94,7 +94,7 @@ class BaseAgent(ABC):
             try:
                 if "claude" in model:
                     kwargs["max_tokens"] = 64000
-                    del kwargs["temperature"]
+                    kwargs.pop("temperature", None)
 
                 if "gpt" in model.lower() or "o1" in model.lower():
                     if "max_tokens" in kwargs:

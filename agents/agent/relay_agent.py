@@ -55,7 +55,6 @@ from agents.agent.action_model import JSONAction
 from agents.runtime._adb import force_stop, swipe_down
 from agents.runtime._adb import cold_launch as _cold_launch
 from agents.runtime._adb import screencap as _adb_screencap
-from agents.device import get_backend
 from agents.agent.action_planner import Step, build_plan
 from agents.routing.capability_router import route_capability
 from agents.routing.card_loader import load_card_by_app_id
@@ -139,7 +138,7 @@ _POLL_SKIP_SLEEP = float(os.getenv("RELAY_POLL_SKIP_SLEEP", "0.3"))
 # field survives across step writes.
 _TRAJ_DIR = (
     Path(os.environ["RELAY_TRAJ_DIR"]) if os.getenv("RELAY_TRAJ_DIR")
-    else Path("traj_logs") / "user_task"
+    else _REPO_ROOT / "traj_logs" / "user_task"
 )
 
 # Grounding, reply-scrape, permission-popup and LLM-logging helpers split into
@@ -155,7 +154,7 @@ from agents.agent.relay_grounding import (  # noqa: E402
 from agents.agent.relay_reply import (  # noqa: E402
     _NM_ADVANCE_SYSTEM,
     _REPLY_WATCH_SYSTEM,
-    _crop_cutoffs,
+    _crop_cutoffs,  # noqa: F401 — re-exported (tests import it from this module)
     _dump_visible_text_hash,
     _extract_reply_text_from_dump,
     _hash_screenshot_region,
@@ -677,9 +676,20 @@ class RelayAgent(_MCPAgentBase):
                         f"retry {budget + 1}/2"
                     )
                     return JSONAction(action_type="wait"), False, f"ground retry {budget + 1}/2"
-                logger.warning(
-                    f"nm_ground_tap {desc!r} skipped (optional={optional}): {e}"
-                )
+                if not optional:
+                    # A required affordance (input box / send button) could not
+                    # be grounded after retries. Continuing would type into
+                    # nothing and misreport success — end the run honestly.
+                    logger.warning(
+                        f"nm_ground_tap {desc!r} REQUIRED grounding exhausted: {e}; "
+                        "finishing incomplete"
+                    )
+                    return (
+                        JSONAction(action_type="finished", goal_status="incomplete"),
+                        True,
+                        "required grounding failed",
+                    )
+                logger.warning(f"nm_ground_tap {desc!r} skipped (optional): {e}")
                 return JSONAction(action_type="wait"), True, "grounding failed; skipped"
             return JSONAction(action_type="click", x=x, y=y), True, "VLM-grounded"
 
@@ -1098,7 +1108,8 @@ class RelayAgent(_MCPAgentBase):
             vx = vy = None
             if p.get("text"):
                 try:
-                    vx, vy = self._ground_text(p["text"], screenshot, screen_w, screen_h)
+                    frame = self._fresh_vision_frame(screenshot)
+                    vx, vy = self._ground_text(p["text"], frame, screen_w, screen_h)
                     logger.info(
                         f"copy_reply: VLM-grounded {p['text']!r} -> ({vx},{vy})"
                     )

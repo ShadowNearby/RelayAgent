@@ -77,13 +77,24 @@ def _dump_visible_text_hash(
     app-agnostic (no per-app marker list to maintain), and it catches both
     apps without a stop button AND apps whose stop button stays around after
     generation completes."""
-    nodes = get_backend().dump_ui_tree(
+    backend = get_backend()
+    nodes = backend.dump_ui_tree(
         dump_timeout=dump_timeout, pull_timeout=pull_timeout
     )
     if nodes is None:
         return None
+    # Drop nodes fully inside the status-bar strip: the clock flips the hash
+    # once a minute, resetting the stability streak the done detection needs.
+    # Mirrors the top crop the pixel-hash precheck already applies.
+    try:
+        _, screen_h = backend.screen_size()
+        top_cutoff, _ = _crop_cutoffs(screen_h)
+    except Exception:  # size unavailable (e.g. mocked backend) — no crop
+        top_cutoff = 0
     parts: list[str] = []
     for n in nodes:
+        if top_cutoff and n.bounds is not None and n.bounds[3] <= top_cutoff:
+            continue
         if n.text:
             parts.append(n.text)
         if n.desc and n.desc != n.text:
@@ -185,7 +196,10 @@ def _extract_reply_text_from_dump(
         if t in excludes:
             continue
         # Substring-match exclusion for noisy chrome variants ("AI 内容..." etc.)
-        if any(x and x in t and len(x) >= 4 for x in excludes):
+        # — CJK labels only. English chrome words ("Stop", "Share", "More", …)
+        # are common reply vocabulary, so they must exact-match above, never
+        # substring-match, or English reply lines get dropped wholesale.
+        if any(x and len(x) >= 4 and not x.isascii() and x in t for x in excludes):
             continue
         candidates.append((y, t))
     if not candidates:

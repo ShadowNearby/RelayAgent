@@ -113,6 +113,14 @@ class ExtractReplyTests(unittest.TestCase):
             text = _extract_reply_text_from_dump("帮我查天气", H)
         self.assertEqual(text, long_reply)
 
+    def test_english_reply_survives_ascii_chrome_words(self):
+        # "Share" / "Stop" / "More" are chrome labels AND ordinary English
+        # words; substring exclusion must apply to CJK chrome variants only,
+        # or lines like this get dropped wholesale on English apps.
+        line = "You can Share this recipe or Stop by the store for More info."
+        with _patch_tree([_node(text=line, bounds=(0, 1000, 1000, 1200))]):
+            self.assertEqual(_extract_reply_text_from_dump(None, H), line)
+
     def test_short_chips_dropped_only_with_substantial_node(self):
         chip = _node(text="还有什么推荐？", bounds=(0, 1000, 400, 1060))
         with _patch_tree([chip]):

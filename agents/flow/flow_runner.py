@@ -30,6 +30,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime
@@ -57,7 +58,6 @@ from agents.flow.flow_leg_executor import (
 from agents.flow.flow_runner_util import (
     ENV_FILE,
     MW_STEP_TYPE,
-    NATIVE_RUNNER_MODULE,
     REPO_ROOT,
     RUN_MOBILEWORLD,
     _assert_output_free_step_completed,
@@ -587,8 +587,14 @@ class FlowRunner:
         interaction = get_interaction()
 
         if "select_from" in step:
-            arr_key = step["select_from"]
-            items = self.bb.get(arr_key) or []
+            # The planner's validator accepts `{var}` / `var.field` spellings
+            # (it resolves to the root bind before checking); resolve the same
+            # way here so a plan that validates also runs.
+            arr_key = str(step["select_from"]).strip().strip("{}")
+            value: Any = self.bb
+            for part in arr_key.split("."):
+                value = value.get(part) if isinstance(value, dict) else None
+            items = value or []
             if not items:
                 raise RuntimeError(f"ask_user {step['id']!r}: nothing in {arr_key!r} to choose from")
             label_tpl = step.get("item_label", "{name}")
@@ -632,3 +638,4 @@ class FlowRunner:
         data = _parse_fenced_json(out)
         if "bind_to_array_key" in spec and isinstance(data, dict):
             data = data.get(spec["bind_to_array_key"], data)
+        return data

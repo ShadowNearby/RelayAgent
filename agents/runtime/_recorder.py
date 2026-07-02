@@ -37,12 +37,19 @@ class Recording:
         if not self._thread:
             return None
         self._stop_evt.set()
-        if self._proc and self._proc.poll() is None:
-            try:
-                self._proc.terminate()
-            except Exception:
-                pass
-        self._thread.join(timeout=_CHUNK_SECONDS + 30)
+        # The loop thread may start one more chunk between our event set and
+        # its next check; keep terminating whatever screenrecord is in flight
+        # until the thread exits, instead of terminating once and then
+        # waiting out a full 180s chunk.
+        deadline = time.monotonic() + _CHUNK_SECONDS + 30
+        while self._thread.is_alive() and time.monotonic() < deadline:
+            proc = self._proc
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            self._thread.join(timeout=2)
         return self._finalize()
 
     def _finalize(self) -> Path | None:

@@ -55,7 +55,7 @@ from agents.flow.flow_runner_util import _VAR_RE, _parse_fenced_json
 # MW_STEP_TYPE / _to_mw_leg / _mw_whole_request_plan from here, and the class
 # below uses every name as a module global).
 from agents.flow.flow_planner_mw import (
-    MW_STEP_TYPE,
+    MW_STEP_TYPE,  # noqa: F401 — re-exported (tests and callers import it from here)
     _mw_whole_request_plan,
     _to_mw_leg,
     mw_fallback_enabled,

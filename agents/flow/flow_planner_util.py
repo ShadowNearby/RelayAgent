@@ -87,7 +87,10 @@ def _bind_referenced_later(bind: str, steps: list, start_idx: int) -> bool:
         if not isinstance(step, dict):
             continue
         if _is_ask_user(step):
-            if step.get("select_from") == bind:
+            sel = step.get("select_from")
+            # `{var}` / `var.field` spellings resolve to the root bind name,
+            # matching the validator and the runner's lookup.
+            if isinstance(sel, str) and sel.strip().strip("{}").split(".")[0].strip() == bind:
                 return True
             fields = [step.get("prompt_header", "")]
         else:

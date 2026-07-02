@@ -78,14 +78,14 @@ def load_matrix(path: Path = MATRIX_CSV) -> dict[str, Any]:
     with path.open(encoding="utf-8") as fh:
         rows = list(csv.reader(fh))
     if not rows:
-        raise SystemExit(f"empty capability matrix: {path}")
+        raise RuntimeError(f"empty capability matrix: {path}")
 
     header = rows[0]
     app_cols: list[tuple[int, str]] = []
     for idx in range(3, len(header)):
         m = _HEADER_APPID_RE.search(header[idx])
         if not m:
-            raise SystemExit(f"matrix header column {header[idx]!r} lacks an (app_id)")
+            raise RuntimeError(f"matrix header column {header[idx]!r} lacks an (app_id)")
         app_cols.append((idx, m.group(1).strip()))
 
     cap_desc: dict[str, str] = {}
@@ -352,7 +352,9 @@ def _stage3_foundation(
         FOUNDATION_CAP, matrix, cat_index
     )
     if not foundation_apps:
-        raise SystemExit(
+        # RuntimeError (not SystemExit): callers route this through the plan
+        # error/repair path — a config gap must not kill a whole batch run.
+        raise RuntimeError(
             f"no app offers {FOUNDATION_CAP!r} in the matrix; cannot fall back"
         )
     by_id = {a["app_id"]: a for a in catalog["apps"]}
@@ -382,7 +384,10 @@ def _stage3_foundation(
         raise RuntimeError(f"stage-3 returned unsupported kind: {data!r}")
     data["capability_id"] = FOUNDATION_CAP
     if data.get("app_id") not in foundation_apps:
-        raise SystemExit(
+        # RuntimeError (not SystemExit): this is an LLM output error — let the
+        # caller's except-Exception turn it into a repairable plan error
+        # instead of terminating the whole process on one hallucination.
+        raise RuntimeError(
             f"stage-3 picked app_id={data.get('app_id')!r} without {FOUNDATION_CAP}"
         )
     logger.info(
