@@ -36,6 +36,19 @@ MW_STEP_TYPE = "mobileworld"
 _VAR_RE = re.compile(r"\{([a-zA-Z_][\w.]*)\}")
 
 
+def _select_from_path(sel: Any) -> list[str]:
+    """Normalized lookup path for an ask_user `select_from` reference.
+
+    The planner LLM emits `var`, `var.field` and brace-wrapped spellings
+    (occasionally with stray spaces). Braces are dropped wherever they appear
+    and every segment is whitespace-stripped, so the validator, the
+    later-bind check and the runner all resolve the SAME root/path — the one
+    normalization lives here instead of three hand-rolled copies.
+    """
+    text = str(sel).replace("{", "").replace("}", "")
+    return [p.strip() for p in text.split(".") if p.strip()]
+
+
 def render(template: str, ctx: dict[str, Any]) -> str:
     """Substitute `{var}` and `{var.field}` against ctx. Missing keys → ''."""
     def repl(m: re.Match) -> str:

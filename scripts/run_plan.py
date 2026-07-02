@@ -344,8 +344,14 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as e:
         sys.exit(str(e))
 
-    catalog = build_catalog()
-    matrix = load_matrix()
+    try:
+        catalog = build_catalog()
+        matrix = load_matrix()
+    except (RuntimeError, ValueError) as e:
+        # build_catalog raises ManifestValidationError (a ValueError),
+        # load_matrix RuntimeError — both are operator config errors; exit
+        # with the message, not a traceback.
+        sys.exit(str(e))
     logger.info(
         f"catalog: {len(catalog['apps'])} apps; "
         f"matrix: {len(matrix['cap_desc'])} capabilities, {len(matrix['app_ids'])} apps"
