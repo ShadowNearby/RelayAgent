@@ -5,7 +5,7 @@
     <string name="notif_channel_capture">屏幕采集</string>
     <string name="notif_capture_text">RelayAgent 正在采集屏幕以驱动任务</string>
 
-    <!-- Main -->
+    <!-- Main (conversation-style, Codex/Claude-app-like) -->
     <string name="title_main">RelayAgent</string>
     <string name="goal_hint">用一句话描述任务</string>
     <string name="goal_helper">例如：帮我找一台适合学生的平板电脑，预算2000以内</string>
@@ -13,14 +13,27 @@
     <string name="action_stop">停止</string>
     <string name="action_examples">任务示例</string>
     <string name="action_logs">运行日志</string>
+    <string name="action_history">历史任务</string>
     <string name="action_settings">设置</string>
     <string name="action_open_a11y">打开无障碍设置</string>
-    <string name="section_status">运行状态</string>
-    <string name="section_live_log">实时日志</string>
-    <string name="status_a11y_on">无障碍服务已连接</string>
     <string name="status_a11y_off">无障碍服务未开启（必须）</string>
-    <string name="status_gateway_on">LLM 网关已配置</string>
     <string name="status_gateway_off">LLM 网关未配置（去设置填写）</string>
+    <string name="composer_hint">把任务交给我…</string>
+    <string name="composer_send">发送</string>
+    <string name="greeting_title">你好，把任务交给我</string>
+    <string name="greeting_sub">我会规划步骤、打开对应 App 并代你操作，关键确认交还给你。试试：</string>
+    <string name="working_title">正在执行…</string>
+    <string name="working_done_title">执行结束</string>
+    <string name="working_stopping">正在停止…</string>
+    <string name="notice_stop_requested">已请求停止，正在收尾当前步骤。</string>
+    <string name="notice_waiting_answer">代理在等待你的回答——请在悬浮面板里输入或点「我来接管」。</string>
+    <string name="notice_answer_received">已收到回答，继续执行。</string>
+    <string name="notice_consent_denied">屏幕采集授权被拒绝，任务未开始。</string>
+    <string name="result_done">任务完成</string>
+    <string name="result_failed">任务失败</string>
+    <string name="result_unsatisfiable">当前可用的 App 无法完成这个任务</string>
+    <string name="action_view_detail">查看运行详情</string>
+    <string name="banner_fix">去开启</string>
 
     <!-- Settings -->
     <string name="title_settings">设置 · LLM 网关</string>
