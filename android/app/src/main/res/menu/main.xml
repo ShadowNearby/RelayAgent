@@ -2,6 +2,15 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
+        android:id="@+id/action_history"
+        android:title="@string/action_history"
+        android:icon="@android:drawable/ic_menu_recent_history"
+        app:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_examples"
+        android:title="@string/action_examples"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_open_a11y"
         android:title="@string/action_open_a11y"
         app:showAsAction="never" />

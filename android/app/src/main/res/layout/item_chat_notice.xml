@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Small centered hint line (stop requested / waiting for the overlay answer). -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/text"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center"
+    android:paddingHorizontal="24dp"
+    android:paddingVertical="8dp"
+    android:textColor="@color/on_surface_muted"
+    android:textSize="12sp" />

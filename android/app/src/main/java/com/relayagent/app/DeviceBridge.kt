@@ -120,9 +120,16 @@ object DeviceBridge {
     // -- interaction (overlay) ---------------------------------------------------------
 
     /** Blocking ask_user: shows the overlay panel, returns the answer or null
-     * on take-over/dismiss. Called from the Python worker thread. */
+     * on take-over/dismiss. Called from the Python worker thread. The typed
+     * events let the conversation UI show a "waiting for your answer" line
+     * while the panel is up (take-over ends the run, so no resumed event). */
     @JvmStatic
-    fun askUser(text: String): String? = OverlayController.askUserBlocking(text)
+    fun askUser(text: String): String? {
+        RunEvents.post(RunEvents.Event.AskUser)
+        val answer = OverlayController.askUserBlocking(text)
+        if (answer != null) RunEvents.post(RunEvents.Event.AskAnswered)
+        return answer
+    }
 
     @JvmStatic
     fun emitStatus(json: String) = OverlayController.postStatus(json)

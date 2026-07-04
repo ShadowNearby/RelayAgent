@@ -66,8 +66,11 @@ object OverlayController {
 
     fun postStatus(json: String) {
         val line = humanize(json)
-        // Mirror every status event into the live log tail (MainActivity pane).
+        // Mirror every status event into the live log tail, the overlay chip,
+        // AND the typed channel the conversation UI renders its live activity
+        // card from (RunEvents parses the same JSON).
         RunLog.append(line)
+        RunEvents.dispatch(json)
         main.post { chip?.text = "RelayAgent ▶ $line" }
     }
 
