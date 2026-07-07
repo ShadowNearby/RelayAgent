@@ -110,6 +110,8 @@ The routing phase also cleans up: `_drop_unused_no_reply_binds` (strip a decorat
 
 Steps run in order; the blackboard `self.bb` starts empty and grows with each step's bind. `render()` does `{var}`/`{var.field}` substitution (missing key → `''`).
 
+Before the first step, `nl_flow.execute_plan` force-stops every app the plan touches (best-effort; a kill failure never blocks the run) so no leg resumes a stale background session. Disable with `RELAY_PREKILL_APPS=0`.
+
 **App step (`_run_app_step`):**
 
 - Each leg is a fresh `python -m agents.runtime.native_runner <app> <prompt>` subprocess.

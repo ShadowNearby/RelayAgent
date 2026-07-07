@@ -27,7 +27,7 @@ x86_64 镜像装 ARM-only 的国内 App 依赖 ARM 转译（API 30+ 自带），
 
 ## 3. 搭一台 AVD
 
-> **本机（`yjs-ipads`）已搭好**：AVD `relay-test`（**android-36.0-Baklava（Android 16）/ google_apis_playstore / x86_64，pixel_9 档位 1080x2424**），KVM 加速，冷启动 ~15s，serial `emulator-5554`。选 **playstore 镜像**是为了能从 Play 商店官方装国际 App（见 §7）。`sdkmanager`/`avdmanager`/`emulator` 都需要 `JAVA_HOME`（snap Android Studio 的 JBR 即可：`export JAVA_HOME=/snap/android-studio/current/jbr`）。
+> **本仓库开发期使用的参考配置**：AVD `relay-test`（**android-36.0-Baklava（Android 16）/ google_apis_playstore / x86_64，pixel_9 档位 1080x2424**），KVM 加速，冷启动 ~15s，serial `emulator-5554`。选 **playstore 镜像**是为了能从 Play 商店官方装国际 App（见 §7）。`sdkmanager`/`avdmanager`/`emulator` 都需要 `JAVA_HOME`（snap Android Studio 的 JBR 即可：`export JAVA_HOME=/snap/android-studio/current/jbr`）。
 
 ```bash
 # 1) 装 SDK 命令行工具后（JAVA_HOME 见上）：
@@ -85,16 +85,16 @@ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 SDL_VIDEODRIVER=wayland
   scrcpy -s emulator-5554 --window-title "relay-test AVD"
 ```
 
-**远程机器（默认走这条；本仓库约定的观察方式）**——scrcpy 装在本地有屏幕的机器上，视频流经 SSH 隧道。服务器是 `yjs@yjs-ipads.ipads-lab.se.sjtu.edu.cn`（SJTU 内网；同网段也可用 `10.181.53.103`）。
+**远程机器（默认走这条；本仓库约定的观察方式）**——scrcpy 装在本地有屏幕的机器上，视频流经 SSH 隧道连到跑模拟器的服务器（下面记作 `user@emulator-host`）。
 
 ```bash
 # 方案 B（首选，scrcpy 官方做法，单 adb server）：隧道服务器的 adb server + 视频端口
-ssh -CN -L 15037:localhost:5037 -L 27183:localhost:27183 yjs@yjs-ipads.ipads-lab.se.sjtu.edu.cn  # 终端 1 挂着
+ssh -CN -L 15037:localhost:5037 -L 27183:localhost:27183 user@emulator-host  # 终端 1 挂着
 export ADB_SERVER_SOCKET=tcp:127.0.0.1:15037           # 终端 2，本地 scrcpy ≥ 2.0
 scrcpy -s emulator-5554 --force-adb-forward --tunnel-port=27183   # 序列号用服务器侧的 emulator-5554
 
 # 方案 A（备选）：隧道模拟器 adbd 端口，本地 adb 直连
-ssh -CN -L 15555:localhost:5555 yjs@yjs-ipads.ipads-lab.se.sjtu.edu.cn  # 终端 1
+ssh -CN -L 15555:localhost:5555 user@emulator-host  # 终端 1
 adb connect localhost:15555 && scrcpy -s localhost:15555               # 终端 2
 ```
 

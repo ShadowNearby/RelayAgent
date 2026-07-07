@@ -27,7 +27,7 @@ Installing ARM-only Chinese apps on an x86_64 image relies on ARM translation (b
 
 ## 3. Creating an AVD
 
-> **Already set up on this machine (`yjs-ipads`)**: AVD `relay-test` (**android-36.0-Baklava (Android 16) / google_apis_playstore / x86_64, pixel_9 profile 1080x2424**), KVM-accelerated, ~15 s cold boot, serial `emulator-5554`. The **playstore** image is chosen so international apps install officially from the Play Store (see §8). `sdkmanager`/`avdmanager`/`emulator` need `JAVA_HOME` (the snap Android Studio JBR works: `export JAVA_HOME=/snap/android-studio/current/jbr`).
+> **Reference setup used while developing this repo**: AVD `relay-test` (**android-36.0-Baklava (Android 16) / google_apis_playstore / x86_64, pixel_9 profile 1080x2424**), KVM-accelerated, ~15 s cold boot, serial `emulator-5554`. The **playstore** image is chosen so international apps install officially from the Play Store (see §8). `sdkmanager`/`avdmanager`/`emulator` need `JAVA_HOME` (the snap Android Studio JBR works: `export JAVA_HOME=/snap/android-studio/current/jbr`).
 
 ```bash
 # 1) after installing the SDK command-line tools (JAVA_HOME above):
@@ -85,16 +85,16 @@ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 SDL_VIDEODRIVER=wayland
   scrcpy -s emulator-5554 --window-title "relay-test AVD"
 ```
 
-**From a remote machine (the default — this repo's convention for watching the AVD)** — install scrcpy on the local machine with the display; the video stream rides the SSH tunnel. The server is `yjs@yjs-ipads.ipads-lab.se.sjtu.edu.cn` (SJTU intranet; `10.181.53.103` on the same subnet).
+**From a remote machine (the default — this repo's convention for watching the AVD)** — install scrcpy on the local machine with the display; the video stream rides the SSH tunnel to the server running the emulator (`user@emulator-host` below).
 
 ```bash
 # Option B (preferred, scrcpy's official recipe, single adb server): tunnel the server-side adb server + video port
-ssh -CN -L 15037:localhost:5037 -L 27183:localhost:27183 yjs@yjs-ipads.ipads-lab.se.sjtu.edu.cn  # terminal 1, keep open
+ssh -CN -L 15037:localhost:5037 -L 27183:localhost:27183 user@emulator-host  # terminal 1, keep open
 export ADB_SERVER_SOCKET=tcp:127.0.0.1:15037           # terminal 2, local scrcpy ≥ 2.0
 scrcpy -s emulator-5554 --force-adb-forward --tunnel-port=27183   # serial is the server-side emulator-5554
 
 # Option A (fallback): tunnel the emulator's adbd port, connect the local adb to it
-ssh -CN -L 15555:localhost:5555 yjs@yjs-ipads.ipads-lab.se.sjtu.edu.cn   # terminal 1
+ssh -CN -L 15555:localhost:5555 user@emulator-host   # terminal 1
 adb connect localhost:15555 && scrcpy -s localhost:15555                 # terminal 2
 ```
 

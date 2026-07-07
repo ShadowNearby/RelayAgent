@@ -6,7 +6,7 @@
 # run (bash supervisor survives and re-runs). Order: relaybench -> androiddaily ->
 # mobileworld (Gemini-account-sensitive last).
 set -u
-cd /home/yjs/RelayAgent
+cd "$(dirname "$0")/../.."   # repo root
 RC=traj_logs/reclassify/final
 MAX_ITERS=40
 

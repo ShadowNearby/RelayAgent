@@ -74,3 +74,4 @@ in-app agent 的 LLM call 由 `relay_agent` 落在 `traj.json` 的 `["0"]["llm_c
 | `RELAY_WALL_OUT` | `wall_clock.json` 落点 | `<traj dir>/wall_clock.json` |
 | `RELAY_SUMMARY_OUT` | `summary.json` 落点 | 无（不写）|
 | `RELAY_REPLY_OUT` | 额外的 reply JSON 落点（给父进程消费）| 无（仍写 `<traj dir>/agent_reply.json`）|
+| `RELAY_MW_LLM_CALLS_OUT` | **MobileWorld 基线**进程的逐 LLM call 记录落点（`agents/llm/mw_llm_probe.py` 包 MW 的 chat 调用、只观察不改行为；同时是 `scripts/_mw_probe/sitecustomize.py` 的门控）| 无（探针不激活）|

@@ -110,6 +110,8 @@ NL request
 
 按 step 顺序跑，blackboard `self.bb` 起空、随 step bind 增长。`render()` 做 `{var}`/`{var.field}` 替换（缺键 → `''`）。
 
+第一个 step 之前，`nl_flow.execute_plan` 会把 plan 涉及的所有 App 先 force-stop 一遍（best-effort，kill 失败不阻塞运行），保证没有 leg 接到后台残留的旧会话。`RELAY_PREKILL_APPS=0` 关。
+
 **App step（`_run_app_step`）：**
 
 - 每个 leg 一个全新 `python -m agents.runtime.native_runner <app> <prompt>` 子进程。

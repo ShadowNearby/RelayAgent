@@ -4,6 +4,7 @@
 
 - venv 在 `.venv/`，**Python 3.12**（`pyproject.toml` 锁 `>=3.12,<3.13`，匹配现有 lock）。
 - 装依赖（不装本项目，靠 `uv run` 跑源码）：`uv venv --python 3.12 && uv sync --no-install-project --extra dev --extra mw`。`mobile-world` 已移到 optional extra `mw`（只有 A/B baseline / MW 兜底用；入口 import 链不碰它），`jsonschema` 在 extra `dev`（manifest 校验）。CI（`.github/workflows/ci.yml`）只装 `--extra dev`。
+- **`uv lock` / `uv sync` 都必须带 `UV_DEFAULT_INDEX=https://pypi.org/simple`**：这台机器全局 `~/.config/uv/uv.toml` 的默认 index 是清华 tuna 镜像，不带覆盖连 `uv sync` 都会把 `uv.lock` 的 URL 全改回 tuna（开源仓库的 lock 保持官方 PyPI，2026-07-07 已换；实测 sync 也会重写 lock，别只在 lock 时带）。
 - 运行时是纯 Python，无外部 runner、无 server；设备 I/O 经 `agents/device/` 后端抽象（Android=直 adb，见下「Native 运行时」）。
 - **无直接 pydantic 依赖**：`action_model.py` 的 `JSONAction` 已是纯 Python（Chaquopy 无 pydantic-core 轮子；行为由 `tests/test_action_model.py` 钉死）。主机上 openai SDK 仍传递性带入 pydantic，但我们的代码不得 import 它。
 

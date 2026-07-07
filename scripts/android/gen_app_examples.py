@@ -10,6 +10,7 @@ as quick-fill suggestions for the goal box.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 from collections import defaultdict
@@ -103,6 +104,15 @@ def _androiddaily(n: int) -> list[dict]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=OUT,
+        help=f"Output path (default: {OUT.relative_to(REPO)})",
+    )
+    args = parser.parse_args()
+    out = args.out
     examples = _relaybench() + _androiddaily(ANDROIDDAILY_PICKS)
     payload = {
         "version": 1,
@@ -110,11 +120,12 @@ def main() -> None:
         "count": len(examples),
         "examples": examples,
     }
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"wrote {len(examples)} examples -> {OUT.relative_to(REPO)}")
+    shown = out.relative_to(REPO) if out.is_relative_to(REPO) else out
+    print(f"wrote {len(examples)} examples -> {shown}")
 
 
 if __name__ == "__main__":

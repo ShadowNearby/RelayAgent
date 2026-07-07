@@ -111,3 +111,4 @@ in-app `["0"]["llm_calls"]`). `purpose` is stamped at the call site
 | `RELAY_WALL_OUT` | where `wall_clock.json` lands | `<traj dir>/wall_clock.json` |
 | `RELAY_SUMMARY_OUT` | where `summary.json` lands | none (not written) |
 | `RELAY_REPLY_OUT` | extra reply-JSON sink (for a parent process) | none (still writes `<traj dir>/agent_reply.json`) |
+| `RELAY_MW_LLM_CALLS_OUT` | per-call LLM records for the **MobileWorld baseline** process (`agents/llm/mw_llm_probe.py` wraps MW's chat call, observation-only; also gates `scripts/_mw_probe/sitecustomize.py`) | none (probe inert) |

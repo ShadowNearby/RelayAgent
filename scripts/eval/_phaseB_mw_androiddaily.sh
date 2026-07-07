@@ -6,7 +6,7 @@
 #   BATCH ∈ easy / easy_seeded / medium / medium_seeded，
 #   对应 traj_logs/phaseB/androiddaily_${BATCH}_ids.txt。
 set -u
-cd /home/yjs/RelayAgent
+cd "$(dirname "$0")/../.."   # repo root
 BATCH="${BATCH:?set BATCH=easy|easy_seeded|medium|medium_seeded}"
 OUT=traj_logs/phaseB/androiddaily
 IDS="traj_logs/phaseB/androiddaily_${BATCH}_ids.txt"

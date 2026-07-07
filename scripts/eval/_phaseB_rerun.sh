@@ -6,7 +6,7 @@
 # ids-files _rerun_<system>_ids.txt). Clean run: per-system device reset +
 # kill_all_apps after each task are baked into run_benchmark_test.py.
 set -u
-cd /home/yjs/RelayAgent
+cd "$(dirname "$0")/../.."   # repo root
 RC=traj_logs/reclassify/final
 PB=traj_logs/phaseB
 
