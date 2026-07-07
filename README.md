@@ -213,6 +213,7 @@ Quality bar per card: all required SPEC fields populated, ≥2 real example prom
 ## Getting involved
 
 - **Reading the design:** start with the [Tech Report](report/RelayAgent-TechReport.md), then [SPEC.md](SPEC.md) and [SPEC-OPEN-QUESTIONS.md](SPEC-OPEN-QUESTIONS.md).
+- **Where this is headed:** the [productization roadmap](docs/roadmap.md) — five phases (runtime failure recovery, streaming capture, user memory, card CI/authoring, platforms), each with acceptance metrics. Good place to pick up work.
 - **Submitting a card:** see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Code of conduct:** see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 - **Discussion:** GitHub Issues.

@@ -212,6 +212,7 @@ uv run python -m unittest discover -s tests -v       # 无设备；planner/runne
 ## 参与进来
 
 - **读设计：** 先看[技术报告](report/RelayAgent-TechReport.md)，再看 [SPEC.md](SPEC.md) 和 [SPEC-OPEN-QUESTIONS.md](SPEC-OPEN-QUESTIONS.md)。
+- **接下来往哪走：** [产品化路线图](docs/roadmap.zh.md)——五个阶段（执行期失败恢复、流式抓帧、用户记忆、卡片 CI 与半自动生成、多平台），每阶段带验收指标，适合从这里认领工作。
 - **提交卡片：** 见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 - **行为准则：** 见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - **讨论：** GitHub Issues。
