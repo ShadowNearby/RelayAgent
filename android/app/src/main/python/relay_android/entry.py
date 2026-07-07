@@ -22,12 +22,33 @@ def _files_dir() -> Path:
     return Path(str(Bridge.appFilesDir()))
 
 
+# Runtime knobs the Settings screen can override (all read from os.environ by
+# the host runtime). Only forwarded when the user actually set a value, so a
+# blank field keeps the runtime default.
+_PASSTHROUGH_ENV = (
+    "RELAY_STEP_WAIT",
+    "RELAY_WAIT_SECONDS",
+    "RELAY_CAPTURE_FULL_REPLY",
+    "RELAY_CAPTURE_SCROLL_RATIO",
+    "RELAY_CROP_TOP",
+    "RELAY_CROP_BOTTOM",
+    "RELAY_STEP_LOG",
+    "RELAY_FRESH_CONV",
+    "RELAY_DISMISS_PERMISSIONS",
+)
+
+
 def _install_env(cfg: dict) -> Path:
     """Install the Settings-provided LLM config + Android path layout as env
     (the runtime's existing env contract), and return this run's traj root."""
     for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         if cfg.get(key):
             os.environ[key] = str(cfg[key])
+
+    for key in _PASSTHROUGH_ENV:
+        val = cfg.get(key)
+        if val is not None and str(val) != "":
+            os.environ[key] = str(val)
 
     files = _files_dir()
     relay = files / "relay"  # extracted by AssetInstaller

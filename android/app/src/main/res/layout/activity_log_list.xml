@@ -10,11 +10,9 @@
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
-        android:background="@color/brand_primary"
-        android:theme="@style/Theme.RelayAgent.AppBarOverlay"
+        style="@style/Widget.RelayAgent.Toolbar"
         app:navigationIcon="@drawable/ic_back"
-        app:title="@string/title_logs"
-        app:titleTextColor="@color/brand_on_primary" />
+        app:title="@string/title_logs" />
 
     <TextView
         android:id="@+id/empty"

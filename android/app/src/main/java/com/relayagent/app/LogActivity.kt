@@ -58,17 +58,18 @@ class LogActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: VH, position: Int) {
             val run = items[position]
-            holder.b.title.text = run.request ?: prettyName(run.dir.name)
+            val ctx = holder.b.root.context
+            holder.b.title.text = run.request ?: prettyName(ctx, run.dir.name)
             holder.b.subtitle.text = buildString {
                 append(run.createdAt ?: dateFromName(run.dir.name))
-                append("  ·  ${run.legCount} 个子任务")
+                append(ctx.getString(R.string.log_leg_count, run.legCount))
             }
             holder.b.tags.removeAllViews()
             for (app in run.apps) {
                 holder.b.tags.addView(chip(holder, AppLabels.label(app), false))
             }
             if (run.error != null) {
-                holder.b.tags.addView(chip(holder, "失败", true))
+                holder.b.tags.addView(chip(holder, ctx.getString(R.string.badge_failed), true))
             }
             holder.b.root.setOnClickListener { onClick(run) }
         }
@@ -86,9 +87,9 @@ class LogActivity : AppCompatActivity() {
                 }
             }
 
-        private fun prettyName(name: String): String {
+        private fun prettyName(ctx: android.content.Context, name: String): String {
             val i = name.indexOf("_plan_")
-            return if (i >= 0) "运行 ${name.substring(0, i)}" else name
+            return if (i >= 0) ctx.getString(R.string.log_run_title, name.substring(0, i)) else name
         }
 
         private fun dateFromName(name: String): String {

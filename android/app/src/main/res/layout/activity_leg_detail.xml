@@ -10,11 +10,9 @@
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
-        android:background="@color/brand_primary"
-        android:theme="@style/Theme.RelayAgent.AppBarOverlay"
+        style="@style/Widget.RelayAgent.Toolbar"
         app:navigationIcon="@drawable/ic_back"
-        app:title="@string/title_leg"
-        app:titleTextColor="@color/brand_on_primary" />
+        app:title="@string/title_leg" />
 
     <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"

@@ -39,10 +39,10 @@ class LegDetailActivity : AppCompatActivity() {
 
         ui.legMeta.text = buildString {
             val status = leg.goalStatus ?: leg.verdictStatus
-            if (status != null) append("状态：${LegFormat.statusText(status)}\n")
-            append(LegFormat.meta(leg))
-            leg.lastAction?.let { append("\n末动作：$it") }
-            leg.verdictReason?.let { append("\n判定：$it") }
+            if (status != null) append(getString(R.string.leg_status_line, LegFormat.statusText(this@LegDetailActivity, status)))
+            append(LegFormat.meta(this@LegDetailActivity, leg))
+            leg.lastAction?.let { append(getString(R.string.leg_last_action, it)) }
+            leg.verdictReason?.let { append(getString(R.string.leg_verdict, it)) }
         }
 
         val reply = leg.reply?.trim()
@@ -79,7 +79,7 @@ class LegDetailActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: VH, position: Int) {
             val step = items[position]
-            holder.b.stepNum.text = "步骤 ${step.n}"
+            holder.b.stepNum.text = holder.b.root.context.getString(R.string.step_label, step.n)
             holder.b.actionType.text = step.actionType
             holder.b.actionDetail.text = formatAction(step)
 

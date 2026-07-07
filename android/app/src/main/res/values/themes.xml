@@ -5,17 +5,40 @@
         <item name="colorPrimary">@color/brand_primary</item>
         <item name="colorPrimaryDark">@color/brand_primary_dark</item>
         <item name="colorOnPrimary">@color/brand_on_primary</item>
+        <item name="colorPrimaryContainer">@color/brand_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/brand_on_primary_container</item>
         <item name="colorSecondary">@color/brand_secondary</item>
         <item name="android:colorBackground">@color/surface</item>
         <item name="colorSurface">@color/surface</item>
         <item name="colorSurfaceVariant">@color/surface_variant</item>
         <item name="colorOnSurface">@color/on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/on_surface_muted</item>
         <item name="colorOutline">@color/outline</item>
-        <item name="android:statusBarColor">@color/brand_primary</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">?attr/colorSurface</item>
+        <item name="android:navigationBarColor">?attr/colorSurface</item>
+        <item name="android:windowLightStatusBar">@bool/light_system_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/light_system_bars</item>
     </style>
 
-    <!-- Toolbar text/icons read on the brand-colored bar. -->
+    <!-- Flat, surface-colored toolbar (Claude / ChatGPT style) — the brand
+         color is reserved for actions, not chrome. -->
+    <style name="Widget.RelayAgent.Toolbar" parent="Widget.Material3.Toolbar">
+        <item name="android:background">?attr/colorSurface</item>
+        <item name="titleTextColor">?attr/colorOnSurface</item>
+        <item name="titleTextAppearance">@style/TextAppearance.Material3.TitleLarge</item>
+        <item name="navigationIconTint">?attr/colorOnSurface</item>
+        <item name="android:elevation">0dp</item>
+    </style>
+
+    <!-- Section label above grouped content. -->
+    <style name="TextAppearance.RelayAgent.SectionLabel" parent="TextAppearance.Material3.LabelLarge">
+        <item name="android:textColor">@color/on_surface_muted</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.06</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
+    <!-- Kept for any legacy reference; no longer used by toolbars. -->
     <style name="Theme.RelayAgent.AppBarOverlay" parent="ThemeOverlay.Material3.Dark" />
 
 </resources>

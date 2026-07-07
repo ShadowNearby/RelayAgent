@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A chat bubble (the agent) with a forward "relay" arrow inside: the app
+     hands a natural-language task forward across other apps. Content sits well
+     inside the adaptive-icon safe zone (center 72x72 of 108). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Bubble body (white) with a tail at the bottom-left. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M43,33 H66 A14,14 0 0 1 80,47 V60 A14,14 0 0 1 66,74 H53 L43,86 L46,74 H43 A14,14 0 0 1 29,60 V47 A14,14 0 0 1 43,33 Z" />
+    <!-- Relay arrow (brand indigo). -->
+    <path
+        android:strokeColor="#4038A8"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M42,53.5 H64" />
+    <path
+        android:strokeColor="#4038A8"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M57,46.5 L66,53.5 L57,60.5" />
+</vector>

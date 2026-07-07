@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark theme: lighter brand tone so it reads as an accent on dark
+         surfaces; deep neutral surfaces tuned to the indigo brand. -->
+    <color name="brand_primary">#B6B2FF</color>
+    <color name="brand_primary_dark">#9D98F5</color>
+    <color name="brand_on_primary">#23204A</color>
+    <color name="brand_primary_container">#33305E</color>
+    <color name="brand_on_primary_container">#E3E1FF</color>
+    <color name="brand_secondary">#5BD6C4</color>
+
+    <color name="brand_gradient_start">#6D6BE6</color>
+    <color name="brand_gradient_end">#2F2A78</color>
+
+    <color name="surface">#121218</color>
+    <color name="surface_variant">#1E1D29</color>
+    <color name="surface_container">#1A1A24</color>
+    <color name="on_surface">#E7E2EE</color>
+    <color name="on_surface_muted">#A7A4B6</color>
+    <color name="outline">#34323F</color>
+
+    <color name="status_ok">#5BE0A0</color>
+    <color name="status_bad">#FF8A8A</color>
+
+    <color name="overlay_scrim">#D9000008</color>
+    <color name="overlay_panel">#F2161522</color>
+</resources>

@@ -54,7 +54,7 @@ class RunDetailActivity : AppCompatActivity() {
                 append(run.apps.joinToString("、") { AppLabels.label(it) })
             }
             if (isNotEmpty()) append("  ·  ")
-            append("${legs.size} 个子任务")
+            append(getString(R.string.leg_count, legs.size))
         }
 
         ui.list.layoutManager = LinearLayoutManager(this)
@@ -80,13 +80,14 @@ class RunDetailActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: VH, position: Int) {
             val leg = items[position]
+            val ctx = holder.b.root.context
             holder.b.legTitle.text = LegFormat.title(leg)
-            holder.b.legMeta.text = LegFormat.meta(leg)
+            holder.b.legMeta.text = LegFormat.meta(ctx, leg)
 
             val status = leg.goalStatus ?: leg.verdictStatus
             if (status != null) {
                 holder.b.statusBadge.visibility = ViewGroup.VISIBLE
-                holder.b.statusBadge.text = LegFormat.statusText(status)
+                holder.b.statusBadge.text = LegFormat.statusText(ctx, status)
                 holder.b.statusBadge.setBackgroundColor(LegFormat.statusColor(status))
             } else {
                 holder.b.statusBadge.visibility = ViewGroup.GONE
@@ -113,17 +114,17 @@ object LegFormat {
         return if (app != null) "$name · $app" else name
     }
 
-    fun meta(leg: TrajLog.Leg): String = buildString {
-        append("${leg.steps} 步")
+    fun meta(ctx: android.content.Context, leg: TrajLog.Leg): String = buildString {
+        append(ctx.getString(R.string.step_count, leg.steps))
         leg.wallSeconds?.let { append("  ·  ${"%.1f".format(it)}s") }
         leg.totalTokens?.let { append("  ·  $it tokens") }
         leg.capability?.let { append("  ·  $it") }
     }
 
-    fun statusText(status: String): String = when (status.lowercase()) {
-        "complete", "success", "pass" -> "完成"
-        "infeasible", "fail", "failed" -> "失败"
-        "unknown" -> "未判定"
+    fun statusText(ctx: android.content.Context, status: String): String = when (status.lowercase()) {
+        "complete", "success", "pass" -> ctx.getString(R.string.verdict_complete)
+        "infeasible", "fail", "failed" -> ctx.getString(R.string.verdict_failed)
+        "unknown" -> ctx.getString(R.string.verdict_unknown)
         else -> status
     }
 

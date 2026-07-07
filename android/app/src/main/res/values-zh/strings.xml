@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RelayAgent</string>
+    <string name="a11y_service_description">RelayAgent 通过无障碍服务读取屏幕内容并代你操作其他 App（点击 / 滑动 / 输入），以完成你下达的自然语言任务。仅在你主动发起任务时工作。</string>
+    <string name="notif_channel_capture">屏幕采集</string>
+    <string name="notif_capture_text">RelayAgent 正在采集屏幕以驱动任务</string>
+
+    <!-- Main -->
+    <string name="title_main">RelayAgent</string>
+    <string name="main_greeting">需要我帮你做点什么？</string>
+    <string name="main_subtitle">用一句话描述任务，我会跨 App 帮你完成。</string>
+    <string name="goal_hint">用一句话描述任务</string>
+    <string name="goal_helper">例如：帮我找一台适合学生的平板电脑，预算2000以内</string>
+    <string name="action_run">运行</string>
+    <string name="action_stop">停止</string>
+    <string name="action_examples">任务示例</string>
+    <string name="action_logs">运行日志</string>
+    <string name="action_history">历史任务</string>
+    <string name="action_settings">设置</string>
+    <string name="action_open_a11y">打开无障碍设置</string>
+    <string name="section_status">运行状态</string>
+    <string name="section_live_log">实时日志</string>
+    <string name="status_a11y_on">无障碍服务已连接</string>
+    <string name="status_a11y_off">无障碍服务未开启（必须）</string>
+    <string name="status_gateway_on">LLM 网关已配置</string>
+    <string name="status_gateway_off">LLM 网关未配置（去设置填写）</string>
+    <string name="chip_a11y">无障碍</string>
+    <string name="chip_gateway">网关</string>
+    <string name="suggestions_label">试试这些</string>
+    <string name="error_goal_empty">请先输入任务</string>
+    <string name="log_stop_requested">已请求停止。</string>
+    <string name="log_capture_denied">屏幕采集授权被拒绝，无法运行。</string>
+    <string name="log_enable_a11y_first">请先在系统设置里开启 RelayAgent 的无障碍服务。</string>
+    <string name="log_run_prefix">▶ %s</string>
+    <string name="log_result_prefix">结果: %s</string>
+
+    <!-- Conversation thread -->
+    <string name="composer_hint">把任务交给我…</string>
+    <string name="composer_send">发送</string>
+    <string name="greeting_title">你好，把任务交给我</string>
+    <string name="greeting_sub">我会规划步骤、打开对应 App 并代你操作，关键确认交还给你。试试：</string>
+    <string name="working_title">正在执行…</string>
+    <string name="working_done_title">执行结束</string>
+    <string name="working_stopping">正在停止…</string>
+    <string name="notice_stop_requested">已请求停止，正在收尾当前步骤。</string>
+    <string name="notice_waiting_answer">代理在等待你的回答——请在悬浮面板里输入或点「我来接管」。</string>
+    <string name="notice_answer_received">已收到回答，继续执行。</string>
+    <string name="notice_consent_denied">屏幕采集授权被拒绝，任务未开始。</string>
+    <string name="result_done">任务完成</string>
+    <string name="result_failed">任务失败</string>
+    <string name="result_unsatisfiable">当前可用的 App 无法完成这个任务</string>
+    <string name="action_view_detail">查看运行详情</string>
+    <string name="banner_fix">去开启</string>
+
+    <!-- Suggestion chips -->
+    <string name="suggestion_1">帮我找一台适合学生的平板，预算2000以内</string>
+    <string name="suggestion_2">帮我点三杯蜜雪冰城蜜桃四季春</string>
+    <string name="suggestion_3">导航回家，避开高速</string>
+
+    <!-- Settings -->
+    <string name="title_settings">设置</string>
+    <string name="settings_hint">这些值是端侧版的 .env，保存在加密存储里，用于连接运行时。</string>
+    <string name="action_save">保存</string>
+    <string name="settings_saved">设置已保存</string>
+
+    <string name="settings_section_llm">LLM 网关</string>
+    <string name="settings_section_runtime">运行参数</string>
+    <string name="settings_section_capture">截图与回复捕获</string>
+    <string name="settings_section_behavior">行为</string>
+    <string name="settings_section_appearance">外观</string>
+
+    <string name="settings_runtime_hint">每步耗时与步数预算。留空则用默认值。</string>
+    <string name="setting_max_step">最大步数</string>
+    <string name="setting_max_step_helper">-1 表示不限</string>
+    <string name="setting_step_wait">每步前等待（秒）</string>
+    <string name="setting_step_wait_helper">RELAY_STEP_WAIT · 默认 0.5</string>
+    <string name="setting_wait_seconds">wait 动作睡眠（秒）</string>
+    <string name="setting_wait_seconds_helper">RELAY_WAIT_SECONDS · 默认 0.2</string>
+
+    <string name="setting_capture_full">滚动捕获完整回复</string>
+    <string name="setting_capture_full_desc">对多卡片回复滚动以读全部内容；关闭则只读首屏可见内容。</string>
+    <string name="setting_scroll_ratio">捕获滚动幅度</string>
+    <string name="setting_scroll_ratio_helper">RELAY_CAPTURE_SCROLL_RATIO · 0.1–0.5</string>
+    <string name="setting_crop_top">顶部裁剪比例</string>
+    <string name="setting_crop_top_helper">RELAY_CROP_TOP · 默认 0.08（状态栏）</string>
+    <string name="setting_crop_bottom">底部裁剪比例</string>
+    <string name="setting_crop_bottom_helper">RELAY_CROP_BOTTOM · 默认 0.18（输入栏）</string>
+
+    <string name="setting_step_log">逐步轨迹日志</string>
+    <string name="setting_step_log_desc">为每步保存截图、动作和点击位置。性能测试建议关闭。</string>
+    <string name="setting_fresh_conv">每个任务全新会话</string>
+    <string name="setting_fresh_conv_desc">打开 App 后清空应用内 agent 的历史对话。</string>
+    <string name="setting_dismiss_perms">自动关闭权限弹窗</string>
+    <string name="setting_dismiss_perms_desc">自动点击系统权限弹窗的「允许」（绝不点「拒绝」）。</string>
+
+    <string name="setting_language">语言</string>
+    <string name="setting_theme">主题</string>
+    <string name="lang_system">跟随系统</string>
+    <string name="lang_zh">中文</string>
+    <string name="lang_en">English</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+
+    <!-- Examples -->
+    <string name="title_examples">任务示例</string>
+    <string name="examples_hint">来自 RelayBench / AndroidDaily 基准，点按填入任务框</string>
+
+    <!-- Logs -->
+    <string name="title_logs">运行日志</string>
+    <string name="title_run">运行详情</string>
+    <string name="title_leg">子任务详情</string>
+    <string name="logs_empty">还没有运行记录。跑一个任务后，轨迹日志会出现在这里。</string>
+    <string name="steps_empty">这条子任务没有逐步截图（步骤日志可能被关闭）。</string>
+    <string name="label_request">任务</string>
+    <string name="label_legs">子任务</string>
+    <string name="label_steps">步骤轨迹</string>
+    <string name="label_reply">回复</string>
+    <string name="action_raw_files">查看原始文件</string>
+    <string name="badge_failed">失败</string>
+    <string name="log_run_title">运行 %s</string>
+    <string name="log_leg_count">  ·  %d 个子任务</string>
+    <string name="leg_count">%d 个子任务</string>
+    <string name="step_count">%d 步</string>
+    <string name="raw_items_subtitle">%1$d 项 · %2$s</string>
+    <string name="verdict_complete">完成</string>
+    <string name="verdict_failed">失败</string>
+    <string name="verdict_unknown">未判定</string>
+    <string name="leg_status_line">状态：%s\n</string>
+    <string name="leg_last_action">\n末动作：%s</string>
+    <string name="leg_verdict">\n判定：%s</string>
+    <string name="step_label">步骤 %d</string>
+    <string name="file_not_found">文件不存在</string>
+    <string name="read_error">无法读取：%s</string>
+
+    <!-- Overlay -->
+    <string name="overlay_idle">RelayAgent 待命</string>
+    <string name="overlay_leg_start">▷ 子任务 %s</string>
+    <string name="overlay_leg_start_app">▷ 子任务 %1$s：%2$s</string>
+    <string name="overlay_leg_end">✓ 子任务 %s 完成</string>
+    <string name="overlay_step_status">步骤 %1$d · %2$s</string>
+    <string name="overlay_input_hint">输入回答…</string>
+    <string name="overlay_answer">回答</string>
+    <string name="overlay_takeover">我来接管</string>
+</resources>

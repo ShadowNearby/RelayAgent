@@ -88,7 +88,8 @@ class RawLogActivity : AppCompatActivity() {
             if (f.isDirectory) {
                 holder.b.icon.text = "📁"
                 val n = f.listFiles()?.size ?: 0
-                holder.b.subtitle.text = "$n 项 · ${fmt.format(Date(f.lastModified()))}"
+                holder.b.subtitle.text =
+                    holder.b.root.context.getString(R.string.raw_items_subtitle, n, fmt.format(Date(f.lastModified())))
             } else {
                 holder.b.icon.text = iconFor(f.name)
                 holder.b.subtitle.text =

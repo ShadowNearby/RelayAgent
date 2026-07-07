@@ -30,7 +30,7 @@ class LogDetailActivity : AppCompatActivity() {
         ui.toolbar.title = file?.name ?: getString(R.string.title_logs)
 
         if (file == null || !file.exists()) {
-            ui.text.text = "文件不存在"
+            ui.text.text = getString(R.string.file_not_found)
             return
         }
 
@@ -51,7 +51,7 @@ class LogDetailActivity : AppCompatActivity() {
         val raw = try {
             file.readText()
         } catch (e: Exception) {
-            return "无法读取：$e"
+            return getString(R.string.read_error, e.toString())
         }
         val trimmed = raw.trimStart()
         return try {

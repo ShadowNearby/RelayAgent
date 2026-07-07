@@ -21,7 +21,10 @@
 
     <application
         android:name=".RelayApp"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
+        android:localeConfig="@xml/locales_config"
         android:theme="@style/Theme.RelayAgent"
         android:usesCleartextTraffic="true">
         <!-- usesCleartextTraffic: the in-lab LLM gateway is plain HTTP.
@@ -61,5 +64,17 @@
             android:name=".ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- AppCompat per-app locale backport: persists the selected language
+             across process restarts (paired with AppCompatDelegate
+             .setApplicationLocales in SettingsActivity). -->
+        <service
+            android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
+            android:enabled="false"
+            android:exported="false">
+            <meta-data
+                android:name="autoStoreLocales"
+                android:value="true" />
+        </service>
     </application>
 </manifest>

@@ -44,7 +44,7 @@ object OverlayController {
         if (chip != null) return@post
         val wm = service.getSystemService(WindowManager::class.java)
         val view = TextView(service).apply {
-            text = "RelayAgent 待命"
+            text = service.getString(R.string.overlay_idle)
             setTextColor(Color.WHITE)
             setBackgroundResource(R.drawable.bg_overlay_chip)
             textSize = 12f
@@ -76,17 +76,26 @@ object OverlayController {
 
     /** Turn a status event JSON into a short human line for the chip + log. */
     private fun humanize(json: String): String = try {
+        val ctx = RelayAccessibilityService.instance
         val o = JSONObject(json)
         when (o.optString("event")) {
             "leg_start" -> {
                 val app = o.optString("app").takeIf { it.isNotEmpty() }
-                "▷ 子任务 ${o.optString("id")}" + (if (app != null) "：$app" else "")
+                val id = o.optString("id")
+                when {
+                    ctx == null -> "▷ $id" + (if (app != null) ": $app" else "")
+                    app != null -> ctx.getString(R.string.overlay_leg_start_app, id, app)
+                    else -> ctx.getString(R.string.overlay_leg_start, id)
+                }
             }
-            "leg_end" -> "✓ 子任务 ${o.optString("id")} 完成"
+            "leg_end" -> ctx?.getString(R.string.overlay_leg_end, o.optString("id"))
+                ?: "✓ ${o.optString("id")}"
             "step" -> {
                 val thought = o.optString("thought").replace("\n", " ").take(80)
-                "步骤 ${o.optInt("step")} · ${o.optString("action_type")}" +
-                    (if (thought.isNotEmpty()) " · $thought" else "")
+                val head = ctx?.getString(
+                    R.string.overlay_step_status, o.optInt("step"), o.optString("action_type")
+                ) ?: "${o.optInt("step")} · ${o.optString("action_type")}"
+                head + (if (thought.isNotEmpty()) " · $thought" else "")
             }
             else -> json.take(120)
         }
@@ -122,7 +131,7 @@ object OverlayController {
                 setTextColor(Color.WHITE)
                 setHintTextColor(0x99FFFFFF.toInt())
                 setBackgroundResource(R.drawable.bg_overlay_input)
-                hint = "输入回答…"
+                hint = service.getString(R.string.overlay_input_hint)
                 val lp = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -146,13 +155,13 @@ object OverlayController {
                 latch.countDown()
             }
             buttons.addView(Button(service).apply {
-                this.text = "回答"
+                this.text = service.getString(R.string.overlay_answer)
                 setOnClickListener { finish(input.text.toString()) }
             })
             buttons.addView(Button(service).apply {
                 // Take-over: maps to the EOF/None handoff terminal — the user
                 // finishes the task by hand and the run ends as a success.
-                this.text = "我来接管"
+                this.text = service.getString(R.string.overlay_takeover)
                 setOnClickListener { finish(null) }
             })
             panel.addView(label)
