@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Outgoing task bubble, right-aligned like a chat app. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:paddingVertical="6dp">
+
+    <Space
+        android:layout_width="0dp"
+        android:layout_height="1dp"
+        android:layout_weight="1" />
+
+    <TextView
+        android:id="@+id/text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="48dp"
+        android:background="@drawable/bg_chat_user"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="10dp"
+        android:textColor="@color/brand_on_primary"
+        android:textIsSelectable="true"
+        android:textSize="15sp" />
+</LinearLayout>

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from agents.flow.flow_runner_util import MW_STEP_TYPE, _VAR_RE
+from agents.flow.flow_runner_util import MW_STEP_TYPE, _VAR_RE, _select_from_path
 
 
 def _is_ask_user(step: dict) -> bool:
@@ -87,7 +87,10 @@ def _bind_referenced_later(bind: str, steps: list, start_idx: int) -> bool:
         if not isinstance(step, dict):
             continue
         if _is_ask_user(step):
-            if step.get("select_from") == bind:
+            sel = step.get("select_from")
+            # `{var}` / `var.field` spellings resolve to the root bind name,
+            # via the same helper the validator and the runner use.
+            if isinstance(sel, str) and (_select_from_path(sel) or [None])[0] == bind:
                 return True
             fields = [step.get("prompt_header", "")]
         else:

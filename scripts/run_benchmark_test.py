@@ -533,13 +533,19 @@ def _run_subprocess(cmd: list[str], sys_dir: Path, *, env: dict[str, str] | None
     t0 = time.monotonic()
     timed_out = False
     with (sys_dir / "stdout.log").open("wb") as out, (sys_dir / "stderr.log").open("wb") as err:
+        # New session so a timeout kill reaps the WHOLE tree: run_plan spawns a
+        # native-runner grandchild that keeps driving the device (and polluting
+        # the next task) if only the direct child is killed.
         proc = subprocess.Popen(cmd, cwd=REPO_ROOT, env=env, stdin=subprocess.DEVNULL,
-                                stdout=out, stderr=err)
+                                stdout=out, stderr=err, start_new_session=True)
         try:
             rc = proc.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             timed_out = True
-            proc.kill()
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
             rc = proc.wait()
     return rc, timed_out, round(time.monotonic() - t0, 1)
 

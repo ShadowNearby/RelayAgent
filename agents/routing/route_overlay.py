@@ -29,6 +29,7 @@ route_key modes (`RELAY_ROUTE_KEY_MODE`, default `b`):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -190,6 +191,32 @@ class RouteOverlay:
             logger.warning(f"route overlay unreadable at {self.path} ({e}); treating as empty")
         return {}
 
+    @contextlib.contextmanager
+    def _store_lock(self):
+        """Best-effort exclusive lock around a load-modify-write, so two
+        concurrent flows don't drop each other's verdict counts. Degrades to
+        no locking wherever flock is unavailable — the store stays advisory."""
+        fh = None
+        try:
+            import fcntl
+
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(self.path.with_name(self.path.name + ".lock"), "w")
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        except Exception:
+            if fh is not None:
+                fh.close()
+                fh = None
+        try:
+            yield
+        finally:
+            if fh is not None:
+                # fh is only non-None when the import above succeeded, so the
+                # local `fcntl` binding is guaranteed here.
+                with contextlib.suppress(Exception):
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+                fh.close()
+
     def _atomic_write(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fh = tempfile.NamedTemporaryFile(
@@ -255,23 +282,24 @@ class RouteOverlay:
         if not self.enabled or not key or not app or not cap:
             return
         try:
-            data = self._load()
-            entry = data.setdefault(key, {"intent": intent, "routes": {}})
-            if intent:
-                entry["intent"] = intent  # keep the latest readable label
-            routes = entry.setdefault("routes", {})
-            stats = routes.setdefault(
-                _pair(app, cap),
-                {"success": 0, "failure": 0, "loading": 0, "unknown": 0,
-                 "consec_fail": 0, "last_status": ""},
-            )
-            stats[status] = int(stats.get(status, 0)) + 1
-            if status == _SUCCESS:
-                stats["consec_fail"] = 0
-            elif status == _FAILURE:
-                stats["consec_fail"] = int(stats.get("consec_fail", 0)) + 1
-            stats["last_status"] = status
-            self._atomic_write(data)
+            with self._store_lock():
+                data = self._load()
+                entry = data.setdefault(key, {"intent": intent, "routes": {}})
+                if intent:
+                    entry["intent"] = intent  # keep the latest readable label
+                routes = entry.setdefault("routes", {})
+                stats = routes.setdefault(
+                    _pair(app, cap),
+                    {"success": 0, "failure": 0, "loading": 0, "unknown": 0,
+                     "consec_fail": 0, "last_status": ""},
+                )
+                stats[status] = int(stats.get(status, 0)) + 1
+                if status == _SUCCESS:
+                    stats["consec_fail"] = 0
+                elif status == _FAILURE:
+                    stats["consec_fail"] = int(stats.get("consec_fail", 0)) + 1
+                stats["last_status"] = status
+                self._atomic_write(data)
             logger.info(
                 f"route overlay recorded {app}/{cap} [{status}] for {key} "
                 f"(success={stats['success']} failure={stats['failure']} "

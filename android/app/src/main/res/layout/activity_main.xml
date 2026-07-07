@@ -1,178 +1,149 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Conversation-style home (Codex/Claude-app-like): a task thread fills the
+     screen, a pill composer is pinned to the bottom, and setup problems show
+     as a dismiss-by-fixing banner instead of a permanent status card. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?android:colorBackground">
+    android:background="?android:colorBackground"
+    android:orientation="vertical">
 
-    <com.google.android.material.appbar.AppBarLayout
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/brand_primary"
+        android:theme="@style/Theme.RelayAgent.AppBarOverlay"
+        app:title="@string/title_main"
+        app:titleTextColor="@color/brand_on_primary" />
+
+    <!-- Setup banner: only visible while a11y / gateway is missing. -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/setupBanner"
+        style="@style/Widget.Material3.CardView.Filled"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:theme="@style/Theme.RelayAgent.AppBarOverlay">
-
-        <com.google.android.material.appbar.MaterialToolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="@color/brand_primary"
-            app:title="@string/title_main"
-            app:titleTextColor="@color/brand_on_primary" />
-    </com.google.android.material.appbar.AppBarLayout>
-
-    <androidx.core.widget.NestedScrollView
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:clipToPadding="false"
-        android:padding="16dp"
-        app:layout_behavior="@string/appbar_scrolling_view_behavior">
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="10dp"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/surface_variant"
+        app:cardCornerRadius="14dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="10dp">
 
-            <!-- Status card -->
-            <com.google.android.material.card.MaterialCardView
-                style="@style/Widget.Material3.CardView.Elevated"
-                android:layout_width="match_parent"
+            <TextView
+                android:id="@+id/setupText"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                app:cardCornerRadius="18dp">
+                android:layout_weight="1"
+                android:textColor="@color/on_surface"
+                android:textSize="13sp" />
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="18dp">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/section_status"
-                        android:textColor="@color/on_surface_muted"
-                        android:textSize="13sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/statusA11y"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:textSize="15sp" />
-
-                    <TextView
-                        android:id="@+id/statusGateway"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:textSize="15sp" />
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-
-            <!-- Goal input -->
-            <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/goalLayout"
-                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-                android:layout_width="match_parent"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/setupFixBtn"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:hint="@string/goal_hint"
-                app:helperText="@string/goal_helper"
-                app:helperTextEnabled="true">
+                android:minWidth="0dp"
+                android:text="@string/banner_fix" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
 
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/goalInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="top"
-                    android:inputType="textMultiLine"
-                    android:minLines="2" />
-            </com.google.android.material.textfield.TextInputLayout>
+    <!-- Thread + empty state share the space above the composer. -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
-            <!-- Run / Stop -->
-            <LinearLayout
-                android:layout_width="match_parent"
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/chatList"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingHorizontal="12dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="12dp" />
+
+        <LinearLayout
+            android:id="@+id/emptyState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:paddingHorizontal="28dp">
+
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:orientation="horizontal">
+                android:text="@string/greeting_title"
+                android:textColor="@color/on_surface"
+                android:textSize="22sp"
+                android:textStyle="bold" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/runBtn"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="2"
-                    android:paddingVertical="12dp"
-                    android:text="@string/action_run"
-                    app:icon="@android:drawable/ic_media_play" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/stopBtn"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
-                    android:layout_weight="1"
-                    android:text="@string/action_stop" />
-            </LinearLayout>
-
-            <!-- Quick access -->
-            <LinearLayout
-                android:layout_width="match_parent"
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:orientation="horizontal">
+                android:gravity="center"
+                android:text="@string/greeting_sub"
+                android:textColor="@color/on_surface_muted"
+                android:textSize="14sp" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/examplesBtn"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/action_examples" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/logsBtn"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
-                    android:layout_weight="1"
-                    android:text="@string/action_logs" />
-            </LinearLayout>
-
-            <!-- Live log -->
-            <com.google.android.material.card.MaterialCardView
-                style="@style/Widget.Material3.CardView.Filled"
+            <LinearLayout
+                android:id="@+id/exampleChips"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
-                app:cardBackgroundColor="@color/surface_variant"
-                app:cardCornerRadius="18dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/section_live_log"
-                        android:textColor="@color/on_surface_muted"
-                        android:textSize="13sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/logView"
-                        android:layout_width="match_parent"
-                        android:layout_height="220dp"
-                        android:layout_marginTop="10dp"
-                        android:fontFamily="monospace"
-                        android:scrollbars="vertical"
-                        android:textColor="@color/on_surface"
-                        android:textSize="12sp" />
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
+                android:orientation="vertical" />
         </LinearLayout>
-    </androidx.core.widget.NestedScrollView>
-</androidx.coordinatorlayout.widget.CoordinatorLayout>
+    </FrameLayout>
+
+    <!-- Composer: rounded pill input + send/stop button. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="bottom"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="10dp">
+
+        <EditText
+            android:id="@+id/composerInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/bg_composer"
+            android:hint="@string/composer_hint"
+            android:importantForAutofill="no"
+            android:inputType="textMultiLine|textCapSentences"
+            android:maxLines="5"
+            android:minHeight="48dp"
+            android:paddingHorizontal="18dp"
+            android:paddingVertical="12dp"
+            android:textColor="@color/on_surface"
+            android:textColorHint="@color/on_surface_muted"
+            android:textSize="15sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/sendBtn"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:contentDescription="@string/composer_send"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            app:cornerRadius="24dp"
+            app:icon="@android:drawable/ic_menu_send"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp" />
+    </LinearLayout>
+</LinearLayout>

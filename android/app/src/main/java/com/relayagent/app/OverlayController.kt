@@ -66,8 +66,11 @@ object OverlayController {
 
     fun postStatus(json: String) {
         val line = humanize(json)
-        // Mirror every status event into the live log tail (MainActivity pane).
+        // Mirror every status event into the live log tail, the overlay chip,
+        // AND the typed channel the conversation UI renders its live activity
+        // card from (RunEvents parses the same JSON).
         RunLog.append(line)
+        RunEvents.dispatch(json)
         main.post { chip?.text = "RelayAgent ▶ $line" }
     }
 
@@ -102,6 +105,7 @@ object OverlayController {
         }
         val latch = CountDownLatch(1)
         val answer = AtomicReference<String?>(null)
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
         main.post {
             val wm = service.getSystemService(WindowManager::class.java)
             val panel = LinearLayout(service).apply {
@@ -130,8 +134,15 @@ object OverlayController {
                 gravity = Gravity.END
             }
             fun finish(value: String?) {
+                // Guard against double-taps: a second removeView on the same
+                // panel throws and the latch must count down exactly once.
+                if (!done.compareAndSet(false, true)) return
                 answer.set(value)
-                wm.removeView(panel)
+                try {
+                    wm.removeView(panel)
+                } catch (e: Exception) {
+                    Log.w(TAG, "ask_user: removeView failed: $e")
+                }
                 latch.countDown()
             }
             buttons.addView(Button(service).apply {
@@ -147,7 +158,14 @@ object OverlayController {
             panel.addView(label)
             panel.addView(input)
             panel.addView(buttons)
-            wm.addView(panel, panelLayoutParams())
+            try {
+                wm.addView(panel, panelLayoutParams())
+            } catch (e: Exception) {
+                // If the panel can't be shown the latch would never release
+                // and the Python worker would hang forever — treat as take-over.
+                Log.w(TAG, "ask_user: addView failed -> take-over: $e")
+                if (done.compareAndSet(false, true)) latch.countDown()
+            }
         }
         latch.await()
         return answer.get()

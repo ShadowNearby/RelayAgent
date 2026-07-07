@@ -14,6 +14,7 @@ from agents.agent.action_model import (
     ANSWER,
     ASK_USER,
     CLICK,
+    ENV_FAIL,
     FINISHED,
     INPUT_TEXT,
     OPEN_APP,
@@ -175,6 +176,11 @@ class ConstantsTests(unittest.TestCase):
         self.assertEqual(ANSWER, "answer")
         self.assertEqual(FINISHED, "finished")
         self.assertEqual(ASK_USER, "ask_user")
+
+    def test_env_fail_is_constructible(self):
+        # ENV_FAIL is a terminal type in native_runtime._TERMINAL_TYPES, so an
+        # agent must be able to emit it as an action.
+        self.assertEqual(JSONAction(action_type=ENV_FAIL).action_type, "error_env")
 
 
 if __name__ == "__main__":

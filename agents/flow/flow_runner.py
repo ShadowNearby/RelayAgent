@@ -30,6 +30,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime
@@ -57,7 +58,6 @@ from agents.flow.flow_leg_executor import (
 from agents.flow.flow_runner_util import (
     ENV_FILE,
     MW_STEP_TYPE,
-    NATIVE_RUNNER_MODULE,
     REPO_ROOT,
     RUN_MOBILEWORLD,
     _assert_output_free_step_completed,
@@ -67,6 +67,7 @@ from agents.flow.flow_runner_util import (
     _read_json_file,
     _redact,
     _resolve_choice,
+    _select_from_path,
     render,
 )
 
@@ -587,8 +588,14 @@ class FlowRunner:
         interaction = get_interaction()
 
         if "select_from" in step:
-            arr_key = step["select_from"]
-            items = self.bb.get(arr_key) or []
+            # Same normalization as the planner's validator (shared helper),
+            # so any select_from spelling that validates also runs.
+            path = _select_from_path(step["select_from"])
+            arr_key = ".".join(path)
+            value: Any = self.bb
+            for part in path:
+                value = value.get(part) if isinstance(value, dict) else None
+            items = value or []
             if not items:
                 raise RuntimeError(f"ask_user {step['id']!r}: nothing in {arr_key!r} to choose from")
             label_tpl = step.get("item_label", "{name}")
@@ -632,3 +639,4 @@ class FlowRunner:
         data = _parse_fenced_json(out)
         if "bind_to_array_key" in spec and isinstance(data, dict):
             data = data.get(spec["bind_to_array_key"], data)
+        return data

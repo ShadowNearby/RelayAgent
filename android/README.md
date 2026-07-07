@@ -33,7 +33,8 @@
 
 Material 3 主题（`res/values/themes.xml` + `colors.xml`，品牌色靛紫），viewBinding：
 
-- **主页 `MainActivity`**：状态卡（无障碍 / LLM 网关）、任务输入框（`TextInputLayout`）、运行 / 停止、**任务示例** / **运行日志** 入口、实时日志卡。设置 / 无障碍入口收进 toolbar 菜单（`menu/main.xml`）。
+- **主页 `MainActivity`（会话式，2026-07 改版，对标 Codex/Claude App）**：整屏是一条任务对话流（`RecyclerView` + `ChatThread.kt`）——用户任务是右侧气泡（`item_chat_user`），运行过程是实时活动卡（`item_chat_working`：spinner + 每条子任务一行 ▸/✓ + 当前步骤行，由 `RunEvents` 喂），结果是左侧结果卡（`item_chat_answer`：成败标注 + 回复文本 + 「查看运行详情」跳 `RunDetailActivity`）。底部常驻胶囊输入栏，运行中发送键变停止键；空线程显示问候语 + 3 条示例建议（读 `res/raw/examples.json`）。无障碍 / 网关未就绪时顶部横幅提示（点「去开启」直达设置），历史任务 / 任务示例 / 设置收进 toolbar（`menu/main.xml`）。对话线程存内存单例 `ChatStore`（同 `RunLog` 模式），持久记录仍在轨迹日志查看器。
+- **`RunEvents.kt`**：`emit_status` JSON → 类型化事件总线（`LegStart`/`Step`/`LegEnd`/`AskUser`/`AskAnswered`），`OverlayController.postStatus` 分发（悬浮 chip / RunLog / 对话流三路同源）；`DeviceBridge.askUser` 阻塞前后补发 ask 事件，线程里能看到「等待你的回答」。
 - **任务示例 `ExamplesActivity`**：读 `res/raw/examples.json`（50 条：30 RelayBench + 20 AndroidDaily，由 `scripts/android/gen_app_examples.py` 从 `benchmark/` 生成），卡片 + 标签（来源 / App / 类别 / 难度），点按回填任务框。改基准后重跑脚本即可刷新。
 - **运行日志（结构化查看器）**：三级——`LogActivity`（运行列表：任务原文 / 时间 / App 标签 / 子任务数，新→旧）→ `RunDetailActivity`（一次运行的任务卡 + 各子任务卡：状态徽章 / 步数 / 墙钟 / token / 回复预览）→ `LegDetailActivity`（步骤时间线：每步标注截图缩略图 + action 类型 + 坐标/参数 + thought，点缩略图全屏看帧）。解析在 `TrajLog.kt`（吃 `meta.json` / `summary.json` / `wall_clock.json` / `agent_reply.json` / `leg_verdict.json` / `steps/steps.json`，缺字段优雅降级），App 名映射在 `AppLabels.kt`。原始文件树退到 toolbar 溢出菜单「查看原始文件」→ `RawLogActivity`（+ `LogDetailActivity` 渲染单文件：JSON 美化 / PNG 进 ImageView）。`entry.py` 落 `meta.json`（任务原文 + kind），查看器才能显示「这是什么任务」。主页实时日志卡只是当次运行的 tail。
 - **实时日志**：`RunLog` 单例滚动缓冲。`OverlayController.postStatus` 把 `emit_status` 事件（`leg_start` / `leg_end` / `step`）格式成中文短行，同时喂悬浮 chip 和主页日志卡。悬浮 chip / ask_user 面板用圆角 drawable。

@@ -48,14 +48,14 @@ from agents.routing.locale_policy import (
 # `_VAR_RE` (the `{var}` / `{var.field}` matcher) and the fenced-JSON parser
 # are shared with the runner so the planner validates exactly what the runner
 # will later template against.
-from agents.flow.flow_runner_util import _VAR_RE, _parse_fenced_json
+from agents.flow.flow_runner_util import _VAR_RE, _parse_fenced_json, _select_from_path
 
 # MobileWorld fallback + plan-shape/template helpers split out of this module;
 # re-exported here so `flow_planner` stays the public facade (tests import
 # MW_STEP_TYPE / _to_mw_leg / _mw_whole_request_plan from here, and the class
 # below uses every name as a module global).
 from agents.flow.flow_planner_mw import (
-    MW_STEP_TYPE,
+    MW_STEP_TYPE,  # noqa: F401 — re-exported (tests and callers import it from here)
     _mw_whole_request_plan,
     _to_mw_leg,
     mw_fallback_enabled,
@@ -929,8 +929,9 @@ class FlowPlanner:
                 )
             else:
                 # select_from may be written as `{var}` or `var.field`; resolve to
-                # its root bind name before checking it was produced upstream.
-                root = sel.strip("{}").split(".")[0].strip()
+                # its root bind name (shared helper — same normalization the
+                # runner uses at lookup time) before checking it was produced.
+                root = (_select_from_path(sel) or [""])[0]
                 if root and root not in produced:
                     errors.append(
                         f"ask_user step {sid!r}: select_from {sel!r} is not bound by an earlier step"

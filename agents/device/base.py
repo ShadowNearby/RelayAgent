@@ -115,6 +115,14 @@ class DeviceBackend(ABC):
     @abstractmethod
     def long_press(self, x: int, y: int, *, duration_ms: int = 1000) -> None: ...
 
+    def double_tap(self, x: int, y: int, *, timeout: float = 5.0) -> None:
+        """Two quick taps at (x, y). Concrete default: two `tap` calls;
+        backends override where a tighter gap is needed for the platform to
+        register a double tap (Android combines them in one shell command —
+        two subprocess round-trips are hundreds of ms apart)."""
+        self.tap(x, y, timeout=timeout)
+        self.tap(x, y, timeout=timeout)
+
     @abstractmethod
     def swipe_gesture(
         self, x0: int, y0: int, x1: int, y1: int,
