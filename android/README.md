@@ -23,6 +23,28 @@
 2. 版本核对（**Spike A 的一部分**）：`app/build.gradle.kts` 里 Chaquopy 16.0.0 + Python 3.12 —— 若该版 Chaquopy 不支持 3.12，把 `version` 降到 `"3.11"`（`agents/` 代码 3.10+ 语法兼容；宿主仓库 `requires-python` 不受影响）。
 3. `./gradlew :app:assembleDebug`，装到 arm64 真机（minSdk 30 / Android 11+）或 x86_64 模拟器（debug 的 `abiFilters` 含 `x86_64`，正式发布可去掉减体积）。headless 构建需 `JAVA_HOME=/snap/android-studio/current/jbr ANDROID_HOME=~/Android/Sdk`。
 
+## 真机 instrumented 测试（`app/src/androidTest/`）
+
+在连接的设备（真机或 AVD）上、**App 自身进程内**跑，不需要开无障碍服务 / 屏幕采集授权 / LLM key：
+
+- `PythonRuntimeTest` — 端侧 CPython 启动；`entry.run_flow` 的 import 链（agents.* + relay_android.*）全部可 import；`JSONAction` 行为与宿主 `tests/test_action_model.py` 钉死的一致；从 filesDir/relay 装出的 manifests + capability matrix 能 `build_catalog`/`load_matrix` 且 app_id 相互吻合；Python 侧经 `jclass(DeviceBridge)` 读到的 filesDir 与 Kotlin 一致。
+- `AssetInstallerTest` — 资产解包到 filesDir/relay（manifests/*.yaml + matrix CSV），同版本重装是 no-op。
+- `TrajLogTest` — 合成一个 run 目录树验证 run/leg/step 解析；坏 JSON 按文档承诺优雅降级。
+- `SettingsConfigTest` — `loadConfig` 经 EncryptedSharedPreferences（真机 Keystore）往返；toggle 默认 ON、空字段保持空。**测前备份、测后还原**碰到的 key，不会抹掉设备上已配置的网关。
+- `RunEventsTest` — `emit_status` JSON → 主线程典型事件；未知/坏 payload 丢弃。
+- `MainActivitySmokeTest` — 会话式主页（composer/建议 chips/气泡渲染）+ Examples/Log/Settings 各页启动 smoke。**刻意不点「发送」**：那条路径需要无障碍服务并会弹 MediaProjection 授权。
+
+跑法（避免 `connectedAndroidTest`——它跑完会卸载 APK、连带清掉 App 数据）：
+
+```bash
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+adb install -r -t app/build/intermediates/apk/debug/app-debug.apk
+adb install -r -t app/build/intermediates/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w com.relayagent.app.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+注意：espresso-core 须 ≥3.7（旧版在 Android 15+ 反射已删除的 `InputManager.getInstance`，5 条 UI 测试会全挂）。
+
 ## Spike 清单（按序验证，详见总计划 §风险）
 
 - **Spike A（Chaquopy 可行性）**：App 启动 → Python 起来 → `import agents.agent.action_model, yaml, PIL, loguru` 成功 → 设置页填网关 → 跑一次 `relay_android.entry` 里的 LLM 直连（`RELAY_LLM_HTTP=1` 走 stdlib HTTP shim）。
