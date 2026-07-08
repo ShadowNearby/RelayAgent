@@ -91,6 +91,20 @@ class DeviceBackend(ABC):
     def screencap(self, timeout: float = 5.0) -> Any | None:
         """Fresh screenshot as a PIL.Image, or None on failure (warned)."""
 
+    def wait_settled(self, budget: float, quiet: float | None = None) -> bool:
+        """Wait until the screen stops changing, up to `budget` seconds.
+
+        Returns True when the settle was handled here (screen went quiet, or
+        the budget ran out — same worst case as a fixed sleep); False when the
+        backend has no cheap change signal, in which case the caller must fall
+        back to its fixed sleep (today's behavior). Default: no signal.
+
+        Only the host-side scrcpy streaming capture implements this (roadmap
+        P2-S2): its encoder emits frames ONLY on screen change, so "no new
+        frame for a quiet window" IS settle detection — no pixel diffing.
+        """
+        return False
+
     @abstractmethod
     def screen_size(self, timeout: float = 5.0) -> tuple[int, int]:
         """(width, height) in pixels. Cached per backend instance."""

@@ -129,6 +129,23 @@ _VISION_STEP_KINDS = frozenset({"wait_for_reply"})
 # letting the next observe happen promptly. Tunable via RELAY_POLL_SKIP_SLEEP.
 _POLL_SKIP_SLEEP = float(os.getenv("RELAY_POLL_SKIP_SLEEP", "0.3"))
 
+
+def _settle_or_sleep(seconds: float) -> None:
+    """Pacing sleep, upgraded to frame-arrival settle detection when the scrcpy
+    capture stream is live (P2-S2): returns as soon as the screen has been quiet
+    for one quiet window, worst case `seconds` — identical to the fixed sleep it
+    replaces. Any backend without the signal falls back to time.sleep."""
+    if seconds <= 0:
+        return
+    try:
+        from agents.device.factory import get_backend
+
+        handled = get_backend().wait_settled(seconds)
+    except Exception:  # noqa: BLE001 — pacing must never raise into predict
+        handled = False
+    if not handled:
+        time.sleep(seconds)
+
 # Where this run's trajectory lands (see CLAUDE.md). Defaults to the shared
 # global dir; the flow runner pins it per leg via RELAY_TRAJ_DIR so traj.json /
 # agent_reply.json land straight in the leg's dir (no global user_task copy).
@@ -556,7 +573,7 @@ class RelayAgent(_MCPAgentBase):
             if nxt is None or nxt.kind not in _VISION_STEP_KINDS:
                 action.action_json = {**(action.action_json or {}), "skip_screenshot": True}
                 if _BLIND_STEP_SLEEP > 0:
-                    time.sleep(_BLIND_STEP_SLEEP)
+                    _settle_or_sleep(_BLIND_STEP_SLEEP)
 
         note = step.note + (f"; {extra_note}" if extra_note else "")
         # Display 1-based index of the CURRENT step (the one we just emitted
@@ -901,7 +918,7 @@ class RelayAgent(_MCPAgentBase):
                 if shot_changed:
                     self._reply_precheck_skips += 1
                     self._reply_precheck_skips_since_vlm += 1
-                    time.sleep(_POLL_SKIP_SLEEP)
+                    _settle_or_sleep(_POLL_SKIP_SLEEP)
                     return (
                         JSONAction(action_type="wait"),
                         False,
@@ -920,7 +937,7 @@ class RelayAgent(_MCPAgentBase):
             if self._reply_dump_cooldown_until is not None:
                 if elapsed < self._reply_dump_cooldown_until:
                     self._reply_precheck_skips += 1
-                    time.sleep(_POLL_SKIP_SLEEP)
+                    _settle_or_sleep(_POLL_SKIP_SLEEP)
                     return (
                         JSONAction(action_type="wait"),
                         False,
@@ -950,7 +967,7 @@ class RelayAgent(_MCPAgentBase):
                         f"{self._reply_dump_fail_streak} consecutive dump "
                         "failures; will retry, not give up"
                     )
-                time.sleep(_POLL_SKIP_SLEEP)
+                _settle_or_sleep(_POLL_SKIP_SLEEP)
                 return (
                     JSONAction(action_type="wait"),
                     False,
@@ -971,7 +988,7 @@ class RelayAgent(_MCPAgentBase):
                 self._reply_empty_scrape_streak = 0
 
             if self._reply_text_stable_streak < STABLE_DUMPS_FOR_DONE:
-                time.sleep(_POLL_SKIP_SLEEP)
+                _settle_or_sleep(_POLL_SKIP_SLEEP)
                 return (
                     JSONAction(action_type="wait"),
                     False,
@@ -1012,7 +1029,7 @@ class RelayAgent(_MCPAgentBase):
                 # advances with no captured reply.
                 self._reply_empty_scrape_streak += 1
                 self._reply_text_stable_streak = 0
-                time.sleep(_POLL_SKIP_SLEEP)
+                _settle_or_sleep(_POLL_SKIP_SLEEP)
                 return (
                     JSONAction(action_type="wait"),
                     False,

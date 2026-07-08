@@ -74,6 +74,20 @@ Add `exclude: [(app_id, capability_id)]` to the three-stage router (enforced in 
 
 ## P2 Streaming capture + latency engineering (~2 weeks, parallel with P1 — P1 lives in the flow layer, P2 in the device layer)
 
+> **Status (2026-07-08)**: S1 shipped (`agents/device/android_stream.py`,
+> `RELAY_CAPTURE_BACKEND=scrcpy`; default screencap unchanged; PyAV via the
+> optional `stream` extra). Measured on a Pixel 9: exec-out ~2.0 s/frame →
+> **~8 ms/frame** steady-state (first frame incl. startup ~1.3 s), identical
+> resolution, content diff 0.8/255; a Tongyi QA task ran end-to-end on stream
+> frames with zero fallbacks. S2 shipped: the `DeviceBackend.wait_settled` seam
+> (default False = fixed sleeps unchanged); on the scrcpy stream, "no new frame
+> for one quiet window" = settled (the encoder only emits on change — no pixel
+> diffing) replaces all four fixed sleeps (step_wait / wait action / blind-step /
+> poll-skip), worst case spending the original budget; `RELAY_SETTLE_DETECT`(1) /
+> `RELAY_SETTLE_QUIET`(0.2 s). Measured: static-screen step settle 0.5 s→0.2 s,
+> swipe animations correctly waited out. S3 (n=3 equivalence + 30-task
+> wall-clock) still open.
+
 **Today**: screencap measures ~1.2 s/frame and is the dominant per-step cost; the fixed sleeps (step_wait 0.5 s / blind-step 0.15 s / poll-skip 0.3 s) exist precisely because frames are too expensive to poll.
 
 ### S1 scrcpy streaming backend (days 1–4)

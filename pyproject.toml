@@ -43,6 +43,11 @@ classifiers = [
 mw = ["mobile-world"]
 # Manifest schema validation (scripts/validate_manifests.py, CI).
 dev = ["jsonschema>=4.17"]
+# scrcpy streaming capture backend (agents/device/android_stream.py,
+# RELAY_CAPTURE_BACKEND=scrcpy). Host-side only — the on-device app captures
+# via MediaProjection and never imports this. PyAV decodes the raw H.264
+# stream. Install with: uv sync --no-install-project --extra stream
+stream = ["av>=12"]
 
 [project.urls]
 Homepage = "https://github.com/ShadowNearby/RelayAgent"

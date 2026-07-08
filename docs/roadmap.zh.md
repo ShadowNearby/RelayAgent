@@ -67,6 +67,8 @@
 
 ## P2 流式抓帧 + 延迟工程(~2 周,与 P1 并行;P1 在 flow 层、P2 在 device 层,互不重叠)
 
+> **状态(2026-07-08)**:S1 已落地(`agents/device/android_stream.py`,`RELAY_CAPTURE_BACKEND=scrcpy`,默认 screencap 不变;PyAV 走 optional extra `stream`)。Pixel 9 实测:exec-out ~2.0s/帧 → 流式稳态 **~8ms/帧**(首帧含启动 ~1.3s),分辨率一致、内容差 0.8/255;千问 QA 端到端全流程在流式帧源下跑通、零回退。**S2 已落地**:`DeviceBackend.wait_settled` seam(默认 False=固定 sleep 不变),scrcpy 流上用"quiet 窗口内无新帧即安定"(scrcpy 只在画面变化出帧,无需像素 diff)替换全部四类固定 sleep(step_wait / wait action / blind-step / poll-skip),最坏花满原预算;`RELAY_SETTLE_DETECT`(1)/`RELAY_SETTLE_QUIET`(0.2s)。实测静止屏 0.5s→0.2s、滑动动画正确等到安定。S3(等价性 n=3 对照 + 30 任务墙钟)待跑。
+
 **现状**:实测 screencap ~1.2s/帧是单步最大成本;step_wait 0.5s / blind-step 0.15s / poll-skip 0.3s 等固定 sleep 的存在原因正是"帧太贵,只能猜动画时长"。
 
 ### S1 scrcpy 流式后端(第 1–4 天)

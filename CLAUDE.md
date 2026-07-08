@@ -3,7 +3,7 @@
 ## Python 环境
 
 - venv 在 `.venv/`，**Python 3.12**（`pyproject.toml` 锁 `>=3.12,<3.13`，匹配现有 lock）。
-- 装依赖（不装本项目，靠 `uv run` 跑源码）：`uv venv --python 3.12 && uv sync --no-install-project --extra dev --extra mw`。`mobile-world` 已移到 optional extra `mw`（只有 A/B baseline / MW 兜底用；入口 import 链不碰它），`jsonschema` 在 extra `dev`（manifest 校验）。CI（`.github/workflows/ci.yml`）只装 `--extra dev`。
+- 装依赖（不装本项目，靠 `uv run` 跑源码）：`uv venv --python 3.12 && uv sync --no-install-project --extra dev --extra mw --extra stream`。`mobile-world` 已移到 optional extra `mw`（只有 A/B baseline / MW 兜底用；入口 import 链不碰它），`jsonschema` 在 extra `dev`（manifest 校验），`av`（PyAV）在 extra `stream`（scrcpy 流式抓帧后端，主机侧 only；缺装时该后端 warning 后回退 screencap）。CI（`.github/workflows/ci.yml`）只装 `--extra dev`。
 - **`uv lock` / `uv sync` 都必须带 `UV_DEFAULT_INDEX=https://pypi.org/simple`**：这台机器全局 `~/.config/uv/uv.toml` 的默认 index 是清华 tuna 镜像，不带覆盖连 `uv sync` 都会把 `uv.lock` 的 URL 全改回 tuna（开源仓库的 lock 保持官方 PyPI，2026-07-07 已换；实测 sync 也会重写 lock，别只在 lock 时带）。
 - 运行时是纯 Python，无外部 runner、无 server；设备 I/O 经 `agents/device/` 后端抽象（Android=直 adb，见下「Native 运行时」）。
 - **无直接 pydantic 依赖**：`action_model.py` 的 `JSONAction` 已是纯 Python（Chaquopy 无 pydantic-core 轮子；行为由 `tests/test_action_model.py` 钉死）。主机上 openai SDK 仍传递性带入 pydantic，但我们的代码不得 import 它。
@@ -66,10 +66,12 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 | `RELAY_WAIT_SECONDS` | 0.2 | `wait` action 的 sleep（`NativeEnv` 本地读）|
 | `RELAY_POLL_SKIP_SLEEP` | 0.3 | wait_for_reply skip 拍 |
 | `RELAY_STEP_LOG` | 1（开） | 每步落截图 + action + 点击位置（见下「Step 日志」）。**性能测试设 0 关掉**——它每步写 PNG，tap/swipe 还要重编码一张标注帧，是真实单步开销 |
+| `RELAY_CAPTURE_BACKEND` | screencap | `scrcpy` 换流式抓帧（P2-S1，`agents/device/android_stream.py`）：常驻 H.264 流 + PyAV 解码，`screencap()` 变读最新帧缓冲（Pixel 9 实测 ~2s→**~8ms**/帧，首帧含启动 ~1.3s）。需 extra `stream` + 主机装 scrcpy（或 `RELAY_SCRCPY_SERVER` 指 server 路径；`RELAY_SCRCPY_VERSION`/`_MAX_FPS`(10)/`_MAX_SIZE`(0=原生)/`_BIT_RATE` 微调）。任何启动/中途失败 warning 后**永久回退** exec-out screencap，不重启风暴 |
+| `RELAY_SETTLE_DETECT` | 1 | **只在 scrcpy 流活着时生效**（P2-S2）：上表所有固定 sleep（step_wait / wait / blind-step / poll-skip）升级为帧到达稳定检测——scrcpy 只在画面变化时出帧，"quiet 窗口（`RELAY_SETTLE_QUIET`，0.2s）内无新帧"即安定，最坏花满原 sleep 预算。实测静止屏 step_wait 0.5s→0.2s。seam：`DeviceBackend.wait_settled`（默认 False=回退固定 sleep，端侧/其它后端零变化） |
 
 **录屏跳每步截图（`RELAY_SKIP_STEP_SCREENSHOT`，`run_plan.py --record` 自动开）**：确定性 step 不读 incoming 截图。agent 在 `predict` look-ahead，下一步不在 `_VISION_STEP_KINDS`(=`{wait_for_reply}`) 就打 `skip_screenshot` 标 → `NativeEnv.execute_action` 复用上一帧；打标后睡 `RELAY_BLIND_STEP_SLEEP`（0.15s）吃动画。`tap_text`/`nm_ground_tap` 走 VLM 前自调 `_fresh_vision_frame()` 抓新帧。
 
-> **提速真瓶颈**（非框架）：~1.5s `adb exec-out screencap` 是单步最大成本，直 adb 换不动它；要砍得换流式抓帧后端（minicap/scrcpy，~30-50ms/帧）。这是独立优化，native 里换 `_adb.screencap()` 一个函数即可。
+> **提速真瓶颈**（非框架）：~1.5s `adb exec-out screencap` 是单步最大成本，直 adb 换不动它。**流式抓帧后端已落地**（`RELAY_CAPTURE_BACKEND=scrcpy`，见上表；roadmap P2-S1），稳态 ~8ms/帧；下一步是 S2——用帧差稳定检测（`ScrcpyStream.wait_for_new_frame` 原语已备）逐个替换固定 sleep。
 
 ## Adapter 设计要点（`agents/agent/relay_agent.py` + `agents/agent/action_planner.py`）
 

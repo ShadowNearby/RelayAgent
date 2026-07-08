@@ -14,6 +14,7 @@ from the previous run.
 from __future__ import annotations
 
 import base64
+import os
 import re
 import subprocess
 import time
@@ -79,6 +80,12 @@ class AndroidBackend(DeviceBackend):
         # Remote dump path is per-device storage, so two backends driving two
         # devices never collide; parameterized mostly for tests.
         self._remote_dump_path = "/sdcard/relay_window_dump.xml"
+        # Streaming capture backend (RELAY_CAPTURE_BACKEND=scrcpy, roadmap
+        # P2-S1). Lazily started on first screencap; a failed start or a lost
+        # stream flips _capture_stream_failed and every later frame comes from
+        # exec-out screencap again (no per-step restart storms).
+        self._capture_stream: Any | None = None
+        self._capture_stream_failed = False
 
     # -- command plumbing ----------------------------------------------------
     def adb_base(self) -> list[str]:
@@ -97,7 +104,16 @@ class AndroidBackend(DeviceBackend):
 
     # -- observation ---------------------------------------------------------
     def screencap(self, timeout: float = 5.0) -> Any | None:
-        """`adb exec-out screencap -p` → PIL.Image (or None on failure)."""
+        """Current screen → PIL.Image (or None on failure).
+
+        Default path is `adb exec-out screencap -p` (~1.2 s/frame). With
+        ``RELAY_CAPTURE_BACKEND=scrcpy`` frames come from the resident scrcpy
+        stream (milliseconds; see agents/device/android_stream.py), falling
+        back here loudly when the stream can't start or dies mid-run."""
+        if os.getenv("RELAY_CAPTURE_BACKEND", "screencap") == "scrcpy":
+            img = self._stream_frame(timeout)
+            if img is not None:
+                return img
         import io
 
         from PIL import Image
@@ -118,6 +134,78 @@ class AndroidBackend(DeviceBackend):
         except Exception as e:  # pragma: no cover — decode guard
             logger.warning(f"screencap decode failed: {e}")
             return None
+
+    def wait_settled(self, budget: float, quiet: float | None = None) -> bool:
+        """Frame-arrival settle detection off the scrcpy stream (P2-S2).
+
+        scrcpy encodes only on screen CHANGE, so "no new frame within the
+        quiet window" means the screen is static. Worst case (continuous
+        animation) spends exactly `budget` — identical to the fixed sleep it
+        replaces. Returns False (→ caller sleeps fixed) when the stream isn't
+        up or `RELAY_SETTLE_DETECT=0`.
+
+        `quiet` must exceed the encoder's inter-frame gap during motion
+        (default max_fps=10 → 100 ms), else a slow animation false-settles;
+        default 0.2 s, override via RELAY_SETTLE_QUIET.
+        """
+        stream = self._capture_stream
+        if (
+            stream is None
+            or not stream.alive
+            or os.getenv("RELAY_SETTLE_DETECT", "1") != "1"
+        ):
+            return False
+        if quiet is None:
+            quiet = float(os.getenv("RELAY_SETTLE_QUIET", "0.2"))
+        deadline = time.monotonic() + budget
+        seq = stream.frame_seq
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True  # budget spent — proceed, like the old fixed sleep
+            new_seq = stream.wait_for_new_frame(seq, min(quiet, remaining))
+            if new_seq == seq:
+                return True  # no frame for a whole quiet window → settled
+            seq = new_seq
+
+    def _stream_frame(self, timeout: float) -> Any | None:
+        """One frame off the scrcpy stream, or None (→ exec-out fallback).
+
+        Both failure modes are permanent for this backend instance and log at
+        warning (repo convention: fallbacks must be loud)."""
+        if self._capture_stream_failed:
+            return None
+        if self._capture_stream is None:
+            try:
+                from agents.device.android_stream import ScrcpyStream
+
+                stream = ScrcpyStream(self.adb_base())
+                stream.start()
+            except Exception as e:  # noqa: BLE001 — any startup issue → fallback
+                logger.warning(
+                    f"scrcpy capture backend unavailable ({e}); "
+                    f"falling back to exec-out screencap"
+                )
+                self._capture_stream_failed = True
+                return None
+            self._capture_stream = stream
+            # The device-side app_process outlives us unless closed; tie its
+            # lifetime to the process.
+            import atexit
+
+            atexit.register(stream.close)
+            logger.info(
+                f"scrcpy capture backend up (port {stream.local_port}, scid rotated per stream)"
+            )
+        img = self._capture_stream.screencap(timeout)
+        if img is None:
+            logger.warning(
+                "scrcpy stream lost; falling back to exec-out screencap for the rest of the run"
+            )
+            self._capture_stream.close()
+            self._capture_stream = None
+            self._capture_stream_failed = True
+        return img
 
     def screen_size(self, timeout: float = 5.0) -> tuple[int, int]:
         if self._screen_size_cache is not None:

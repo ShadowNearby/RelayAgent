@@ -99,7 +99,10 @@ class NativeEnv:
     # -- observation -------------------------------------------------------
     def get_screenshot(self, wait_to_stabilize: bool = False):
         if wait_to_stabilize and self.step_wait_time > 0:
-            time.sleep(self.step_wait_time)
+            # Settle detection returns as soon as the screen goes quiet
+            # (scrcpy stream only; P2-S2); otherwise the fixed sleep as before.
+            if not self.backend.wait_settled(self.step_wait_time):
+                time.sleep(self.step_wait_time)
         img = None
         for attempt in range(3):
             img = self.backend.screencap()
@@ -179,7 +182,8 @@ class NativeEnv:
         elif at == OPEN_APP:
             self._open_app(action.app_name)
         elif at == WAIT:
-            time.sleep(self._wait_seconds)
+            if not self.backend.wait_settled(self._wait_seconds):
+                time.sleep(self._wait_seconds)
         elif at in (ANSWER, STATUS):
             pass  # device no-op; loop handles termination/answer text
         else:
