@@ -44,6 +44,13 @@ LOADING = "loading"        # still in progress — outcome not yet determined
 UNKNOWN = "unknown"        # judge could not run / unparseable
 _VALID = {SUCCESS, FAILURE, LOADING}
 
+# Failure sub-classification (only meaningful when status == FAILURE). Feeds
+# the recovery ladder (leg_recovery): a wrong-feature failure starts at the
+# reroute tier, an app-error failure starts at the retry tier.
+WRONG_FEATURE = "wrong_feature"  # landed in the wrong feature / answered off-goal
+APP_ERROR = "app_error"          # right feature, but the app side didn't deliver
+_VALID_FAILURE_KINDS = {WRONG_FEATURE, APP_ERROR}
+
 _BASE = (
     "You evaluate how a phone assistant's attempt at ONE delegated subtask turned "
     "out. You are given the subtask's goal, the assistant's final text reply (if "
@@ -78,8 +85,16 @@ def _system(handoff: bool) -> str:
           "login/permission wall, or it answers a different question than asked.\n"
         + 'Favor "loading" over a guess when the screen is clearly still in '
           "progress.\n"
+        + 'When (and only when) status is "failure", also set "failure_kind" to '
+          "EXACTLY one of:\n"
+        + '- "wrong_feature": the assistant went to the wrong feature or answered '
+          "a different question than asked — the content is off-goal.\n"
+        + '- "app_error": the assistant addressed the right thing but the app '
+          "side did not deliver — an error message, empty result, login/"
+          "permission wall, risk-control block, timeout, or crash.\n"
         + "Output ONE JSON object inside a ```json``` fence, no prose outside it:\n"
-        + '{"status": "loading"|"success"|"failure", "reason": "<one concise sentence>"}'
+        + '{"status": "loading"|"success"|"failure", "reason": "<one concise sentence>", '
+          '"failure_kind": "wrong_feature"|"app_error" (failure only)}'
     )
 
 
@@ -97,10 +112,12 @@ class LegVerdict:
 
     `status` is the primary field (`success`/`failure`/`loading`/`unknown`).
     `score` derives MobileWorld's convention (1.0 success / 0.0 failure; -1.0 for
-    loading/unknown, i.e. no conclusive outcome)."""
+    loading/unknown, i.e. no conclusive outcome). `failure_kind` sub-classifies
+    a FAILURE (`wrong_feature`/`app_error`, else "") for the recovery ladder."""
 
     status: str
     reason: str
+    failure_kind: str = ""
 
     @property
     def score(self) -> float:
@@ -116,7 +133,12 @@ class LegVerdict:
         return self.status in (SUCCESS, FAILURE)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"status": self.status, "score": self.score, "reason": self.reason}
+        out: dict[str, Any] = {
+            "status": self.status, "score": self.score, "reason": self.reason,
+        }
+        if self.failure_kind:
+            out["failure_kind"] = self.failure_kind
+        return out
 
 
 def final_frames(leg_dir: Path, n: int = 2) -> list[Path]:
@@ -251,16 +273,17 @@ def judge_leg(
         logger.warning(f"leg judge returned unparseable output for {app}/{capability}: {raw!r}")
         return LegVerdict(UNKNOWN, "unparseable judge output")
 
-    status, reason = parsed
+    status, reason, failure_kind = parsed
     kind = "handoff" if handoff else "outcome"
-    logger.info(f"leg judge {app}/{capability} [{kind}]: {status.upper()} — {reason}")
-    return LegVerdict(status, reason)
+    suffix = f" [{failure_kind}]" if failure_kind else ""
+    logger.info(f"leg judge {app}/{capability} [{kind}]: {status.upper()}{suffix} — {reason}")
+    return LegVerdict(status, reason, failure_kind)
 
 
-def _parse_verdict(raw: str) -> tuple[str, str] | None:
-    """Pull `{status, reason}` out of the model's reply; None if unrecoverable.
-
-    Tolerates a legacy `{"success": bool}` shape by mapping it to status."""
+def _parse_verdict(raw: str) -> tuple[str, str, str] | None:
+    """Pull `{status, reason, failure_kind}` out of the model's reply; None if
+    unrecoverable. Tolerates a legacy `{"success": bool}` shape by mapping it
+    to status. `failure_kind` is kept only for FAILURE and only when valid."""
     if not raw:
         return None
     m = _FENCE_RE.search(raw) or _OBJ_RE.search(raw)
@@ -273,18 +296,22 @@ def _parse_verdict(raw: str) -> tuple[str, str] | None:
         return None
     reason = str(data.get("reason", "")).strip()
     status = str(data.get("status", "")).strip().lower()
+    fk = str(data.get("failure_kind", "")).strip().lower()
+    if status != FAILURE or fk not in _VALID_FAILURE_KINDS:
+        fk = ""
     if status in _VALID:
-        return status, reason
+        return status, reason, fk
     if "success" in data:  # legacy boolean shape
-        return (SUCCESS if bool(data["success"]) else FAILURE), reason
+        return (SUCCESS if bool(data["success"]) else FAILURE), reason, ""
     return None
 
 
 _STATUS_SALVAGE_RE = re.compile(r'"status"\s*:\s*"(success|failure|loading)"')
 _REASON_SALVAGE_RE = re.compile(r'"reason"\s*:\s*"([^"]*)')
+_FAILURE_KIND_SALVAGE_RE = re.compile(r'"failure_kind"\s*:\s*"(wrong_feature|app_error)"')
 
 
-def _salvage_verdict(raw: str) -> tuple[str, str] | None:
+def _salvage_verdict(raw: str) -> tuple[str, str, str] | None:
     """JSON 不可解析（典型：max_tokens 把 ```json 块截断在字符串中间）时，
     直接从残文里捞 status；reason 尽量带上截断前缀。"""
     m = _STATUS_SALVAGE_RE.search(raw)
@@ -292,4 +319,6 @@ def _salvage_verdict(raw: str) -> tuple[str, str] | None:
         return None
     rm = _REASON_SALVAGE_RE.search(raw)
     reason = (rm.group(1).strip() if rm else "") or "(salvaged from truncated judge output)"
-    return m.group(1), reason
+    fm = _FAILURE_KIND_SALVAGE_RE.search(raw)
+    fk = fm.group(1) if (fm and m.group(1) == FAILURE) else ""
+    return m.group(1), reason, fk

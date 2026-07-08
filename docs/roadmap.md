@@ -31,7 +31,7 @@ Internal phase-B real-device A/B runs (186 tasks, preliminary, mixed manual judg
 Recovery strategy depends on why the leg failed. At the point where hard signals and the leg judge converge, emit a structured `failure_kind`:
 
 - `env_fail` — device/IME/adb layer → **never retry**; stop and report a device problem;
-- `route_fail` — judge says "answered the wrong thing / landed in the wrong feature" → start at the reroute tier;
+- `route_fail` — judge says "answered the wrong thing / landed in the wrong feature" → one reworded retry first (cheaper than rerouting), then reroute;
 - `app_fail` — entry path was right but the app side didn't finish (risk-control wall / timeout / crash) → start at the retry tier;
 - `judge_uncertain` — a reply exists but confidence is low → one retry, no escalation.
 

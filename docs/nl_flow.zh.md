@@ -112,6 +112,16 @@ NL request
 
 第一个 step 之前，`nl_flow.execute_plan` 会把 plan 涉及的所有 App 先 force-stop 一遍（best-effort，kill 失败不阻塞运行），保证没有 leg 接到后台残留的旧会话。`RELAY_PREKILL_APPS=0` 关。
 
+### 6.1 执行期失败恢复（`leg_recovery`，默认开）
+
+app leg 失败不再直接杀掉整条 flow：`FlowRunner` 先给失败定类，再爬一个有预算上限的梯子——**重试**（同 app 同 capability、fresh conversation；`route_fail` 的重试先用一次廉价 LLM 调用换措辞，`prompt_template` 能力除外——模板措辞固定不许改）→ **换路由**（三段式 router 重跑，排除已失败的 (app, capability) 对；v1 跳过带 `prompt_template` 的目标）→ **MobileWorld 兜底**（失败 leg 运行期转成 `type: mobileworld` leg，与 plan 期兜底同一套机器）→ **部分成功终点**（不再裸 traceback：flow 根目录的 `flow_report.json` 记录每 step 结局、恢复尝试与已积累的 blackboard 键；fatal 失败写完报告后仍 raise，judge-only 失败则提交最好一次尝试继续跑，与旧的 advisory 语义一致）。
+
+失败分类（R0）：`env_fail`（子进程没进 run loop 就死——设备/IME 层，永不恢复）、`route_fail`（leg judge 判进错功能/答非所问，来自 judge 新增的 `failure_kind: wrong_feature`）、`app_fail`（功能对但没交付：需要 reply 却没捕获、终态不对、或 judge `failure_kind: app_error`）。
+
+**安全红线**：`handoff_to_user_required: true` 的能力只有重试档——绝不换路由（换 App 会重做用户可见的准备动作）、绝不交给 MobileWorld（`general_e2e` 无 handoff 契约，可能自己越过不可逆动作）。
+
+**旋钮**：`RELAY_RECOVERY`（默认 `1`；`0` 恢复 fail-fast——`run_benchmark_test.py` 默认强制 `0`，`--recovery` 打开）/ `RELAY_RECOVERY_MAX_RETRIES`（每 leg，默认 1）/ `RELAY_RECOVERY_MAX_LEGS`（每 flow 额外 leg 数，默认 2）/ `RELAY_RECOVERY_TOKEN_BUDGET`（默认 15000，按每次尝试 summary 的 `token_usage` 累计）。产物：原始尝试轨迹旁的 `recovery.json`（逐档尝试日志），重试/换路由的尝试落在带 `_retryN` / `_reroute` 后缀的兄弟 leg 目录。
+
 **App step（`_run_app_step`）：**
 
 - 每个 leg 一个全新 `python -m agents.runtime.native_runner <app> <prompt>` 子进程。

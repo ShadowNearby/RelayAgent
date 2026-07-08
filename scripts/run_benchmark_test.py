@@ -1121,6 +1121,11 @@ def main(argv: list[str] | None = None) -> int:
                           "fairness vs the MobileWorld baseline, which has no scroll-to-capture "
                           "and only reads the on-screen reply: wait_for_reply stops at "
                           "'screen stable' and returns the first visible frame's text)")
+    run.add_argument("--recovery", action="store_true",
+                     help="Keep RelayAgent's runtime failure-recovery ladder ON (default OFF "
+                          "for comparability with historical runs: a failed leg fails the "
+                          "task first-try, no retry/reroute/MW-fallback extra legs). Turn on "
+                          "to measure the recovery uplift (roadmap P1-R4)")
     run.add_argument("--no-device-reset", action="store_true",
                      help="Do NOT force-stop the foreground app + HOME before each system "
                           "(default: reset, so mw --no-prelaunch can't inherit relay's "
@@ -1156,6 +1161,12 @@ def main(argv: list[str] | None = None) -> int:
     # wait_for_reply stops at "screen stable". Re-enable with --full-reply.
     if not args.full_reply:
         os.environ["RELAY_CAPTURE_FULL_REPLY"] = "0"
+    # Runtime failure-recovery OFF by default: recovery adds extra legs (retry/
+    # reroute/MW fallback) that change token/wall accounting and success
+    # semantics vs historical first-try runs. Re-enable with --recovery to
+    # measure the uplift (the A axis of roadmap P1-R4).
+    if not args.recovery:
+        os.environ["RELAY_RECOVERY"] = "0"
 
     systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     bad = [s for s in systems if s not in SYSTEMS]

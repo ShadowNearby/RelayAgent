@@ -40,9 +40,22 @@ from typing import Any
 import yaml
 from loguru import logger
 
+from dataclasses import dataclass, field
+
 from agents.runtime._adb import screencap
 from agents.runtime.interaction import get_interaction
-from agents.flow.leg_judge import LOADING, final_frames, judge_leg
+from agents.flow.leg_judge import LOADING, LegVerdict, final_frames, judge_leg
+from agents.flow.leg_recovery import (
+    ENV_FAIL,
+    ROUTE_FAIL,
+    TIER_MW,
+    TIER_REROUTE,
+    TIER_RETRY,
+    LegFailure,
+    RecoveryController,
+    classify_leg_failure,
+)
+from agents.flow.flow_planner_mw import _to_mw_leg, mw_fallback_enabled
 from agents.llm.llm_client import make_llm_client
 from agents.routing.route_overlay import RouteOverlay
 from agents.runtime.runtime_config import ensure_llm_env
@@ -83,6 +96,29 @@ __all__ = [
 
 # cold-launch delegates to agents.runtime._adb so native_runner/flow_runner/relay_agent
 # open_app share one implementation.
+
+
+# --------------------------------------------------------------------------- #
+# Leg attempt result
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class LegResult:
+    """Everything one app-leg attempt produced, for classification/commit.
+
+    `hard_error` carries what used to raise inline (missing needed reply /
+    output-free terminal assert); `verdict` is the leg judge's advisory call
+    (None when judging was disabled or errored)."""
+
+    rc: int
+    reply: str
+    summary: dict[str, Any] = field(default_factory=dict)
+    needs_reply: bool = False
+    hard_error: str | None = None
+    verdict: LegVerdict | None = None
+    leg_dir: Path | None = None
+    prompt: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -143,6 +179,12 @@ class FlowRunner:
         self._mw_server_proc: subprocess.Popen | None = None
         self._mw_server_log = None
 
+        # Runtime failure-recovery ladder (leg_recovery; RELAY_RECOVERY=0
+        # restores the old fail-fast behavior). Per-flow budgets live on the
+        # controller; per-step outcomes accumulate for flow_report.json.
+        self._recovery = RecoveryController(self._llm, self.env["LLM_MODEL"])
+        self._step_outcomes: list[dict[str, Any]] = []
+
     # ------------------------------------------------------------- traj naming
 
     def _traj_stem(self) -> str:
@@ -195,25 +237,88 @@ class FlowRunner:
         finally:
             # Tear down a MobileWorld server WE started (no-op if none / reused).
             self._teardown_mw_server()
+            # Flow-level outcome report (per-step status + recovery attempts +
+            # blackboard keys). Written on success AND on a mid-flow abort, so a
+            # partially-failed flow still leaves a machine-readable account of
+            # what was accomplished. Best-effort.
+            self._write_flow_report()
         logger.info("FlowRunner done")
         return self.bb
+
+    def _write_flow_report(self) -> None:
+        try:
+            report = {
+                "flow": self.flow_path.name,
+                "steps": self._step_outcomes,
+                "blackboard_keys": sorted(self.bb.keys()),
+                "recovery": {
+                    "enabled": self._recovery.enabled,
+                    "extra_legs_used": self._recovery.extra_legs_used,
+                    "tokens_used": self._recovery.tokens_used,
+                    "attempts": self._recovery.attempts,
+                },
+            }
+            self.flow_traj_root.mkdir(parents=True, exist_ok=True)
+            (self.flow_traj_root / "flow_report.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception as e:  # noqa: BLE001 — reporting must never mask the run outcome
+            logger.warning(f"failed to write flow_report.json: {e}")
 
     # ------------------------------------------------------------ app_step
 
     def _run_app_step(self, step: dict) -> None:
+        """One plan step: execute the leg, classify the outcome, climb the
+        recovery ladder on failure (RELAY_RECOVERY=0 restores fail-fast),
+        commit the surviving result to the blackboard."""
+        result = self._execute_app_leg(step)
+        failure = classify_leg_failure(
+            result.rc, result.summary, result.reply, result.needs_reply,
+            result.hard_error, result.verdict,
+        )
+        if failure is None:
+            self._commit_leg(step, result)
+            self._note_outcome(step, "ok")
+            return
+        if not self._recovery.enabled:
+            # Legacy behavior: hard failures raise; a judge-only failure was
+            # already logged as a warning — commit and continue.
+            if failure.fatal:
+                self._note_outcome(step, "failed", failure)
+                raise RuntimeError(f"Step {step['id']!r}: {failure.reason}")
+            self._commit_leg(step, result)
+            self._note_outcome(step, "judged_failed", failure)
+            return
+        self._recover_app_leg(step, result, failure)
+
+    def _note_outcome(
+        self, step: dict, status: str, failure: LegFailure | None = None,
+        recovered_via: str | None = None,
+    ) -> None:
+        entry: dict[str, Any] = {"step": step.get("id"), "status": status}
+        if failure is not None:
+            entry["failure_kind"] = failure.kind
+            entry["failure_reason"] = failure.reason
+        if recovered_via:
+            entry["recovered_via"] = recovered_via
+        self._step_outcomes.append(entry)
+
+    def _execute_app_leg(
+        self, step: dict, dir_suffix: str = "", prompt_override: str | None = None,
+    ) -> LegResult:
         app = step["app"]
         capability = step["capability"]
-        prompt = render(step["prompt"], self.bb)
+        prompt = prompt_override or render(step["prompt"], self.bb)
 
         # Cold-launch is deferred to the agent's first predict
         # (RELAY_AGENT_LAUNCH below) so process/leg startup lands before the
         # launch and is excluded from the leg's task wall-clock (which the
         # agent writes to RELAY_WALL_OUT).
         self._step_idx += 1
-        step_log_root = self.flow_traj_root / f"{self._step_idx:02d}_{step['id']}"
+        step_log_root = self.flow_traj_root / f"{self._step_idx:02d}_{step['id']}{dir_suffix}"
         step_log_root.mkdir(parents=True, exist_ok=True)
-        # Mark where this leg's flow-process LLM calls (judge + extract) begin in
-        # the recorder buffer so we can fold exactly this leg's slice below.
+        # Mark where this leg's flow-process LLM calls (judge) begin in the
+        # recorder buffer so we can fold exactly this attempt's slice below.
         llm_call_start = len(self._llm.calls)
 
         with tempfile.NamedTemporaryFile(
@@ -278,13 +383,19 @@ class FlowRunner:
                 reply = (payload.get("reply") or "").strip()
             summary = _read_json_file(summary_path)
             needs_reply = bool(step.get("bind") or step.get("extract"))
+            # Hard signals are captured (not raised) so the recovery ladder can
+            # classify them; _run_app_step re-raises when recovery is off.
+            hard_error: str | None = None
             if not reply and needs_reply:
-                raise RuntimeError(
-                    f"Step {step['id']!r}: no reply captured at {reply_path}. "
+                hard_error = (
+                    f"no reply captured (needed for bind/extract). "
                     f"Check the sub-run's {step_log_root}/."
                 )
-            if not needs_reply:
-                _assert_output_free_step_completed(step, summary, rc, summary_path)
+            elif not needs_reply:
+                try:
+                    _assert_output_free_step_completed(step, summary, rc, summary_path)
+                except RuntimeError as e:
+                    hard_error = str(e)
             if reply:
                 logger.info(f"captured reply ({len(reply)} chars) from {app}")
             else:
@@ -292,32 +403,185 @@ class FlowRunner:
             # Semantic outcome check on top of the hard signals above: a leg can
             # reach a terminal state with a non-empty reply yet still not have
             # accomplished the goal. Best-effort — a judge failure must never
-            # abort the flow (see leg_judge module docstring).
-            self._judge_leg(
-                step, app, capability, prompt, reply, step_log_root,
-                summary.get("last_action_type"),
-            )
+            # abort the flow (see leg_judge module docstring). Skipped when a
+            # hard signal already failed the leg (nothing to second-guess).
+            verdict: LegVerdict | None = None
+            if hard_error is None:
+                verdict = self._judge_leg(
+                    step, app, capability, prompt, reply, step_log_root,
+                    summary.get("last_action_type"),
+                )
         finally:
             try:
                 reply_path.unlink()
             except OSError:
                 pass
 
-        # A falsy bind (missing, null, or "") means nothing downstream consumes
-        # this leg — don't write it (a `bind: null` would otherwise land as a
-        # None key in the blackboard). `_extract` itself makes an LLM call, so
-        # keep it inside the window folded below.
-        if step.get("bind"):
-            if "extract" in step:
-                value = self._extract(reply, step["extract"])
-            else:
-                value = reply
-            self.bb[step["bind"]] = value
-
-        # Fold this leg's flow-process LLM calls (leg judge + bind extraction)
-        # into the leg's traj.json top level, alongside the in-app agent's
-        # `["0"]["llm_calls"]`. Best-effort — a logging gap must not break the flow.
+        # Fold this attempt's flow-process LLM calls (leg judge) into the leg's
+        # traj.json top level, alongside the in-app agent's `["0"]["llm_calls"]`.
+        # Best-effort — a logging gap must not break the flow. (The bind
+        # extraction call is folded by _commit_leg into the committed attempt.)
         self._fold_flow_llm_calls(step_log_root, llm_call_start)
+
+        return LegResult(
+            rc=rc, reply=reply, summary=summary, needs_reply=needs_reply,
+            hard_error=hard_error, verdict=verdict, leg_dir=step_log_root,
+            prompt=prompt,
+        )
+
+    def _commit_leg(self, step: dict, result: LegResult) -> None:
+        """Write the surviving attempt's reply into the blackboard.
+
+        A falsy bind (missing, null, or "") means nothing downstream consumes
+        this leg — don't write it (a `bind: null` would otherwise land as a
+        None key in the blackboard)."""
+        if not step.get("bind"):
+            return
+        llm_call_start = len(self._llm.calls)
+        if "extract" in step:
+            value = self._extract(result.reply, step["extract"])
+        else:
+            value = result.reply
+        self.bb[step["bind"]] = value
+        if result.leg_dir is not None:
+            self._fold_flow_llm_calls(result.leg_dir, llm_call_start)
+
+    # ------------------------------------------------------- recovery ladder
+
+    def _recover_app_leg(
+        self, step: dict, first_result: LegResult, first_failure: LegFailure,
+    ) -> None:
+        """Climb the recovery ladder for a failed leg: retry → reroute →
+        MobileWorld fallback → partial-success terminal. See leg_recovery for
+        the taxonomy, tier policy and budgets."""
+        rec = self._recovery
+        cur_step = step
+        result, failure = first_result, first_failure
+        original_dir = first_result.leg_dir
+        exclude: set[tuple[str, str]] = {(step["app"], step["capability"])}
+        # Safety red line: handoff-required capabilities get the retry tier
+        # only — never a different app (would redo user-visible prep), never
+        # MobileWorld (general_e2e has no handoff contract; it could cross an
+        # irreversible action on its own).
+        handoff_leg = rec.handoff_required(step["app"], step["capability"])
+        retries_used = 0
+        reroute_tried = False
+        attempts: list[dict[str, Any]] = []
+        committed = False
+
+        def _log_attempt(tier: str, target: str, outcome: str, detail: str) -> None:
+            entry = {
+                "step": step.get("id"), "tier": tier, "target": target,
+                "outcome": outcome, "detail": detail,
+            }
+            attempts.append(entry)
+            rec.record(entry)
+            logger.info(f"recovery [{tier}] {target}: {outcome} — {detail}")
+
+        while failure is not None:
+            if failure.kind == ENV_FAIL:
+                logger.warning(f"leg {step['id']!r} failed at the environment layer; not recoverable")
+                break
+            if retries_used < rec.max_retries:
+                tier = TIER_RETRY
+            elif handoff_leg:
+                break  # retry-only ladder for handoff capabilities
+            elif not reroute_tried:
+                tier = TIER_REROUTE
+            elif mw_fallback_enabled():
+                tier = TIER_MW
+            else:
+                break
+            if not rec.can_spend_leg():
+                break
+
+            if tier == TIER_RETRY:
+                retries_used += 1
+                mark = len(self._llm.calls)
+                override = None
+                if failure.kind == ROUTE_FAIL:
+                    override = rec.reword(
+                        result.prompt, failure, cur_step["app"], cur_step["capability"]
+                    )
+                if original_dir is not None:
+                    self._fold_flow_llm_calls(original_dir, mark)
+                new_result = self._execute_app_leg(
+                    cur_step, dir_suffix=f"_retry{retries_used}", prompt_override=override,
+                )
+                rec.spend_leg(new_result.summary)
+                target = f"{cur_step['app']}/{cur_step['capability']}"
+            elif tier == TIER_REROUTE:
+                reroute_tried = True
+                mark = len(self._llm.calls)
+                decision = rec.reroute(result.prompt, exclude)
+                if original_dir is not None:
+                    self._fold_flow_llm_calls(original_dir, mark)
+                if decision is None:
+                    _log_attempt(tier, "-", "skipped", "no alternative route")
+                    continue  # fall through to the next tier on the next pass
+                cur_step = {
+                    **cur_step,
+                    "app": decision["app_id"],
+                    "capability": decision["capability_id"],
+                }
+                new_result = self._execute_app_leg(cur_step, dir_suffix="_reroute")
+                rec.spend_leg(new_result.summary)
+                target = f"{cur_step['app']}/{cur_step['capability']}"
+            else:  # TIER_MW
+                mw_step = _to_mw_leg(
+                    {**cur_step},
+                    f"runtime recovery: {failure.kind} — {failure.reason}",
+                )
+                rec.spend_leg(None)
+                try:
+                    # Runs, judges, binds and folds itself (same path as a
+                    # plan-time MW leg) — nothing left to commit here.
+                    self._run_mobileworld_step(mw_step)
+                except Exception as e:  # noqa: BLE001 — MW is the last tier
+                    _log_attempt(tier, "mobileworld", "failed", str(e))
+                    break
+                _log_attempt(tier, "mobileworld", "ok", "leg completed via MobileWorld fallback")
+                committed = True
+                self._note_outcome(step, "recovered", first_failure, recovered_via=tier)
+                break
+
+            new_failure = classify_leg_failure(
+                new_result.rc, new_result.summary, new_result.reply,
+                new_result.needs_reply, new_result.hard_error, new_result.verdict,
+            )
+            if new_failure is None:
+                _log_attempt(tier, target, "ok", "attempt succeeded")
+                self._commit_leg(cur_step, new_result)
+                committed = True
+                self._note_outcome(step, "recovered", first_failure, recovered_via=tier)
+                break
+            _log_attempt(tier, target, "failed", f"{new_failure.kind}: {new_failure.reason}")
+            exclude.add((cur_step["app"], cur_step["capability"]))
+            result, failure = new_result, new_failure
+
+        # Persist the attempt log next to the original attempt's trajectory.
+        if attempts and original_dir is not None:
+            try:
+                (original_dir / "recovery.json").write_text(
+                    json.dumps(attempts, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except OSError as e:
+                logger.warning(f"failed to write recovery.json: {e}")
+
+        if committed:
+            return
+        # Ladder exhausted. A fatal failure stops the flow (with the partial
+        # state accounted for in flow_report.json); a judge-only failure keeps
+        # today's semantics — ship the best attempt and continue.
+        if failure is not None and failure.fatal:
+            self._note_outcome(step, "failed", failure)
+            raise RuntimeError(
+                f"Step {step['id']!r}: {failure.reason} "
+                f"(recovery exhausted after {len(attempts)} attempt(s); "
+                f"partial results in {self.flow_traj_root / 'flow_report.json'})"
+            )
+        self._commit_leg(cur_step, result)
+        self._note_outcome(step, "judged_failed", failure)
 
     # ------------------------------------------------------ mobileworld leg
 
@@ -509,11 +773,12 @@ class FlowRunner:
         reply: str,
         step_log_root: Path,
         terminal_action: str | None,
-    ) -> None:
+    ) -> LegVerdict | None:
         """VLM success/failure check for a finished leg. Best-effort: logs the
-        verdict and persists it next to the leg trajectory; never raises."""
+        verdict, persists it next to the leg trajectory and returns it for the
+        recovery ladder; never raises (returns None instead)."""
         if os.getenv("RELAY_LEG_JUDGE", "1") != "1":
-            return
+            return None
         self._llm.purpose = "leg_judge"
         try:
             leg_dir = step_log_root
@@ -577,8 +842,10 @@ class FlowRunner:
                 logger.warning(
                     f"leg {step['id']!r} ({app}/{capability}) judged FAILED: {verdict.reason}"
                 )
+            return verdict
         except Exception as e:  # judging is advisory — never break the flow
             logger.warning(f"leg judge errored for {step.get('id')!r}: {e}")
+            return None
 
     # ---------------------------------------------------------- ask_user
 

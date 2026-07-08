@@ -266,12 +266,16 @@ def _stage2_rerank(
     cat_index: dict[tuple[str, str], dict[str, Any]],
     llm: Any,
     model: str,
+    exclude: set[tuple[str, str]] | None = None,
 ) -> dict[str, Any] | None:
+    exclude = exclude or set()
     options: list[dict[str, Any]] = []
     for cap_id in cap_ids:
         for app_id in _candidate_apps_for_cap(
             cap_id, matrix, cat_index
         ):
+            if (app_id, cap_id) in exclude:
+                continue
             options.append(_option_for_pair(app_id, cap_id, matrix, cat_index))
     if not options:
         raise NoRunnableAppForCapability(cap_ids)
@@ -347,10 +351,13 @@ def _stage3_foundation(
     cat_index: dict[tuple[str, str], dict[str, Any]],
     llm: Any,
     model: str,
+    exclude: set[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
-    foundation_apps = _candidate_apps_for_cap(
-        FOUNDATION_CAP, matrix, cat_index
-    )
+    foundation_apps = [
+        app_id
+        for app_id in _candidate_apps_for_cap(FOUNDATION_CAP, matrix, cat_index)
+        if (app_id, FOUNDATION_CAP) not in (exclude or set())
+    ]
     if not foundation_apps:
         # RuntimeError (not SystemExit): callers route this through the plan
         # error/repair path — a config gap must not kill a whole batch run.
@@ -406,6 +413,7 @@ def route(
     preserve_goal: bool = False,
     route_key: str | None = None,
     overlay: "RouteOverlay | None" = None,
+    exclude: "set[tuple[str, str]] | None" = None,
 ) -> dict[str, Any]:
     """Route one natural-language task to one app/capability.
 
@@ -417,11 +425,20 @@ def route(
     in the catalog), return it directly — ZERO LLM calls — instead of running
     the three stages. A cold or low-confidence key falls through to the LLM
     stages unchanged. See agents/route_overlay.py.
+
+    `exclude` removes specific (app_id, capability_id) pairs from every stage —
+    used by the runtime recovery ladder (leg_recovery) to reroute a failed leg
+    away from the pair that just failed. An excluded pair also disables the
+    overlay shortcut for that pair.
     """
     cat_index = _catalog_index(catalog)
+    exclude = exclude or set()
 
     if overlay is not None and route_key:
         hit = overlay.lookup(route_key)
+        if hit is not None and hit in exclude:
+            logger.info(f"route overlay pair {hit} excluded; routing live")
+            hit = None
         if hit is not None and hit in cat_index:  # guard against a stale pair
             app_id, cap_id = hit
             logger.info(f"route solidified -> {app_id} / {cap_id} (0 LLM, key {route_key})")
@@ -444,6 +461,7 @@ def route(
             cat_index,
             llm,
             model,
+            exclude=exclude,
         )
         if decision is not None:
             if preserve_goal:
@@ -452,7 +470,7 @@ def route(
 
     logger.info("falling back to foundation_llm (stage-3)")
     decision = _stage3_foundation(
-        nl, matrix, catalog, cat_index, llm, model
+        nl, matrix, catalog, cat_index, llm, model, exclude=exclude
     )
     if preserve_goal:
         decision["goal"] = nl

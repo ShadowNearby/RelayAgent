@@ -31,7 +31,7 @@
 恢复策略取决于失败原因。在 hard signals 与 leg judge 的汇合点产出结构化 `failure_kind`:
 
 - `env_fail` — 设备/IME/adb 层 → **不重试**,终止并报设备问题;
-- `route_fail` — judge 判"答非所问/进错功能" → 从换路由档开始;
+- `route_fail` — judge 判"答非所问/进错功能" → 先换措辞重试一次(比换路由便宜),再换路由;
 - `app_fail` — 入口正确但 App 端未完成(风控墙/超时/崩溃)→ 从重试档开始;
 - `judge_uncertain` — 有 reply 但置信度低 → 只重试一次,不升级。
 
