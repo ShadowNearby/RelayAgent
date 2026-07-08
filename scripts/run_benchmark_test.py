@@ -1256,6 +1256,11 @@ def main(argv: list[str] | None = None) -> int:
     # measure the uplift (the A axis of roadmap P1-R4).
     if not args.recovery:
         os.environ["RELAY_RECOVERY"] = "0"
+    # User memory layer ALWAYS OFF under benchmark (no --opt-in): profile
+    # injection changes planning behavior per-machine (non-reproducible), and
+    # the post-flow memory-propose pass would add an LLM call to every
+    # successful relay task's token count (P3).
+    os.environ["RELAY_PROFILE"] = "0"
 
     systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     bad = [s for s in systems if s not in SYSTEMS]

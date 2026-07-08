@@ -49,6 +49,7 @@ from agents.routing.locale_policy import (
 # are shared with the runner so the planner validates exactly what the runner
 # will later template against.
 from agents.flow.flow_runner_util import _VAR_RE, _parse_fenced_json, _select_from_path
+from agents.flow.user_profile import load_profile
 
 # MobileWorld fallback + plan-shape/template helpers split out of this module;
 # re-exported here so `flow_planner` stays the public facade (tests import
@@ -287,9 +288,23 @@ class FlowPlanner:
         request unsatisfiable with the available apps. Raises
         PlanValidationError if the synthesized plan does not validate.
         """
+        # M2① — profile summary rides the synthesis prompt so "send it home" /
+        # "the usual" resolves from the local profile instead of an ask_user
+        # round. Injection only; the planner must not volunteer profile facts
+        # the request never referenced.
+        profile = load_profile()
+        profile_block = ""
+        if profile is not None and not profile.is_empty():
+            profile_block = (
+                "Known user profile (use a value ONLY where the request "
+                "implicitly refers to it, e.g. 'home', a contact alias, 'the "
+                "usual'; NEVER volunteer unreferenced profile facts):\n"
+                f"{profile.summary()}\n\n"
+            )
         user = (
             "Available apps catalog:\n"
             f"{json.dumps(self.catalog, ensure_ascii=False, indent=2)}\n\n"
+            f"{profile_block}"
             f"User request:\n{nl_request}\n\n"
             "Synthesize the plan JSON now."
         )
@@ -581,24 +596,30 @@ class FlowPlanner:
         # extractor can never emit a var the guard will then hard-reject.
         allowed_vars = sorted(produced)
 
-        user = json.dumps(
-            {
-                "template": template,
-                "slots": [
-                    {
-                        "name": s.get("name"),
-                        "desc": s.get("desc", ""),
-                        "required": s.get("required", True),
-                    }
-                    for s in slot_specs
-                ],
-                "original_user_request": nl_request,
-                "synthesized_prompt": synthesized_prompt,
-                "referencable_upstream_vars": allowed_vars,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        payload: dict[str, Any] = {
+            "template": template,
+            "slots": [
+                {
+                    "name": s.get("name"),
+                    "desc": s.get("desc", ""),
+                    "required": s.get("required", True),
+                }
+                for s in slot_specs
+            ],
+            "original_user_request": nl_request,
+            "synthesized_prompt": synthesized_prompt,
+            "referencable_upstream_vars": allowed_vars,
+        }
+        # M2② — profile values as slot candidates ("home" → the stored
+        # address). Same non-volunteering rule as plan synthesis.
+        profile = load_profile()
+        if profile is not None and not profile.is_empty():
+            payload["user_profile"] = (
+                "Use ONLY for slots the request implicitly references "
+                "(e.g. 'home', a contact alias); never for unreferenced slots:\n"
+                + profile.summary()
+            )
+        user = json.dumps(payload, ensure_ascii=False, indent=2)
         resp = create_with_retry(self._llm,
             model=self._model,
             messages=[

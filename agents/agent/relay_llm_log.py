@@ -2,7 +2,8 @@
 
 Sanitize chat-completion messages/kwargs before they land in traj.json (strip
 giant base64 image payloads) and label each call site by its system prompt.
-Split out of `relay_agent.py`.
+Split out of `relay_agent.py`. (Profile-value redaction — P3-M4 — happens
+once per record in `relay_agent._append_llm_call`, not here.)
 """
 
 from __future__ import annotations

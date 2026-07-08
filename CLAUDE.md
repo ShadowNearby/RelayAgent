@@ -28,6 +28,7 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
   - **stage-3 逃生口**：三段式 router 的 foundation 兜底不再是无条件 catch-all——若任务要求聊天助手做不了的设备/OS 副作用动作（文件管理、改系统设置、驱动别的 App），`_stage3_foundation` 返回 `none` → 抛 `FoundationNotApplicable` → 当 coverage gap → MW，而不是硬塞进 `foundation_llm`。
   - **plan-only tier 用 leg-kind 分档**（`run_benchmark_test.py`）：`covered`（每条 leg 都是真垂类 capability）/ `foundation_fallback`（无 MW leg 但有 `foundation_llm` leg）/ `mw`（全是 MW leg）/ `mixed`（MW + 非 MW 混合）。`plan_summary.json` 的 `mw_fallback` 块给 task 级 + leg 级 MW 占比（`task_touch_rate`/`mw_leg_rate`/`mixed_task_mw_ratios`）。
 - 旋钮：`--max-step`（默认 -1 不限）/ `--step_wait_time`（每步 settle，默认 `RELAY_STEP_WAIT` 或 0.5）/ `--keep-ime`（退出不复位输入法）。`RELAY_AGENT_FILE` 换 agent（如 a11y baseline）。
+- **用户记忆层（P3，默认开但无文件即 no-op）**：`${RELAY_PROFILE_ROOT:-~/.relayagent}/profile.yaml`（schema `spec/profile.schema.json`，实现 `agents/flow/user_profile.py`）。注入：planner 合成 prompt + `prompt_template` 槽位抽取带 profile 摘要（"回家"直接解析成存的地址，省 ask_user 轮）、`select_from` 预选上次选择。flow 成功后一次廉价 LLM 提议偏好，**问过 y/n 才写**（批量 stdin EOF=拒绝）。`RELAY_PROFILE=0` 整层关（`run_benchmark_test.py` 无条件强制关）；`RELAY_TRAJ_REDACT=1` 把 profile 值在全部日志落盘点换成 `<profile:section.key>` 占位（分享 traj 调试不漏家庭地址）。注意 profile 解析值会固化进 plan 缓存,改 profile 后用 `--no-cache`。
 
 需要 adb + 真机 USB 调试（或模拟器，见 `docs/emulator_testing.zh.md`）。**`agents.runtime.native_runner` 自动 `ime enable/set com.android.adbkeyboard/.AdbIME`**（退出 `ime reset` 复位，`--keep-ime` 关）。`RELAY_ANDROID_SERIAL` 选设备。
 

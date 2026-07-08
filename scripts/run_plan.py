@@ -431,7 +431,9 @@ def main(argv: list[str] | None = None) -> int:
             logger.info(f"screen recording (parent-owned) → {out_dir}")
 
         try:
-            outcome = nl_flow.execute_plan(plan_path, extra_args=extra, prekill=False)
+            outcome = nl_flow.execute_plan(
+                plan_path, extra_args=extra, prekill=False, nl_request=args.nl
+            )
             flow_traj_root = outcome.flow_traj_root
             completed = True
             return 0

@@ -222,8 +222,10 @@ def run_leg(
             try:
                 out_path = Path(summary_out)
                 out_path.parent.mkdir(parents=True, exist_ok=True)
+                from agents.flow.user_profile import redact_obj
+
                 out_path.write_text(
-                    json.dumps(summary, ensure_ascii=False, indent=2),
+                    json.dumps(redact_obj(summary), ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
             except OSError as exc:

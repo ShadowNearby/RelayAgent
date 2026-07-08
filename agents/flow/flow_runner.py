@@ -63,6 +63,7 @@ from agents.runtime.runtime_config import ensure_llm_env
 # Pieces split out of this module; re-exported here so `flow_runner` stays the
 # public facade (tests, nl_flow and the Android entry import these from here).
 from agents.flow.flow_recording_llm import _RecordingLLM
+from agents.flow.user_profile import load_profile, redact_obj
 from agents.flow.flow_leg_executor import (
     InProcessLegExecutor,
     SubprocessLegExecutor,
@@ -260,7 +261,8 @@ class FlowRunner:
             }
             self.flow_traj_root.mkdir(parents=True, exist_ok=True)
             (self.flow_traj_root / "flow_report.json").write_text(
-                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+                json.dumps(redact_obj(report), ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
         except Exception as e:  # noqa: BLE001 — reporting must never mask the run outcome
             logger.warning(f"failed to write flow_report.json: {e}")
@@ -757,7 +759,9 @@ class FlowRunner:
                     f"leg traj.json is not an object, skipping flow-call fold: {traj_path}"
                 )
                 return
-            data.setdefault("flow_llm_calls", []).extend(calls)
+            # M4 — RELAY_TRAJ_REDACT=1 strips profile values from the persisted
+            # calls (prompts carry them by design; the traj must not).
+            data.setdefault("flow_llm_calls", []).extend(redact_obj(calls))
             traj_path.write_text(
                 json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8"
             )
@@ -878,13 +882,31 @@ class FlowRunner:
             if not items:
                 raise RuntimeError(f"ask_user {step['id']!r}: nothing in {arr_key!r} to choose from")
             label_tpl = step.get("item_label", "{name}")
+            labels = [render(label_tpl, it) for it in items]
+            # M2③ — pre-select the previous choice: when the profile remembers
+            # a pick for this question (keyed by the UNrendered header, stable
+            # across runs of the same/cached plan) and it is on today's list,
+            # the empty default moves there. Any explicit input still wins.
+            profile = load_profile()
+            choice_key = step.get("prompt_header") or step.get("id") or header
+            default_idx = 1
+            if profile is not None:
+                remembered = profile.get_choice(choice_key)
+                if remembered in labels:
+                    default_idx = labels.index(remembered) + 1
             lines = [header]
-            lines += [f"  {i}. {render(label_tpl, it)}" for i, it in enumerate(items, 1)]
-            lines.append(f"  (1-{len(items)}, or empty to pick 1)")
-            # ask_user → None (EOF / take-over) keeps today's empty-default → pick 1.
-            raw = (interaction.ask_user("\n".join(lines)) or "").strip()
+            lines += [f"  {i}. {label}" for i, label in enumerate(labels, 1)]
+            lines.append(f"  (1-{len(items)}, or empty to pick {default_idx})")
+            # ask_user → None (EOF / take-over) keeps the empty-default pick.
+            raw = (interaction.ask_user("\n".join(lines)) or "").strip() or str(default_idx)
             chosen = _resolve_choice(raw, items, label_tpl)
             logger.info(f"user chose: {chosen}")
+            if profile is not None:
+                # Records the user's own explicit pick (not an inference) so
+                # the next run of this question defaults to it.
+                idx = items.index(chosen) if chosen in items else None
+                if idx is not None:
+                    profile.remember_choice(choice_key, labels[idx])
             self.bb[bind] = chosen
             return
 

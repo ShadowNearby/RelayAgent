@@ -321,6 +321,11 @@ class RelayAgent(_MCPAgentBase):
         """Append one LLM-call record to traj_logs/user_task/traj.json under
         log_data["0"]["llm_calls"]. Defensive: creates the bucket and stub
         traj/tools fields so the first traj write does not KeyError on them."""
+        from agents.flow.user_profile import redact_obj
+
+        # M4 — prompts AND responses can carry user-profile values; strip them
+        # at write time (no-op unless RELAY_TRAJ_REDACT=1 and a profile exists).
+        record = redact_obj(record)
         traj_path = _TRAJ_DIR / "traj.json"
         try:
             if not traj_path.exists():
@@ -1296,24 +1301,28 @@ class RelayAgent(_MCPAgentBase):
           2. <traj dir>/agent_reply.json — always, so the reply lives next
              to traj.json / screenshots (the flow runner pins <traj dir> per
              leg via RELAY_TRAJ_DIR). Best-effort; never raises."""
-        payload = json.dumps(
-            {
-                "reply": self._last_agent_reply,
-                "target_app": self.target_app,
-            },
-            ensure_ascii=False,
-        )
-        targets: list[Path] = []
+        from agents.flow.user_profile import redact_obj
+
+        doc = {
+            "reply": self._last_agent_reply,
+            "target_app": self.target_app,
+        }
+        payload = json.dumps(doc, ensure_ascii=False)
+        # M4 — the traj-dir LOG copy is redacted (an app reply often echoes the
+        # address it was sent); RELAY_REPLY_OUT keeps the verbatim reply — it is
+        # runtime plumbing (blackboard input), not a persisted log.
+        log_payload = json.dumps(redact_obj(doc), ensure_ascii=False)
+        targets: list[tuple[Path, str]] = []
         env_path = os.getenv(_REPLY_OUT_ENV)
         if env_path:
-            targets.append(Path(env_path))
+            targets.append((Path(env_path), payload))
         # Drop the reply in the run's traj dir too so it's discoverable by
         # default (the flow runner pins this per leg via RELAY_TRAJ_DIR).
         if _TRAJ_DIR.exists():
-            targets.append(_TRAJ_DIR / "agent_reply.json")
-        for path in targets:
+            targets.append((_TRAJ_DIR / "agent_reply.json", log_payload))
+        for path, content in targets:
             try:
-                path.write_text(payload, encoding="utf-8")
+                path.write_text(content, encoding="utf-8")
                 logger.info(
                     f"Persisted captured reply to {path} "
                     f"({len(self._last_agent_reply or '')} chars)"

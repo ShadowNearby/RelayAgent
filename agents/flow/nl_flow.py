@@ -236,10 +236,15 @@ def execute_plan(
     extra_args: list[str] | None = None,
     leg_executor: Any | None = None,
     prekill: bool = True,
+    nl_request: str | None = None,
 ) -> FlowOutcome:
     """Run a persisted plan through FlowRunner. Returns the final blackboard +
     flow traj root; wraps leg failures in FlowExecutionError (traj root
-    attached) so accounting survives."""
+    attached) so accounting survives.
+
+    With `nl_request` set, a successful flow ends with the P3-M3 memory pass:
+    one cheap LLM call proposes a stable preference (or nothing), and the user
+    is ASKED before anything is written to the profile — never silently."""
     plan = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
     if prekill:
         prekill_apps(plan)
@@ -250,4 +255,39 @@ def execute_plan(
         bb = runner.run()
     except Exception as e:
         raise FlowExecutionError(e, runner.flow_traj_root) from e
+    if nl_request:
+        _maybe_remember_preference(runner, nl_request, bb)
     return FlowOutcome(blackboard=bb, flow_traj_root=runner.flow_traj_root)
+
+
+def _maybe_remember_preference(runner: Any, nl_request: str, bb: dict[str, Any]) -> None:
+    """P3-M3: propose-then-ask memory write after a successful flow.
+
+    Best-effort end to end: a proposal failure, an EOF'd stdin (batch runs) or
+    a non-"y" answer all mean "don't write". Gated by the same RELAY_PROFILE
+    switch as the rest of the layer."""
+    from agents.flow.user_profile import load_profile, profile_enabled, propose_memory
+    from agents.runtime.interaction import get_interaction
+
+    if not profile_enabled():
+        return
+    try:
+        proposal = propose_memory(runner._llm, runner.env["LLM_MODEL"], nl_request, bb)
+        if proposal is None:
+            return
+        key, value = proposal
+        answer = get_interaction().ask_user(
+            f"记住这个偏好供以后使用吗?{key} = {value} [y/N]"
+        )
+        if (answer or "").strip().lower() not in ("y", "yes", "是"):
+            logger.info(f"memory proposal declined: {key}={value!r}")
+            return
+        profile = load_profile()
+        if profile is None:  # enabled but no file yet — create the store
+            from agents.flow.user_profile import UserProfile, profile_path
+
+            profile = UserProfile({"version": 1}, profile_path())
+        profile.add_preference(key, value)
+        logger.info(f"profile remembered: {key}={value!r} → {profile.path}")
+    except Exception as e:  # noqa: BLE001 — memory must never fail the flow
+        logger.warning(f"memory pass skipped: {e}")

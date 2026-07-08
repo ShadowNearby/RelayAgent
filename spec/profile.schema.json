@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ShadowNearby/RelayAgent/spec/profile.schema.json",
+  "title": "RelayAgent user profile (roadmap P3-M1)",
+  "description": "Local, explicit user memory at ${RELAY_PROFILE_ROOT:-~/.relayagent}/profile.yaml. Every section is an optional flat string→string map; the loader (agents/flow/user_profile.py) degrades a malformed section to empty with a warning.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "addresses": {
+      "$ref": "#/$defs/stringMap",
+      "description": "Named places: home, company, …"
+    },
+    "contacts": {
+      "$ref": "#/$defs/stringMap",
+      "description": "Alias → who is meant (e.g. 老板 → 张三)"
+    },
+    "preferences": {
+      "$ref": "#/$defs/stringMap",
+      "description": "Stable tastes (e.g. milk_tea → 去冰三分糖). M3 proposals land here after an explicit y/n."
+    },
+    "app_hints": {
+      "$ref": "#/$defs/stringMap",
+      "description": "app_id → free-text hint for that app's legs"
+    },
+    "last_choices": {
+      "$ref": "#/$defs/stringMap",
+      "description": "ask_user select_from memory (question key → chosen label); maintained automatically — records the user's own explicit pick"
+    }
+  },
+  "$defs": {
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

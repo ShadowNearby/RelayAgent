@@ -89,6 +89,8 @@
 
 ## P3 用户记忆层(~2 周)
 
+> **状态(2026-07-08)**:M1–M4 已落地(`agents/flow/user_profile.py`,schema `spec/profile.schema.json`,单测 `tests/test_user_profile.py`)。M1:`${RELAY_PROFILE_ROOT:-~/.relayagent}/profile.yaml`(`RELAY_PROFILE=0` 整层关;损坏文件降级为无 profile + warning)。M2:①合成 prompt 带 profile 摘要(真机验证:"帮我导航回家"直接出 `导航去<家庭地址>`,零 ask_user)②模板槽位抽取带 profile 候选 ③ask_user select_from 预选上次选择(`last_choices` 自动记录用户自己的显式选择)。M3:flow 成功后一次廉价 LLM 提议偏好 → **询问 y/n 才写**(EOF/批量=拒绝);benchmark 强制 `RELAY_PROFILE=0`(token 公平 + 可复现)。M4:`RELAY_TRAJ_REDACT=1` 在全部日志落盘点(agent/flow llm_calls、steps.json、summary.json、flow_report.json、agent_reply.json 日志副本)把 profile 值换成 `<profile:section.key>`;真机泄漏扫描零明文。验收的 10 条隐式偏好任务对照待跑。注意:profile 解析后的值会固化进 plan 缓存(`manifests/_generated/`,已 gitignore),改 profile 后旧缓存需 `--no-cache` 绕过。
+
 **原则**:本地、明示、可查删。项目卖点是"上下文已在 App 里",记忆层只补用户没说全的偏好,不做爬取。
 
 - **M1 画像存储**(2 天):`~/.relayagent/profile.yaml`(Android 用 filesDir,复用 `RELAY_TRAJ_ROOT` 式重定向):地址簿、饮食偏好、常用联系人别名、每 App 提示。schema 入 `spec/` 并校验。

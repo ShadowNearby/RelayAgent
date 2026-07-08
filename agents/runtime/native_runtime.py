@@ -306,7 +306,11 @@ class StepLogger:
             "screenshot": raw_name,
             "marked_screenshot": marked_name,
         }
-        self._records.append(rec)
+        # M4 — input_text actions / thoughts can carry user-profile values;
+        # no-op unless RELAY_TRAJ_REDACT=1 and a profile exists.
+        from agents.flow.user_profile import redact_obj
+
+        self._records.append(redact_obj(rec))
         # Rewrite the whole index each step so a crashed run still leaves a
         # valid JSON file (steps are few; cost is negligible).
         with open(self.index_path, "w", encoding="utf-8") as f:

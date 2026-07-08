@@ -108,6 +108,24 @@ The key risk is **behavioral drift**: decoded frames differ from screencap frame
 
 ## P3 User memory layer (~2 weeks)
 
+> **Status (2026-07-08)**: M1–M4 shipped (`agents/flow/user_profile.py`, schema
+> `spec/profile.schema.json`, unit tests `tests/test_user_profile.py`).
+> M1: `${RELAY_PROFILE_ROOT:-~/.relayagent}/profile.yaml` (`RELAY_PROFILE=0`
+> turns the layer off; a malformed file degrades to "no profile" with a warning).
+> M2: ① profile summary on the synthesis prompt (verified on device: "navigate
+> home" plans straight to `导航去<home address>`, zero ask_user rounds);
+> ② profile values as `prompt_template` slot candidates; ③ ask_user select_from
+> pre-selects the previous choice (`last_choices` records the user's own explicit
+> pick automatically). M3: post-flow one-call preference proposal → **asks y/n
+> before writing** (EOF/batch = declined); benchmarks force `RELAY_PROFILE=0`
+> (token fairness + reproducibility). M4: `RELAY_TRAJ_REDACT=1` replaces profile
+> values with `<profile:section.key>` at every log-write site (agent/flow
+> llm_calls, steps.json, summary.json, flow_report.json, the agent_reply.json log
+> copy); an on-device leak scan found zero plaintext. The 10-task
+> implicit-preference acceptance comparison is still to run. Caveat: resolved
+> profile values are baked into cached plans (`manifests/_generated/`,
+> gitignored) — after changing the profile, bypass stale cache with `--no-cache`.
+
 **Principles**: local, explicit, inspectable/deletable. The project's premise is that context already lives inside the apps; the memory layer only fills in preferences the user didn't spell out — no scraping.
 
 - **M1 Profile store** (2 days): `~/.relayagent/profile.yaml` (filesDir on Android, redirected the same way as `RELAY_TRAJ_ROOT`): address book, dietary preferences, contact aliases, per-app hints. Schema goes into `spec/`, validated.
