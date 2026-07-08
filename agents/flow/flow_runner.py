@@ -797,7 +797,16 @@ class FlowRunner:
                     terminal_action=terminal_action,
                 )
 
-            verdict = judge(frames)
+            # With per-step logging off (RELAY_STEP_LOG=0 — the benchmark
+            # default) there are no step PNGs, which used to blind the judge
+            # entirely ("no frames to judge" → unknown) and with it every
+            # judge-driven recovery tier. The leg has only just ended and its
+            # app is still foreground, so judge a freshly captured live frame
+            # instead — same pattern as the loading-retry path below.
+            live0 = None
+            if not frames:
+                live0 = screencap()
+            verdict = judge(frames, live0)
             # `loading` means the screen was still in flight (e.g. a map spinning
             # up after live_navigation's CTA), not a real outcome. Give it a
             # moment and re-judge against a FRESHLY captured frame — only on
