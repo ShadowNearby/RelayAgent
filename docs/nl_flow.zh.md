@@ -120,7 +120,7 @@ app leg 失败不再直接杀掉整条 flow：`FlowRunner` 先给失败定类，
 
 **安全红线**：`handoff_to_user_required: true` 的能力只有重试档——绝不换路由（换 App 会重做用户可见的准备动作）、绝不交给 MobileWorld（`general_e2e` 无 handoff 契约，可能自己越过不可逆动作）。
 
-**旋钮**：`RELAY_RECOVERY`（默认 `1`；`0` 恢复 fail-fast——`run_benchmark_test.py` 默认强制 `0`，`--recovery` 打开）/ `RELAY_RECOVERY_MAX_RETRIES`（每 leg，默认 1）/ `RELAY_RECOVERY_MAX_LEGS`（每 flow 额外 leg 数，默认 2）/ `RELAY_RECOVERY_TOKEN_BUDGET`（默认 15000，按每次尝试 summary 的 `token_usage` 累计）。产物：原始尝试轨迹旁的 `recovery.json`（逐档尝试日志），重试/换路由的尝试落在带 `_retryN` / `_reroute` 后缀的兄弟 leg 目录。
+**旋钮**：`RELAY_RECOVERY`（默认 `1`；`0` 恢复 fail-fast——`run_benchmark_test.py` 默认强制 `0`，`--recovery` 打开）/ `RELAY_RECOVERY_MAX_RETRIES`（每 leg，默认 1）/ `RELAY_RECOVERY_MAX_LEGS`（每 flow 额外 leg 数，默认 2）/ `RELAY_RECOVERY_TOKEN_BUDGET`（默认 15000，按每次尝试 summary 的 `token_usage` 累计）。产物：原始尝试轨迹旁的 `recovery.json`（逐档尝试日志，每条含 tier/target/outcome/detail/**tokens 成本**），重试/换路由的尝试落在带 `_retryN` / `_reroute` 后缀的兄弟 leg 目录。benchmark 侧（R4）：`run_benchmark_test.py --recovery` 从 flow 根 `flow_report.json` harvest 出行级 `recovery` 块，`summary.json`/`summary.md` 报首试 vs 最终成功、逐档命中率与恢复 token 通胀。
 
 **App step（`_run_app_step`）：**
 

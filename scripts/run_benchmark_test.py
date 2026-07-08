@@ -667,6 +667,33 @@ def _harvest_relay_legs(flow_root: Path) -> dict[str, Any]:
         "token_by_phase": tu.get("by_phase"),
         "llm_calls": tu.get("calls") or [],
         "steps": steps or None, "legs": legs, "reply": last_reply, "terminal_action": last_terminal,
+        "recovery": _harvest_recovery(flow_root),
+    }
+
+
+def _harvest_recovery(flow_root: Path) -> dict[str, Any] | None:
+    """Recovery telemetry off the flow-level report (roadmap P1-R4).
+
+    Reads ``<flow_root>/flow_report.json`` (written by FlowRunner on success AND
+    on a mid-flow abort). Returns None when the report is absent (pre-P1 runs /
+    the flow died before FlowRunner started). `first_try_clean` = no step needed
+    the ladder — together with the task verdict it gives the first-try vs final
+    success split R4 reports on.
+    """
+    report = _read_json(flow_root / "flow_report.json")
+    if not isinstance(report, dict):
+        return None
+    step_outcomes = report.get("steps") or []
+    rec = report.get("recovery") or {}
+    attempts = rec.get("attempts") or []
+    return {
+        "enabled": bool(rec.get("enabled")),
+        "extra_legs_used": rec.get("extra_legs_used") or 0,
+        "tokens_used": rec.get("tokens_used") or 0,
+        "attempts": attempts,
+        "step_outcomes": step_outcomes,
+        "first_try_clean": all(s.get("status") == "ok" for s in step_outcomes),
+        "recovered_steps": sum(1 for s in step_outcomes if s.get("status") == "recovered"),
     }
 
 
@@ -694,6 +721,7 @@ def _run_relay(task: dict[str, Any], sys_dir: Path, ctx: RunCtx) -> dict[str, An
         "relay_legs": harvested["legs"], "flow_root": flow_root_str,
         "llm_calls": harvested.get("llm_calls"),          # per-call latency+tokens (parity with mw)
         "token_by_phase": harvested.get("token_by_phase"),  # plan / flow / agent split
+        "recovery": harvested.get("recovery"),            # P1-R4: ladder telemetry per task
     }
 
 
@@ -1009,7 +1037,49 @@ def _aggregate(rows: list[dict[str, Any]], systems: list[str]) -> dict[str, Any]
                 "median": round(median(toks)) if toks else None,
             },
         }
+        recovery = _aggregate_recovery(srows)
+        if recovery is not None:
+            out[sysname]["recovery"] = recovery
     return out
+
+
+def _aggregate_recovery(srows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """First-try vs final success + per-tier hit rate + token inflation
+    (roadmap P1-R4). Only rows that ran with the ladder ON count; returns None
+    when the system had none (mw rows / --recovery not given).
+
+    - first-try success = judged success with zero recovery attempts fired;
+    - final success     = judged success, ladder included;
+    - a tier's `hit` = attempts that ended `ok` (its share of flipped tasks is
+      the R4 cut line: <10% hit rate ⇒ drop the tier).
+    """
+    rrows = [r for r in srows if (r.get("recovery") or {}).get("enabled")]
+    if not rrows:
+        return None
+    succ = [r for r in rrows if r.get("verdict", {}).get("status") == leg_judge.SUCCESS]
+    fired = [r for r in rrows if (r["recovery"].get("attempts"))]
+    by_tier: dict[str, dict[str, int]] = {}
+    for r in rrows:
+        for a in r["recovery"]["attempts"]:
+            t = by_tier.setdefault(a.get("tier", "?"), {"tried": 0, "ok": 0, "tokens": 0})
+            if a.get("outcome") != "skipped":
+                t["tried"] += 1
+            if a.get("outcome") == "ok":
+                t["ok"] += 1
+            t["tokens"] += a.get("tokens") or 0
+    rec_tokens = [r["recovery"].get("tokens_used") or 0 for r in fired]
+    return {
+        "n": len(rrows),
+        "first_try_success": sum(1 for r in succ if not r["recovery"].get("attempts")),
+        "final_success": len(succ),
+        "ladder_fired": len(fired),
+        "recovered_tasks": sum(1 for r in rrows if r["recovery"].get("recovered_steps")),
+        "by_tier": by_tier,
+        "recovery_tokens": {
+            "total": sum(rec_tokens),
+            "mean_when_fired": round(mean(rec_tokens)) if rec_tokens else None,
+        },
+    }
 
 
 def _aggregate_by_app(rows: list[dict[str, Any]], systems: list[str]) -> dict[str, Any]:
@@ -1070,6 +1140,25 @@ def _write_markdown(path: Path, agg: dict[str, Any], systems: list[str],
         "> 时间/token 统计仅覆盖**被判完成**的任务。relay token 暂不含 run_plan 的一次性规划调用。",
         "",
     ]
+    for s in systems:
+        rec = agg.get(s, {}).get("recovery")
+        if not rec:
+            continue
+        lines += [
+            f"## 恢复梯子(P1-R4)— `{s}`",
+            "",
+            f"- 首试成功 **{rec['first_try_success']}/{rec['n']}** → "
+            f"最终成功 **{rec['final_success']}/{rec['n']}**"
+            f"(梯子触发 {rec['ladder_fired']} 任务,翻盘 {rec['recovered_tasks']};"
+            f"恢复 token 合计 {rec['recovery_tokens']['total']})",
+            "",
+            "| Tier | Tried | Hit | Hit rate | Tokens |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for tier, t in rec["by_tier"].items():
+            rate = f"{t['ok'] / t['tried']:.0%}" if t["tried"] else "—"
+            lines.append(f"| {tier} | {t['tried']} | {t['ok']} | {rate} | {t['tokens']} |")
+        lines += ["", "> 逐档命中率 <10% 的档按 R4 规则应裁掉。", ""]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -1287,6 +1376,7 @@ def main(argv: list[str] | None = None) -> int:
                         "llm_calls": metrics.get("llm_calls"),  # per-call: mw probe / relay token_usage.json
                         "token_by_phase": metrics.get("token_by_phase"),  # relay: plan/flow/agent split
                         "relay_legs": metrics.get("relay_legs"), "flow_root": metrics.get("flow_root"),
+                        "recovery": metrics.get("recovery"),  # P1-R4: ladder telemetry
                         "verdict": verdict,
                     }
                     _write_json(task_dir / f"{sysname}_result.json", row)

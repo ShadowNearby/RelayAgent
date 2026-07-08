@@ -166,6 +166,8 @@ class RecoveryLadderTests(unittest.TestCase):
         attempts = json.loads((first.leg_dir / "recovery.json").read_text())
         self.assertEqual(attempts[0]["tier"], "retry")
         self.assertEqual(attempts[0]["outcome"], "ok")
+        # R4: every attempt carries its token cost (0 here — _ok has no usage)
+        self.assertEqual(attempts[0]["tokens"], 0)
 
     def test_env_fail_never_recovers(self) -> None:
         runner = _runner(self._tmp)

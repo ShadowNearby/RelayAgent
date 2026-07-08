@@ -162,7 +162,9 @@ class RecoveryController:
             return False
         return True
 
-    def spend_leg(self, summary: dict[str, Any] | None) -> None:
+    def spend_leg(self, summary: dict[str, Any] | None) -> int:
+        """Account one extra leg; returns the tokens it consumed (for the
+        per-attempt cost column in recovery.json — roadmap P1-R4)."""
         self.extra_legs_used += 1
         total = 0
         try:
@@ -170,6 +172,7 @@ class RecoveryController:
         except (TypeError, ValueError):
             pass
         self.tokens_used += total
+        return total
 
     # ----------------------------------------------------- capability meta
 

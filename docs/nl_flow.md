@@ -120,7 +120,7 @@ Failure taxonomy (`R0`): `env_fail` (subprocess died before the run loop — dev
 
 **Safety red line**: a capability with `handoff_to_user_required: true` gets the retry tier ONLY — never rerouted (a different app would redo user-visible preparation), never handed to MobileWorld (`general_e2e` has no handoff contract and could cross an irreversible action on its own).
 
-**Knobs**: `RELAY_RECOVERY` (default `1`; `0` restores fail-fast — `run_benchmark_test.py` forces `0` unless `--recovery`) / `RELAY_RECOVERY_MAX_RETRIES` (per leg, default 1) / `RELAY_RECOVERY_MAX_LEGS` (extra legs per flow, default 2) / `RELAY_RECOVERY_TOKEN_BUDGET` (default 15000, read off each attempt's summary `token_usage`). Artifacts: `recovery.json` next to the original attempt's trajectory (per-tier attempt log), retry/reroute attempts land in sibling leg dirs suffixed `_retryN` / `_reroute`.
+**Knobs**: `RELAY_RECOVERY` (default `1`; `0` restores fail-fast — `run_benchmark_test.py` forces `0` unless `--recovery`) / `RELAY_RECOVERY_MAX_RETRIES` (per leg, default 1) / `RELAY_RECOVERY_MAX_LEGS` (extra legs per flow, default 2) / `RELAY_RECOVERY_TOKEN_BUDGET` (default 15000, read off each attempt's summary `token_usage`). Artifacts: `recovery.json` next to the original attempt's trajectory (per-tier attempt log; each entry carries tier/target/outcome/detail/**token cost**), retry/reroute attempts land in sibling leg dirs suffixed `_retryN` / `_reroute`. Benchmark side (R4): `run_benchmark_test.py --recovery` harvests a per-row `recovery` block off the flow root's `flow_report.json`, and `summary.json`/`summary.md` report first-try vs final success, per-tier hit rate and recovery-token inflation.
 
 **App step (`_run_app_step`):**
 

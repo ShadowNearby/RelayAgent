@@ -27,7 +27,11 @@ Internal phase-B real-device A/B runs (186 tasks, preliminary, mixed manual judg
 > **Status (2026-07-08)**: R0–R3 shipped (`agents/flow/leg_recovery.py`, nl_flow §6.1);
 > mini-eval in [`report/p1-recovery-mini-eval.md`](../report/p1-recovery-mini-eval.md) —
 > the full four-tier ladder exercised end-to-end on device, flipping one historical
-> failure. The formal R4 evaluation is still pending.
+> failure. R4 telemetry shipped: `recovery.json` carries per-attempt token cost;
+> `run_benchmark_test.py --recovery` lands a per-row `recovery` block and
+> `summary.json`/`summary.md` report first-try vs final success, per-tier hit rate
+> and recovery-token inflation (pinned by `tests/test_benchmark_recovery.py`).
+> The formal R4 evaluation (~30 previously-failed tasks per benchmark, on/off) is still pending.
 
 **Before P1**: in `flow_runner._run_app_step`, any leg failure (rc≠0 / a bind with no captured reply / the output-free completion assert / a failed leg-judge verdict) raised and terminated the flow.
 

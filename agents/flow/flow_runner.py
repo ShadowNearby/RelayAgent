@@ -469,10 +469,12 @@ class FlowRunner:
         attempts: list[dict[str, Any]] = []
         committed = False
 
-        def _log_attempt(tier: str, target: str, outcome: str, detail: str) -> None:
+        def _log_attempt(
+            tier: str, target: str, outcome: str, detail: str, tokens: int = 0,
+        ) -> None:
             entry = {
                 "step": step.get("id"), "tier": tier, "target": target,
-                "outcome": outcome, "detail": detail,
+                "outcome": outcome, "detail": detail, "tokens": tokens,
             }
             attempts.append(entry)
             rec.record(entry)
@@ -508,7 +510,7 @@ class FlowRunner:
                 new_result = self._execute_app_leg(
                     cur_step, dir_suffix=f"_retry{retries_used}", prompt_override=override,
                 )
-                rec.spend_leg(new_result.summary)
+                spent = rec.spend_leg(new_result.summary)
                 target = f"{cur_step['app']}/{cur_step['capability']}"
             elif tier == TIER_REROUTE:
                 reroute_tried = True
@@ -525,7 +527,7 @@ class FlowRunner:
                     "capability": decision["capability_id"],
                 }
                 new_result = self._execute_app_leg(cur_step, dir_suffix="_reroute")
-                rec.spend_leg(new_result.summary)
+                spent = rec.spend_leg(new_result.summary)
                 target = f"{cur_step['app']}/{cur_step['capability']}"
             else:  # TIER_MW
                 mw_step = _to_mw_leg(
@@ -550,12 +552,13 @@ class FlowRunner:
                 new_result.needs_reply, new_result.hard_error, new_result.verdict,
             )
             if new_failure is None:
-                _log_attempt(tier, target, "ok", "attempt succeeded")
+                _log_attempt(tier, target, "ok", "attempt succeeded", tokens=spent)
                 self._commit_leg(cur_step, new_result)
                 committed = True
                 self._note_outcome(step, "recovered", first_failure, recovered_via=tier)
                 break
-            _log_attempt(tier, target, "failed", f"{new_failure.kind}: {new_failure.reason}")
+            _log_attempt(tier, target, "failed",
+                         f"{new_failure.kind}: {new_failure.reason}", tokens=spent)
             exclude.add((cur_step["app"], cur_step["capability"]))
             result, failure = new_result, new_failure
 
