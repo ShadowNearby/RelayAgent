@@ -24,7 +24,9 @@
 
 ## P1 执行期失败恢复闭环(~3 周)
 
-**现状**:`flow_runner._run_app_step` 中 leg 失败(rc≠0 / 需 bind 却无 reply / 输出无关断言失败 / leg judge 判 fail)一律 raise,整条 flow 终止。
+> **状态(2026-07-08)**:R0–R3 已实现(`agents/flow/leg_recovery.py`,nl_flow §6.1),mini-eval 见 [`report/p1-recovery-mini-eval.md`](../report/p1-recovery-mini-eval.md)——四档梯子真机完整行使一遍并翻盘一条历史失败任务。R4 正式评测待跑。
+
+**P1 之前的现状**:`flow_runner._run_app_step` 中 leg 失败(rc≠0 / 需 bind 却无 reply / 输出无关断言失败 / leg judge 判 fail)一律 raise,整条 flow 终止。
 
 ### R0 失败分类税(第 1–2 天)
 

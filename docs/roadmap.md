@@ -24,7 +24,12 @@ Internal phase-B real-device A/B runs (186 tasks, preliminary, mixed manual judg
 
 ## P1 Runtime failure-recovery loop (~3 weeks)
 
-**Today**: in `flow_runner._run_app_step`, any leg failure (rc≠0 / a bind with no captured reply / the output-free completion assert / a failed leg-judge verdict) raises and terminates the flow.
+> **Status (2026-07-08)**: R0–R3 shipped (`agents/flow/leg_recovery.py`, nl_flow §6.1);
+> mini-eval in [`report/p1-recovery-mini-eval.md`](../report/p1-recovery-mini-eval.md) —
+> the full four-tier ladder exercised end-to-end on device, flipping one historical
+> failure. The formal R4 evaluation is still pending.
+
+**Before P1**: in `flow_runner._run_app_step`, any leg failure (rc≠0 / a bind with no captured reply / the output-free completion assert / a failed leg-judge verdict) raised and terminated the flow.
 
 ### R0 Failure taxonomy (days 1–2)
 
