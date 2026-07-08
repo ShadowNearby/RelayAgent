@@ -55,11 +55,17 @@ traj_logs/plan_bard_20260608_231751/
     agent_reply.json   the in-app reply the agent scraped {reply, target_app}
     wall_clock.json    {wall_s, phase:"task"}  (RELAY_WALL_OUT)
     summary.json       {steps, last_action_type, last_goal_status, token_usage}
-    leg_verdict.json   leg judge verdict {status, score, reason}  (flow writes)
+    leg_verdict.json   leg judge verdict {status, score, reason, failure_kind}  (flow writes)
+    recovery.json      recovery-ladder attempt log (only when recovery fired)
 ```
 
 There is **no `01_plan_route/user_task/` layer**, and the flow never creates or
 touches the global `traj_logs/user_task/`.
+
+Recovery attempts (nl_flow §6.1) land in sibling leg dirs suffixed `_retryN` /
+`_reroute` (same inner layout); the flow root gets a `flow_report.json`
+(per-step outcomes + recovery attempts + blackboard keys), written on success
+and on mid-flow aborts alike.
 
 ## 5. `flow_llm_calls` — the flow process's LLM calls land in the leg too
 

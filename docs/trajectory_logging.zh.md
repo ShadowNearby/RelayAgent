@@ -42,10 +42,13 @@ traj_logs/plan_bard_20260608_231751/
     agent_reply.json   in-app agent 抓到的回复 {reply, target_app}
     wall_clock.json    {wall_s, phase:"task"}（RELAY_WALL_OUT）
     summary.json       {steps, last_action_type, last_goal_status, token_usage}
-    leg_verdict.json   leg judge 判决 {status, score, reason}（flow 写）
+    leg_verdict.json   leg judge 判决 {status, score, reason, failure_kind}（flow 写）
+    recovery.json      恢复梯子的逐档尝试日志（仅恢复触发时出现）
 ```
 
 **没有 `01_plan_route/user_task/` 这一层**，flow 期间也不创建/不触碰全局 `traj_logs/user_task/`。
+
+恢复尝试（nl_flow §6.1）落在带 `_retryN` / `_reroute` 后缀的兄弟 leg 目录（内部形态相同）；flow 根多一个 `flow_report.json`（每 step 结局 + 恢复尝试 + blackboard 键），成功和中途失败都会写。
 
 ## 5. `flow_llm_calls` —— flow 进程的 LLM call 也落进 leg
 
