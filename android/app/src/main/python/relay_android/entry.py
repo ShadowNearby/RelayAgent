@@ -35,6 +35,10 @@ _PASSTHROUGH_ENV = (
     "RELAY_STEP_LOG",
     "RELAY_FRESH_CONV",
     "RELAY_DISMISS_PERMISSIONS",
+    # Failure-recovery ladder (P1) + user memory layer (P3) knobs.
+    "RELAY_RECOVERY",
+    "RELAY_PROFILE",
+    "RELAY_TRAJ_REDACT",
 )
 
 
@@ -54,10 +58,18 @@ def _install_env(cfg: dict) -> Path:
     relay = files / "relay"  # extracted by AssetInstaller
     os.environ["RELAY_MANIFESTS"] = str(relay / "manifests")
     os.environ["RELAY_TRAJ_ROOT"] = str(files / "traj_logs")
+    # User profile (P3) lives in filesDir like the traj logs — local,
+    # inspectable via the raw-file viewer, gone with an app data wipe.
+    os.environ["RELAY_PROFILE_ROOT"] = str(files / "profile")
     # No OpenAI SDK in the APK; force the stdlib HTTP chat client.
     os.environ["RELAY_LLM_HTTP"] = "1"
     # Legs run in this process (Chaquopy cannot spawn subprocesses).
     os.environ["RELAY_LEG_EXECUTOR"] = "inprocess"
+    # No host MobileWorld runtime on the phone: keep BOTH the plan-time
+    # conversion (FlowPlanner(mw_fallback=False) below) and the runtime
+    # recovery ladder's MW tier off — otherwise a failing leg would burn a
+    # recovery attempt on a doomed `scripts/run_mobileworld.py` spawn.
+    os.environ["RELAY_MW_FALLBACK"] = "0"
 
     run_root = files / "traj_logs" / datetime.now().strftime("%Y%m%d_%H%M%S")
     return run_root
@@ -153,10 +165,14 @@ def run_flow(nl: str, config_json: str) -> str:
 
         # prekill=False: prekill is force-stop based, which has no real
         # equivalent without shell (CLEAR_TASK relaunch happens per leg).
+        # nl_request wires the P3-M3 memory pass: after a successful flow, a
+        # proposed preference is confirmed y/n through the overlay ask_user
+        # before anything is written to the profile.
         outcome = nl_flow.execute_plan(
             result.plan_path,
             leg_executor=InProcessLegExecutor(),
             prekill=False,
+            nl_request=nl,
         )
         _write_meta(outcome.flow_traj_root, request=nl, kind="flow")
         return json.dumps(

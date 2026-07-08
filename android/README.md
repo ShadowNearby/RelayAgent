@@ -15,7 +15,9 @@
 | `.env` | 设置页 → EncryptedSharedPreferences → entry 装入 env |
 | 终端 ask_user / EOF | 悬浮面板 回答 / 我来接管（=None=handoff 成功终止） |
 | 子进程 per leg | `InProcessLegExecutor`（`RELAY_LEG_EXECUTOR=inprocess`） |
-| MobileWorld 兜底 | 砍掉：`mw_fallback=False` + `allow_mw_legs=False` → 「无法处理」 |
+| MobileWorld 兜底 | 砍掉：`mw_fallback=False` + `allow_mw_legs=False` + `RELAY_MW_FALLBACK=0`（连恢复梯子的 MW 档一起关）→ 「无法处理」 |
+| `~/.relayagent/profile.yaml`（P3 记忆层） | `RELAY_PROFILE_ROOT=<filesDir>/profile`；M3 写入前的 y/n 走悬浮面板 ask_user；`RELAY_PROFILE`/`RELAY_TRAJ_REDACT`/`RELAY_RECOVERY` 可由设置页经 `_PASSTHROUGH_ENV` 覆盖 |
+| scrcpy 流式抓帧 + settle 检测（P2，主机侧 only） | 不适用：App 本就走 MediaProjection ~50ms/帧；`DeviceBackend.wait_settled` 默认 False → 固定 sleep 行为不变 |
 
 ## 构建（需要 Android Studio 的机器）
 
