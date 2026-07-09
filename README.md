@@ -120,8 +120,7 @@ Full method, threats-to-validity, and frozen data: [Tech Report](report/RelayAge
 
 ```
 RelayAgent/
-├── SPEC.md                    # manifest specification (v0.1)
-├── SPEC-OPEN-QUESTIONS.md     # known design questions still in flight
+├── SPEC.md                    # manifest specification (v0.1) + open questions
 ├── spec/                      # schema.json (manifest) + profile.schema.json (user memory)
 ├── manifests/                 # one YAML card per app; 10 Android cards, 50 capabilities
 ├── agents/                    # device backends, LLM client, runtime loop, routing, relay adapter, NL flow

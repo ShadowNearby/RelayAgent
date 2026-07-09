@@ -120,8 +120,7 @@ RelayAgent（**RA** = 带 GUI 兜底的 NL flow）在三个真机基准上全面
 
 ```
 RelayAgent/
-├── SPEC.md                    # manifest 规范 (v0.1)
-├── SPEC-OPEN-QUESTIONS.md     # 尚在推进的设计问题
+├── SPEC.md                    # manifest 规范 (v0.1) + 开放问题
 ├── spec/                      # schema.json（manifest）+ profile.schema.json（用户记忆）
 ├── manifests/                 # 每 App 一张 YAML 卡片；10 张安卓卡、50 个能力
 ├── agents/                    # 设备后端、LLM client、运行时循环、路由、中继适配器、NL flow
