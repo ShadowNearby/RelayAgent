@@ -1,7 +1,7 @@
 <h1 align="center">RelayAgent</h1>
 
 <p align="center">
-  <b>通过将子任务委派给 App 内置助手，实现移动端任务自动化</b>
+  <b>通过将子任务委派给 App 内置助手，实现移动端的任务自动化</b>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@ RelayAgent 是一个移动端 Agent：它通过把子任务**委派给 App 内�
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent 架构：一条自然语言请求被分解为子任务，每个子任务委派给合适的 App 内置助手" width="820">
   <br>
-  <em>RelayAgent 架构：先将任务拆解，再把每个子任务委派给对应的 App 内置助手</br><b>找一家高分的附近餐厅</b> → 小红书助手；<b>导航前往</b> → 高德地图助手</em>
+  <em>RelayAgent 架构：先将任务拆解，再把每个子任务委派给对应的 App 内置助手</br><b>例如：找一家高分的附近餐厅</b> → 小红书助手；<b>导航前往</b> → 高德地图助手</em>
 </p>
 
 ---
@@ -36,47 +36,48 @@ RelayAgent 是一个移动端 Agent：它通过把子任务**委派给 App 内�
 
 RelayAgent 由三个部分组成：
 
-- **🧭 基于委派的核心执行流** 将任务分解为 App 内可完成的子任务，每个子任务路由给相应 App 内置助手执行；若无助手可完成，则由 GUI Agent 通过截图逐步兜底。
-- **📚 动态能力卡（Capability Card）** 将 App 内置助手建模为能力卡（YAML manifest），描述调用方式与能力边界，据此进行子任务路由。
-- **🧪 RelayBench** 一个自建的端侧 Agent 测试集，包含 30 个长时序日常任务，重点覆盖现有测试集未涉及的 App 及其功能。
+- **🧭 基于委派的核心执行流**： 将主任务分解为 App 内可完成的子任务，每个子任务路由给相应 App 内置助手执行；若无助手可完成，则由 GUI Agent 通过逐步截图/执行的方式来兜底。
+- **📚 动态能力卡（Capability Card）**： 将 App 内置助手建模为能力卡（YAML manifest），描述调用方式与能力边界，并据此进行子任务的路由。
+- **🧪 RelayBench**： 一个自建的移动侧 Agent 测试集，包含 30 个长时序日常任务，重点覆盖现有测试集未涉及的 App 及其功能。
 
-### 与 API 方案和 GUI Agent 方案的对比
+### 与 API 方案和纯 GUI Agent 方案的对比
 
 |  | 厂商 API<br>(A2A / App Intents / AppFunctions) | 纯 GUI Agent<br>(Mobile-Agent、AppAgent…) | RelayAgent（本项目） |
 | --- | --- | --- | --- |
 | 谁来做任务 | App 暴露的 API | 由 Agent 驱动的用户模拟行为 | App 内置助手 + 由 Agent 驱动的用户模拟行为 |
 | 需要厂商配合 | 必须 | 不需要 | 不需要 |
 | 覆盖面 | 窄（只有已发布的接口） | 任意 App | 任意 App |
-| 单个 App 内任务的成本/时延 | 低 | 高 | 低 |
+| 速度 | 快 | 慢 | 较快 |
+| Token 成本 | 无 | 高 | 低 |
 
 <p align="center">
-  <img src="assets/paper/gui-agent.png" alt="纯 GUI Agent：每步一次截图 + 一次 VLM 往返" width="720">
+  <img src="assets/paper/gui-agent.png" alt="纯 GUI Agent：每步一次截图 + 一次 VLM 往返" width="820">
   <br>
   <em>纯 GUI Agent：每步一次截图 + VLM 往返</em>
   <br><br>
-  <img src="assets/paper/dele-agent.png" alt="RelayAgent 委派：能力卡给出确定性入口脚本，App 内置助手执行任务" width="720">
+  <img src="assets/paper/dele-agent.png" alt="RelayAgent 委派：能力卡给出确定性入口脚本，App 内置助手执行任务" width="820">
   <br>
   <em>RelayAgent：将任务委派给 App 内置助手</em>
 </p>
 
 ## 📊 测试结果
 
-RelayAgent 在三个测试集（AndroidDaily、MobileWorld、RelayBench）上均优于纯 GUI Agent 基线（MobileWorld 的 `general_e2e`）：
+RelayAgent 在三个测试集（AndroidDaily、MobileWorld、RelayBench）上均优于纯 GUI Agent Baseline（MobileWorld 的 `general_e2e`）：
 
 - 成功率提高 6–15 个百分点
-- 端到端速度约为基线的 1.4–2 倍
-- token 消耗约为基线的 1/7–1/10
+- 端到端速度约为 Baseline 的 1.4–2 倍
+- token 消耗约为 Baseline 的 1/7–1/10
 
 <p align="center">
-  <img src="assets/paper/fig1_completion_bars.png" alt="成功率：RA 46/49/83% vs 基线 GUI Agent 31/34/77%（AndroidDaily / MobileWorld / RelayBench）" width="820">
+  <img src="assets/paper/fig1_completion_bars.png" alt="成功率：RA 46/49/83% vs Baseline GUI Agent 31/34/77%（AndroidDaily / MobileWorld / RelayBench）" width="820">
   <br>
   <em>任务完成率。浅蓝 = 无 Fallback 的 RelayAgent，蓝 = RelayAgent，橙 = GUI Agent Baseline</em>
   <br><br>
-  <img src="assets/paper/fig2_paired_time.png" alt="逐任务完成时间，RA（蓝）vs 基线（橙），按任务配对；阴影区为通过 GUI Agent 兜底完成的任务" width="820">
+  <img src="assets/paper/fig2_paired_time.png" alt="逐任务完成时间，RA（蓝）vs Baseline（橙），按任务配对；阴影区为通过 GUI Agent 兜底完成的任务" width="820">
   <br>
-  <em>任务完成时间。蓝 = RelayAgent，橙 = GUI Agent Baseline；阴影区为通过 GUI Agent 兜底完成的任务。</em>
+  <em>任务完成时间。蓝 = RelayAgent，橙 = Baseline GUI Agent；阴影区为通过 GUI Agent 兜底完成的任务。</em>
   <br><br>
-  <img src="assets/paper/fig3_paired_tokens.png" alt="逐任务 token 消耗，RA（蓝）vs 基线（橙），按任务配对；阴影区为通过 GUI Agent 兜底完成的任务" width="820">
+  <img src="assets/paper/fig3_paired_tokens.png" alt="逐任务 token 消耗，RA（蓝）vs Baseline（橙），按任务配对；阴影区为通过 GUI Agent 兜底完成的任务" width="820">
   <br>
   <em>任务 token 消耗</em>
 </p>
@@ -120,12 +121,12 @@ uv run python scripts/run_benchmark_test.py               # 有设备；运行�
 ## 📚 文档
 
 - [核心流程的架构](docs/nl_flow.zh.md)
-- [能力卡约定](docs/manifest_conventions.zh.md)
+- [能力卡片规范](docs/manifest_conventions.zh.md)
 - [真机测试环境搭建](docs/device_setup.zh.md) / [模拟器测试环境搭建](docs/emulator_testing.zh.md)
-- [路线图](docs/roadmap.zh.md)
 - [Android App](android/README.md)
+- [路线图](docs/roadmap.zh.md)
 
-## 📇 支持的参考能力卡
+## 📇 支持的参考能力卡片
 
 10 个 App · 50 个 App 内置助手能力（高德、通义千问、携程、Gemini、小红书、微信、WPS、Reddit、Booking.com、Microsoft Copilot）。详见 [docs/cards.zh.md](docs/cards.zh.md)。
 

@@ -27,7 +27,7 @@ RelayAgent is a mobile agent that completes tasks end-to-end by **delegating sub
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent architecture: a natural-language request is decomposed into subtasks, each delegated to a suitable in-app assistant" width="820">
   <br>
-  <em>RelayAgent architecture: the task is first decomposed, then each subtask is delegated to the corresponding in-app assistant.</br><b>Find a top-rated nearby restaurant</b> → Xiaohongshu's assistant; <b>navigate there</b> → Amap's assistant.</em>
+  <em>RelayAgent architecture: the task is first decomposed, then each subtask is delegated to the corresponding in-app assistant.</br><b>e.g. Find a top-rated nearby restaurant</b> → Xiaohongshu's assistant; <b>navigate there</b> → Amap's assistant.</em>
 </p>
 
 ---
@@ -36,25 +36,26 @@ RelayAgent is a mobile agent that completes tasks end-to-end by **delegating sub
 
 RelayAgent is built from three pieces:
 
-- **🧭 A delegation-based execution flow.** Decomposes a request into app-local subtasks, routes each subtask to the corresponding in-app assistant; when no assistant can complete a subtask, a screenshot-driven GUI agent steps in as a fallback.
-- **📚 Dynamic capability cards.** Models each in-app assistant as a capability card (a YAML manifest) describing how to invoke it and the boundaries of what it can do, which drives subtask routing.
-- **🧪 RelayBench.** A self-built on-device agent test suite of 30 long-horizon daily tasks, focused on apps and capabilities not covered by existing test suites.
+- **🧭 A delegation-based execution flow**: Decomposes the main task into app-local subtasks, routes each subtask to the corresponding in-app assistant for execution; when no assistant can complete a subtask, a GUI agent falls back via step-by-step screenshot-driven execution.
+- **📚 Dynamic capability cards (Capability Card)**: Models each in-app assistant as a capability card (a YAML manifest) describing how to invoke it and the boundaries of what it can do, and routes subtasks accordingly.
+- **🧪 RelayBench**: A self-built mobile-side agent test suite of 30 long-horizon daily tasks, focused on apps and capabilities not covered by existing test suites.
 
-### Compared with vendor APIs and pure GUI agents
+### Compared with API-based approaches and pure GUI agents
 
 |  | Vendor APIs<br>(A2A / App Intents / AppFunctions) | Pure GUI agents<br>(Mobile-Agent, AppAgent, …) | RelayAgent (ours) |
 | --- | --- | --- | --- |
 | Who does the task | the app's exposed API | agent-driven simulation of user actions | in-app assistant + agent-driven simulation of user actions |
 | Vendor cooperation required | required | none | none |
 | Coverage | narrow (published endpoints only) | any app | any app |
-| Cost / latency per app-local task | low | high | low |
+| Speed | fast | slow | faster |
+| Token cost | none | high | low |
 
 <p align="center">
-  <img src="assets/paper/gui-agent.png" alt="A pure GUI agent: one screenshot + one VLM round-trip per step" width="720">
+  <img src="assets/paper/gui-agent.png" alt="A pure GUI agent: one screenshot + one VLM round-trip per step" width="820">
   <br>
   <em>Pure GUI agent: a screenshot + VLM round-trip every step</em>
   <br><br>
-  <img src="assets/paper/dele-agent.png" alt="RelayAgent delegation: a capability card supplies a deterministic entry script, the in-app assistant executes the task" width="720">
+  <img src="assets/paper/dele-agent.png" alt="RelayAgent delegation: a capability card supplies a deterministic entry script, the in-app assistant executes the task" width="820">
   <br>
   <em>RelayAgent: delegates the task to the in-app assistant</em>
 </p>
@@ -70,11 +71,11 @@ RelayAgent outperforms a pure GUI agent baseline (MobileWorld's `general_e2e`) o
 <p align="center">
   <img src="assets/paper/fig1_completion_bars.png" alt="Success rate: RA 46/49/83% vs baseline GUI agent 31/34/77% on AndroidDaily / MobileWorld / RelayBench" width="820">
   <br>
-  <em>Task completion rate. Light blue = RelayAgent without fallback, blue = RelayAgent, orange = GUI agent baseline</em>
+  <em>Task completion rate. Light blue = RelayAgent without fallback, blue = RelayAgent, orange = baseline GUI agent</em>
   <br><br>
   <img src="assets/paper/fig2_paired_time.png" alt="Per-task completion time, RA (blue) vs baseline (orange), paired by task; shaded region is tasks completed via GUI-agent fallback" width="820">
   <br>
-  <em>Task completion time. Blue = RelayAgent, orange = GUI agent baseline; the shaded region is tasks completed via GUI-agent fallback.</em>
+  <em>Task completion time. Blue = RelayAgent, orange = baseline GUI agent; the shaded region is tasks completed via GUI-agent fallback.</em>
   <br><br>
   <img src="assets/paper/fig3_paired_tokens.png" alt="Per-task token consumption, RA (blue) vs baseline (orange), paired by task; shaded region is tasks completed via GUI-agent fallback" width="820">
   <br>
@@ -120,10 +121,10 @@ The full pipeline — planning, routing, execution, logging — also runs inside
 ## 📚 Documentation
 
 - [Core flow architecture](docs/nl_flow.md)
-- [Capability card conventions](docs/manifest_conventions.md)
+- [Capability card specification](docs/manifest_conventions.md)
 - [Real-device setup](docs/device_setup.md) / [Emulator setup](docs/emulator_testing.md)
-- [Roadmap](docs/roadmap.md)
 - [Android App](android/README.en.md)
+- [Roadmap](docs/roadmap.md)
 
 ## 📇 Supported reference capability cards
 
