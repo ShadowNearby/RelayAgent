@@ -1,0 +1,55 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # Chaquopy's buildPython: must match android/app/build.gradle.kts
+      # (chaquopy { version = "3.12" }).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Signing secrets: RELAY_KEYSTORE_BASE64 (base64 of the .jks file),
+      # RELAY_KEYSTORE_PASSWORD, RELAY_KEY_ALIAS, RELAY_KEY_PASSWORD.
+      # Decoded to an absolute path so Gradle's file() resolution (relative
+      # to android/app) can't get it wrong.
+      - name: Decode signing keystore
+        working-directory: android
+        run: |
+          KS_PATH="$PWD/release.jks"
+          echo "${{ secrets.RELAY_KEYSTORE_BASE64 }}" | base64 -d > "$KS_PATH"
+          echo "RELAY_KEYSTORE_PATH=$KS_PATH" >> "$GITHUB_ENV"
+
+      - name: Assemble signed release APK
+        working-directory: android
+        env:
+          RELAY_KEYSTORE_PASSWORD: ${{ secrets.RELAY_KEYSTORE_PASSWORD }}
+          RELAY_KEY_ALIAS: ${{ secrets.RELAY_KEY_ALIAS }}
+          RELAY_KEY_PASSWORD: ${{ secrets.RELAY_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f "${RELAY_KEYSTORE_PATH}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/release/app-release.apk
+          generate_release_notes: true

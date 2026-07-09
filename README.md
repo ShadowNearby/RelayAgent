@@ -5,7 +5,6 @@
 </p>
 
 <p align="center">
-  <a href="report/RelayAgent-TechReport.md">📄 Tech Report</a> •
   <a href="#-citation">📚 Paper</a> •
   <a href="android/README.en.md">📱 On-device App</a> •
   <a href="SPEC.md">📋 Spec v0.1</a> •
@@ -104,7 +103,7 @@ A four-configuration A/B on a real device isolates *what delegation buys* on **T
 - **Predictability is itself a result.** RA's per-task cost is nearly constant (T1 **3987 / 3986 / 3950** tokens, VLM calls fixed at 2), while the pure-VLM agent varied **38k → 97k tokens at 46 → 379 s** on the identical task. In dollars: RA ~**$0.001/task** vs. ~**$0.016** for the pure-VLM agent (16.6×).
 - **Safety held.** Every `handoff_to_user_required` run stopped before the irreversible CTA with zero confirm taps; **28/28 capabilities** across 7 cards reached their expected terminal state (§8.2.1).
 
-Full method, threats-to-validity, and frozen data: [Tech Report](report/RelayAgent-TechReport.md) and `report/benchmark-data-n3.md`.
+Full method, threats-to-validity, and frozen data: tech report and benchmark data (not yet published; write-up in progress).
 
 </details>
 
@@ -133,7 +132,6 @@ RelayAgent/
 ├── benchmark/                 # task sets (incl. RelayBench) for the A/B benchmark
 ├── tests/                     # device-less unit tests (CI)
 ├── docs/                      # design docs — see Documentation below
-├── report/                    # tech report + frozen benchmark data
 └── LICENSE                    # Apache-2.0
 ```
 

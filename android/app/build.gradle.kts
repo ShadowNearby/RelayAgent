@@ -74,9 +74,28 @@ android {
         }
     }
 
+    // Release signing: only wired up when RELAY_KEYSTORE_PATH is set (CI
+    // release job, or a developer signing locally). Absent -> release build
+    // stays unsigned, same as before (no behavior change for local dev/CI PR
+    // builds).
+    val releaseKeystorePath = System.getenv("RELAY_KEYSTORE_PATH")
+    signingConfigs {
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = System.getenv("RELAY_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("RELAY_KEY_ALIAS")
+                keyPassword = System.getenv("RELAY_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false // Chaquopy + reflection; revisit later
+            if (releaseKeystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

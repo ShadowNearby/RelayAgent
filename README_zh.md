@@ -5,7 +5,6 @@
 </p>
 
 <p align="center">
-  <a href="report/RelayAgent-TechReport.md">📄 技术报告</a> •
   <a href="#-引用">📚 论文</a> •
   <a href="android/README.md">📱 端上 App</a> •
   <a href="SPEC.md">📋 规范 v0.1</a> •
@@ -104,7 +103,7 @@ RelayAgent（**RA** = 带 GUI 兜底的 NL flow）在三个真机基准上全面
 - **可预测性本身就是结果。** RA 单任务成本近乎恒定（T1 **3987 / 3986 / 3950** token，VLM 调用固定 2 次），而纯 VLM 智能体在同一任务上从 **38k → 97k token、46 → 379 秒**乱跳。折算成钱：RA ~**$0.001/任务** vs. 纯 VLM ~**$0.016**（16.6×）。
 - **安全守住。** 每次 `handoff_to_user_required` 运行都在不可逆 CTA 前停住、零确认点击；**28/28 个能力**跨 7 张卡片都到达预期终态（§8.2.1）。
 
-完整方法、有效性威胁、冻结数据见[技术报告](report/RelayAgent-TechReport.md) 与 `report/benchmark-data-n3.md`。
+完整方法、有效性威胁、冻结数据：技术报告与基准数据（尚未发布，撰写中）。
 
 </details>
 
@@ -133,7 +132,6 @@ RelayAgent/
 ├── benchmark/                 # A/B 基准任务集（含 RelayBench）
 ├── tests/                     # 无设备单测（CI）
 ├── docs/                      # 设计文档——见下「文档」
-├── report/                    # 技术报告 + 冻结基准数据
 └── LICENSE                    # Apache-2.0
 ```
 

@@ -31,3 +31,7 @@ traj_logs/
 artifacts/
 recordings/
 eval_figs/
+
+# Android release signing keystore (kept locally, never committed)
+*.jks
+*.keystore
