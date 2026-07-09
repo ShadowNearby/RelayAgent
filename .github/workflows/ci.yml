@@ -37,6 +37,7 @@ jobs:
           for mod in (
               "agents.runtime.native_runner",
               "agents.agent.relay_agent",
+              "agents.agent.general_agent",
               "agents.flow.flow_planner",
               "agents.flow.flow_runner",
               "agents.routing.capability_matrix_router",
@@ -44,3 +45,29 @@ jobs:
               importlib.import_module(mod)
               print(f"ok: {mod}")
           EOF
+
+  # The on-device app: Chaquopy bundles agents/ + manifests into the APK at
+  # build time (syncRelayPython), so Python-side changes can break the Android
+  # build too — build it on every PR, not just on android/ changes.
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # Chaquopy's buildPython: must match the version pinned in
+      # android/app/build.gradle.kts (chaquopy { version = "3.12" }).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The Android SDK (API 34) is preinstalled on ubuntu-latest runners;
+      # sdk.dir resolves from ANDROID_HOME (local.properties is untracked).
+      - name: Assemble debug APK
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --no-daemon
