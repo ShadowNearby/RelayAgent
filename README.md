@@ -6,8 +6,7 @@
 
 <p align="center">
   <a href="#-citation">📚 Paper</a> •
-  <a href="android/README.en.md">📱 On-device App</a> •
-  <a href="SPEC.md">📋 Spec v0.1</a> •
+  <a href="android/README.en.md">📱 Android App</a> •
   <a href="docs/roadmap.md">🗺️ Roadmap</a> •
   <a href="CONTRIBUTING.md">🤝 Contributing</a>
 </p>
@@ -23,211 +22,112 @@
   <img src="https://img.shields.io/badge/PRs-welcome-red.svg" alt="PRs welcome">
 </p>
 
-RelayAgent is a mobile agent that automates tasks by **delegating each subtask to the in-app AI assistant an app already ships** — reusing the user's existing login and context — and falling back to GUI control only where no assistant covers the task.
+RelayAgent is a mobile agent that completes tasks end-to-end by **delegating subtasks to in-app assistants** (e.g. Qwen's assistant, Xiaohongshu's Dot, WeChat's AI assistant).
 
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent architecture: a natural-language request is decomposed into subtasks, each delegated to a suitable in-app assistant" width="820">
   <br>
-  <em>One request, many in-app assistants: the planner decomposes the instruction and delegates each subtask to the app agent that already holds the user's context. <b>Find a nearby restaurant</b> → a discovery assistant; <b>navigate there</b> → a map assistant.</em>
+  <em>RelayAgent architecture: the task is first decomposed, then each subtask is delegated to the corresponding in-app assistant.</br><b>Find a top-rated nearby restaurant</b> → Xiaohongshu's assistant; <b>navigate there</b> → Amap's assistant.</em>
 </p>
 
 ---
 
 ## 📖 About
 
-RelayAgent turns "delegate one task to one app's assistant" into a full cross-app agent architecture. It is built from three pieces:
+RelayAgent is built from three pieces:
 
-- **🧭 Delegation-based NL flow.** Decomposes a request into app-local subtasks, routes each to an app, and drives the delegation as deterministic adb actions (cold-launch → entry path → type prompt → scrape reply → hand off), passing results across a shared blackboard — with runtime failure recovery and GUI fallback. *(`agents/flow/`; Spec §5)*
-- **📚 A dynamic capability library.** Each app is modeled as a **card** — a schema-validated manifest of its assistant's entry path, capabilities, and **handoff-to-user safety policy** (irreversible actions must `ask_user` first). Capability boundaries are learned from execution to guide routing and fallback. *(`manifests/`; Spec §4)*
-- **🧪 The RelayBench benchmark.** 30 long-horizon daily tasks over apps not covered by existing suites. *(`benchmark/`)*
+- **🧭 A delegation-based execution flow.** Decomposes a request into app-local subtasks, routes each subtask to the corresponding in-app assistant; when no assistant can complete a subtask, a screenshot-driven GUI agent steps in as a fallback.
+- **📚 Dynamic capability cards.** Models each in-app assistant as a capability card (a YAML manifest) describing how to invoke it and the boundaries of what it can do, which drives subtask routing.
+- **🧪 RelayBench.** A self-built on-device agent test suite of 30 long-horizon daily tasks, focused on apps and capabilities not covered by existing test suites.
 
-### The third substrate, side by side
+### Compared with vendor APIs and pure GUI agents
 
-|  | Vendor APIs<br>(A2A / App Intents / AppFunctions) | Pure GUI agents<br>(Mobile-Agent, AppAgent, …) | **RelayAgent (ours)** |
+|  | Vendor APIs<br>(A2A / App Intents / AppFunctions) | Pure GUI agents<br>(Mobile-Agent, AppAgent, …) | RelayAgent (ours) |
 | --- | --- | --- | --- |
-| Who does the task | the app's exposed API | the agent re-drives the full UI | the app's **own logged-in** in-app assistant |
-| Vendor cooperation | **required** | none | **optional** |
-| Coverage | narrow (published endpoints only) | any app | any app with an assistant, **GUI fallback otherwise** |
-| User context (login, address, payment) | re-provided | re-navigated each run | **already present** |
-| Cost / latency per app-local task | low (one call) | **high** (screenshot + VLM + click, per step) | **low** (one NL instruction) |
-| Irreversible-action safety | API-level | ad-hoc | **`handoff_to_user_required` contract** |
-
-In 2026 vendors are wiring their *own* assistants into their *own* services (Alibaba's Qwen app now covers Taobao 闪购, Fliggy, and Amap ride-hailing) — which validates the premise while bounding RelayAgent to the **cross-vendor / long-tail gap** that first-party integration never reaches.
+| Who does the task | the app's exposed API | agent-driven simulation of user actions | in-app assistant + agent-driven simulation of user actions |
+| Vendor cooperation required | required | none | none |
+| Coverage | narrow (published endpoints only) | any app | any app |
+| Cost / latency per app-local task | low | high | low |
 
 <p align="center">
   <img src="assets/paper/gui-agent.png" alt="A pure GUI agent: one screenshot + one VLM round-trip per step" width="720">
   <br>
-  <em><b>Pure GUI agent:</b> a screenshot + VLM round-trip every step.</em>
+  <em>Pure GUI agent: a screenshot + VLM round-trip every step</em>
   <br><br>
-  <img src="assets/paper/dele-agent.png" alt="RelayAgent delegation: the card supplies a deterministic entry script; the in-app assistant does the task" width="720">
+  <img src="assets/paper/dele-agent.png" alt="RelayAgent delegation: a capability card supplies a deterministic entry script, the in-app assistant executes the task" width="720">
   <br>
-  <em><b>Delegation via a card:</b> a deterministic entry script (open → type prompt → submit) hands the task to the in-app assistant.</em>
+  <em>RelayAgent: delegates the task to the in-app assistant</em>
 </p>
 
-## 📊 Evaluation
+## 📊 Results
 
-RelayAgent (**RA** = NL flow with GUI fallback) consistently outperforms a pure-GUI baseline (MobileWorld's `general_e2e`) on all three real-device benchmarks — **AndroidDaily**, **MobileWorld**, and our own **RelayBench**:
+RelayAgent outperforms a pure GUI agent baseline (MobileWorld's `general_e2e`) on all three test suites (AndroidDaily, MobileWorld, RelayBench):
 
-- **📈 +6 to +15 pts success rate** — 46 / 49 / 83% vs. 31 / 34 / 77%
-- **⚡ 1.8× faster** end-to-end (1.4–2× range)
-- **🪙 8.8× fewer LLM tokens** (7–10× range)
+- Success rate up 6–15 points
+- End-to-end speed ~1.4–2× the baseline
+- Token consumption ~1/7–1/10 of the baseline
 
 <p align="center">
-  <img src="assets/paper/fig1_completion_bars.png" alt="Success rate: RA 46/49/83% vs baseline GUI agent 31/34/77% on AndroidDaily / MobileWorld / RelayBench" width="620">
-</p>
-
-Same Pixel 9 and backbone model; each task run by both systems under identical state with a cold-launch reset, human-judged on trajectory + outcome. Speed/token gains are on tasks completed without fallback; when GUI fallback *is* needed, delegation adds only ~4 s (7%) and ~10 K tokens (5%), because capability boundaries are modeled well enough to avoid useless delegation.
-
-<details>
-<summary><b>Per-task token consumption &amp; single-task A/B (Tech Report §8)</b></summary>
-
-<br>
-
-<p align="center">
-  <img src="assets/paper/fig3_paired_tokens.png" alt="Per-task token consumption, RA vs baseline, paired by task" width="820">
+  <img src="assets/paper/fig1_completion_bars.png" alt="Success rate: RA 46/49/83% vs baseline GUI agent 31/34/77% on AndroidDaily / MobileWorld / RelayBench" width="820">
   <br>
-  <em>Per-task tokens, paired by task: blue = RelayAgent, orange = GUI baseline. The shaded region is tasks completed via GUI fallback.</em>
+  <em>Task completion rate. Light blue = RelayAgent without fallback, blue = RelayAgent, orange = GUI agent baseline</em>
+  <br><br>
+  <img src="assets/paper/fig2_paired_time.png" alt="Per-task completion time, RA (blue) vs baseline (orange), paired by task; shaded region is tasks completed via GUI-agent fallback" width="820">
+  <br>
+  <em>Task completion time. Blue = RelayAgent, orange = GUI agent baseline; the shaded region is tasks completed via GUI-agent fallback.</em>
+  <br><br>
+  <img src="assets/paper/fig3_paired_tokens.png" alt="Per-task token consumption, RA (blue) vs baseline (orange), paired by task; shaded region is tasks completed via GUI-agent fallback" width="820">
+  <br>
+  <em>Task token consumption</em>
 </p>
-
-A four-configuration A/B on a real device isolates *what delegation buys* on **T1**, a single-app order for three Mixue drinks. All configs place the same order through the same backend (Taobao 闪购's assistant *is* 千问/Qwen), varying only interaction style. Median tokens, n=3:
-
-| Configuration | Median tokens | vs RA optimized |
-| --- | ---: | ---: |
-| Pure-VLM, hand-driving native UI | 75 463 | 18.9× |
-| Pure-VLM, *using* the in-app assistant (`general_e2e`) | 77 347 | 19.4× |
-| RelayAgent, optimizations off (baseline) | 9 585 | 2.4× |
-| **RelayAgent, optimized** | **3 986** | **1×** |
-
-- **Structured delegation** wins against a pure-VLM agent driving the *same* assistant because it removes per-step VLM re-driving — concretely **~1 screenshot vs ~30** (≈97–99% image-prompt tokens). A manifest-free delegation relay lands in between, attributing the gap to **mostly delegation, manifest secondary** (§8.9).
-- **Two app-agnostic optimizations** (a two-stage reply-completion precheck + an a11y-scrape-first text path) add a further **2.4×** over the un-optimized delegation baseline (§7).
-- **Predictability is itself a result.** RA's per-task cost is nearly constant (T1 **3987 / 3986 / 3950** tokens, VLM calls fixed at 2), while the pure-VLM agent varied **38k → 97k tokens at 46 → 379 s** on the identical task. In dollars: RA ~**$0.001/task** vs. ~**$0.016** for the pure-VLM agent (16.6×).
-- **Safety held.** Every `handoff_to_user_required` run stopped before the irreversible CTA with zero confirm taps; **28/28 capabilities** across 7 cards reached their expected terminal state (§8.2.1).
-
-Full method, threats-to-validity, and frozen data: tech report and benchmark data (not yet published; write-up in progress).
-
-</details>
 
 ## 🎬 Demo
 
-**Single-app order** — *"帮我点三杯蜜雪冰城蜜桃四季春，温度和糖度都用默认"* → the 千问 (Qwen) in-app assistant assembles a 3-cup cart and **stops at the payment screen** for the user to confirm (the handoff contract in action).
+*"帮我点三杯蜜雪冰城蜜桃四季春，温度和糖度都用默认"* (Order three Mixue drinks, defaults for temperature and sweetness) → the task is delegated to Qwen's in-app assistant, which places the order and stops at the payment screen.
 
 <p align="center">
   <img src="assets/RelayAgentDemoOrder/RelayAgentDemoOrder.gif" alt="Order food via the in-app assistant, stopping before payment" width="320">
 </p>
 
-## 🗂️ Project Structure
-
-```
-RelayAgent/
-├── SPEC.md                    # manifest specification (v0.1) + open questions
-├── spec/                      # schema.json (manifest) + profile.schema.json (user memory)
-├── manifests/                 # one YAML card per app; 10 Android cards, 50 capabilities
-├── agents/                    # device backends, LLM client, runtime loop, routing, relay adapter, NL flow
-│   ├── device/                #   DeviceBackend abstraction (Android adb; iOS/HarmonyOS seams)
-│   ├── llm/ · runtime/        #   provider client + retries; process entry + device loop
-│   ├── routing/ · agent/      #   capability/card routing; in-app VLM agent + action layer
-│   └── flow/                  #   NL cross-app flow: planner, runner, leg judge, recovery
-├── scripts/                   # run_plan.py (NL flow), benchmark runner, validation, metrics
-├── android/                   # on-device app: the full NL flow on the phone, no computer, no adb
-├── benchmark/                 # task sets (incl. RelayBench) for the A/B benchmark
-├── tests/                     # device-less unit tests (CI)
-├── docs/                      # design docs — see Documentation below
-└── LICENSE                    # Apache-2.0
-```
-
 ## 🚀 Quick Start
+
+An Android phone with USB debugging enabled (current capability cards only support Google Pixel 9) or an emulator, with the ADB Keyboard IME (`com.android.adbkeyboard/.AdbIME`) installed and enabled. See [device setup](docs/device_setup.md) and [emulator testing](docs/emulator_testing.md).
 
 ```bash
 git clone https://github.com/ShadowNearby/RelayAgent.git && cd RelayAgent
 uv venv --python 3.12 && uv sync --no-install-project --extra dev
-cp .env.example .env          # then fill in LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
-uv run python -m agents.runtime.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
-```
-
-That's the whole loop: it loads `.env`, activates the AdbKeyboard IME, cold-launches the target app, and drives the goal over direct adb. The steps, explained:
-
-### 1. Environment setup
-
-RelayAgent is pure Python — **no server, no framework cold-start**. Requires **Python 3.12** on a Linux/WSL host; run the sources directly via `uv run` (don't install the project). Optional extras: `--extra stream` (scrcpy streaming capture), `--extra mw` (MobileWorld A/B baseline).
-
-### 2. Mobile device setup
-
-An Android phone over USB debugging (or an emulator — see [emulator testing](docs/emulator_testing.md)) with `com.android.adbkeyboard/.AdbIME` installed. Full device prep + per-benchmark app requirements: [device setup](docs/device_setup.md).
-
-```bash
-uv run python scripts/validate/check_device_env.py    # pre-flight: device / IME / uiautomator / screencap / app install state
-```
-
-### 3. Model configuration
-
-Copy `.env.example` to `.env` and fill in an OpenAI-compatible VLM endpoint (`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`). The VLM is **provider-agnostic** — Qwen-VL, Claude, Gemini, Kimi, … — and used sparingly per task (this is the source of the token numbers above).
-
-### 4. Run it
-
-The TL;DR command above is the **single-app** entry point: `python -m agents.runtime.native_runner <pkg> "<goal>"` cold-launches one target package and drives one goal over an in-process `obs → predict → execute` loop.
-
-For a **natural-language cross-app flow**, use `run_plan.py` — it synthesizes a flow, routes each leg through the matrix-backed router, previews, then executes (runtime failure recovery + coverage fallbacks + user-memory profile on by default):
-
-```bash
+cp .env.example .env
+# fill in LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in .env
+uv run python scripts/validate/check_device_env.py    # check the runtime environment
 uv run python scripts/run_plan.py --yes     "帮我点三杯蜜雪冰城蜜桃四季春"
-uv run python scripts/run_plan.py --yes     "帮我找一台适合学生的平板电脑，预算2000以内"
-uv run python scripts/run_plan.py --dry-run "把这段材料整理成一份中文总结文档"
 ```
-
-The adapter honors `handoff_to_user_required`: for any irreversible capability it emits `ask_user` before the terminal CTA rather than auto-confirming.
-
-<details>
-<summary><b>Useful env knobs</b> (full list in <code>.env.example</code>)</summary>
-
-<br>
-
-| Knob | Effect |
-| --- | --- |
-| `RELAY_CAPTURE_BACKEND=scrcpy` | Streaming frame capture (~1.5 s → ~8 ms/frame; needs `--extra stream` + scrcpy on the host). Any failure falls back to `screencap` permanently. |
-| `RELAY_PRECHECK=0 RELAY_SCRAPE=0` | Disable the two reply-path optimizations (reproduces the benchmark baseline). |
-| `RELAY_RECOVERY=0` | Turn off runtime failure recovery. |
-| `--no-general-fallback` / `--no-mw-fallback` | Disable coverage fallbacks for `run_plan.py`. |
-| `RELAY_PROFILE=0` | Disable the user-memory profile layer. |
-| `RELAY_ANDROID_SERIAL=...` | Pin every adb call to one device in multi-device setups. |
-| `RELAY_MANIFESTS=/path` | Override the default `./manifests/`. |
-
-</details>
 
 ### Run tests
 
 ```bash
-uv run python -m unittest discover -s tests -v            # device-less; planner/runner unit tests, no adb needed
-uv run python scripts/validate/validate_manifests.py      # manifest schema + prompt_template rules (CI gate)
+uv run python -m unittest discover -s tests -v            # device-less unit tests
+uv run python scripts/run_benchmark_test.py               # requires a device; runs the end-to-end A/B benchmark (baseline + RelayAgent)
 ```
 
-Real-device A/B benchmark: `scripts/run_benchmark_test.py`. `test-results/` and `traj_logs/` are gitignored — do not commit trajectories containing user data.
+## 📱 Android App
 
-## 📱 On-device App
+The full pipeline — planning, routing, execution, logging — also runs inside a standalone **Android app**, see [`android/`](android/README.en.md).
 
-The whole pipeline — routing, planning, leg execution, logging — also runs inside a **standalone Android app** via an accessibility service and Chaquopy-embedded Python: **no computer, no adb**. Chat-style task thread, live run cards, structured run-log viewers, zh locale + dark theme. Host behavior is preserved bit-for-bit; only the Android-side implementation swaps in. See [`android/`](android/README.en.md).
+<p align="center">
+  <img src="assets/android/home.png" alt="RelayAgent Android app — chat-style task thread home" width="300">
+</p>
 
 ## 📚 Documentation
 
-| Document | Description |
-| --- | --- |
-| [NL cross-app flow](docs/nl_flow.md) | The core architecture: synthesis, three-stage routing, leg judge, failure recovery, coverage fallbacks |
-| [Manifest conventions](docs/manifest_conventions.md) | Authoring cards: language convention, `prompt_template`, `x_capture_full_reply`, key capability fields |
-| [Device setup](docs/device_setup.md) / [Emulator testing](docs/emulator_testing.md) | Real-device prep; AVD setup + remote observation |
-| [Roadmap](docs/roadmap.md) | Productization phases P1–P5 with acceptance metrics (P1–P3 shipped) |
-| [On-device app](android/README.en.md) | The Android app: architecture, host↔device seams, UI |
+- [Core flow architecture](docs/nl_flow.md)
+- [Capability card conventions](docs/manifest_conventions.md)
+- [Real-device setup](docs/device_setup.md) / [Emulator setup](docs/emulator_testing.md)
+- [Roadmap](docs/roadmap.md)
+- [Android App](android/README.en.md)
 
-## 📇 Supported reference cards
+## 📇 Supported reference capability cards
 
-**10 verified Android apps · 50 declared capabilities** (Amap, Tongyi Qwen, Ctrip, Gemini, Xiaohongshu, WeChat, WPS, Reddit, Booking.com, Microsoft Copilot). Full table, capabilities, and quality bar: **[docs/cards.md](docs/cards.md)**. Submitting a card: [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## 🚧 What this project is *not*
-
-- **Not a GUI agent.** We navigate to an in-app assistant's input field, not the app's general UI. For general GUI agents, see Mobile-Agent / AppAgent / AutoGLM.
-- **Not a scraper.** Cards describe entry paths and capabilities, not data extraction.
-- **Not affiliated with any phone OEM or app vendor.** Neutral community spec — vendors may publish official cards or not; the community can write one either way.
-- **Not a challenger to A2A or MCP.** Forward-compatible by design (Spec §14). When apps ship A2A, cards become a thinner shim or disappear.
-
-> **Known blocker.** The Taobao-hosted shopping capabilities (now routed through the 千问/Qwen card, since Taobao's in-app assistant *is* 千问) may hit server-side risk control ("亲，访问被拒绝") on the deep-link target page — an account/device-level 风控 wall, **not** an adapter or manifest bug. Mitigations: use an account with normal purchase history and clear pending real-name / device-trust checks.
+10 apps · 50 in-app assistant capabilities (Amap, Tongyi Qwen, Ctrip, Gemini, Xiaohongshu, WeChat, WPS, Reddit, Booking.com, Microsoft Copilot). See [docs/cards.md](docs/cards.md) for details.
 
 ## 📚 Citation
 
@@ -245,9 +145,7 @@ If you find RelayAgent useful, please cite the paper and this repository:
 
 ## 🙏 Acknowledgements
 
-- [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld) (Tongyi MAI) — one of our three evaluation benchmarks, and the source of the `general_e2e` pure-GUI baseline used in the A/B comparison.
-- **AndroidDaily** — the everyday-task benchmark (32 Chinese apps) used in the full-system evaluation.
+- [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld) (Tongyi MAI) — one of the test suites used, and the source of the GUI agent baseline.
+- **AndroidDaily** — one of the test suites used.
 
-## 📄 License
-
-Apache-2.0. See [LICENSE](LICENSE). Chosen for permissive enterprise use — the design only works if phone OEMs can adopt it without legal friction.
+## 📄 [LICENSE](LICENSE)
