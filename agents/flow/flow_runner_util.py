@@ -27,6 +27,13 @@ NATIVE_RUNNER_MODULE = "agents.runtime.native_runner"
 # prelaunch, .env LLM config) — see scripts/run_mobileworld.py.
 RUN_MOBILEWORLD = REPO_ROOT / "scripts" / "run_mobileworld.py"
 MW_STEP_TYPE = "mobileworld"
+# General-fallback legs run the manifest-free GeneralGUIAgent
+# (agents/agent/general_agent.py) on the SAME native runtime — the
+# no-MobileWorld fallback (on-device, or hosts without the mw extra).
+GENERAL_STEP_TYPE = "general"
+# RELAY_TARGET_APP sentinel for a general leg with no app hint: the agent
+# starts from the HOME screen and finds an app itself instead of cold-launching.
+GENERAL_HOME_TARGET = "__home__"
 
 
 # --------------------------------------------------------------------------- #

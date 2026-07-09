@@ -68,10 +68,12 @@ ENV_FAIL = "env_fail"
 ROUTE_FAIL = "route_fail"
 APP_FAIL = "app_fail"
 
-# Ladder tiers, in escalation order.
+# Ladder tiers, in escalation order. The last tier is MobileWorld when
+# available, else the manifest-free general agent (on-device / no mw extra).
 TIER_RETRY = "retry"
 TIER_REROUTE = "reroute"
 TIER_MW = "mw_fallback"
+TIER_GENERAL = "general_fallback"
 
 
 @dataclass(frozen=True)

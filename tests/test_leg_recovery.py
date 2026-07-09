@@ -227,6 +227,40 @@ class RecoveryLadderTests(unittest.TestCase):
         self.assertEqual(mw_step.get("type"), "mobileworld")
         self.assertEqual(runner._step_outcomes[-1]["recovered_via"], "mw_fallback")
 
+    def test_general_tier_when_mw_unavailable(self) -> None:
+        """MW off (on-device / no mw extra) + general on: the last tier is the
+        manifest-free general agent instead of MobileWorld."""
+        runner = _runner(self._tmp)
+        rec = runner._recovery
+        rec.reroute = MagicMock(return_value=None)
+        runner._execute_app_leg = MagicMock(side_effect=[_hard_fail(), _hard_fail()])
+        runner._run_mobileworld_step = MagicMock()
+        runner._run_general_step = MagicMock()  # binds on its own
+        with mock.patch("agents.flow.flow_runner.mw_fallback_enabled", return_value=False), \
+             mock.patch("agents.flow.flow_runner.general_fallback_enabled", return_value=True):
+            runner._run_app_step(dict(_STEP))
+        runner._run_mobileworld_step.assert_not_called()
+        runner._run_general_step.assert_called_once()
+        g_step = runner._run_general_step.call_args[0][0]
+        self.assertEqual(g_step.get("type"), "general")
+        self.assertEqual(g_step.get("app"), "com.a")  # kept as launch hint
+        self.assertNotIn("capability", g_step)
+        self.assertEqual(runner._step_outcomes[-1]["recovered_via"], "general_fallback")
+
+    def test_both_fallbacks_off_exhausts_ladder(self) -> None:
+        runner = _runner(self._tmp)
+        rec = runner._recovery
+        rec.reroute = MagicMock(return_value=None)
+        runner._execute_app_leg = MagicMock(side_effect=[_hard_fail(), _hard_fail()])
+        runner._run_mobileworld_step = MagicMock()
+        runner._run_general_step = MagicMock()
+        with mock.patch("agents.flow.flow_runner.mw_fallback_enabled", return_value=False), \
+             mock.patch("agents.flow.flow_runner.general_fallback_enabled", return_value=False), \
+             self.assertRaises(RuntimeError):
+            runner._run_app_step(dict(_STEP))
+        runner._run_mobileworld_step.assert_not_called()
+        runner._run_general_step.assert_not_called()
+
     def test_budget_zero_fails_fast(self) -> None:
         os.environ["RELAY_RECOVERY_MAX_LEGS"] = "0"
         runner = _runner(self._tmp)

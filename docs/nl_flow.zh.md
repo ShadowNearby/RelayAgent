@@ -208,6 +208,16 @@ RA 的路由建立在**人工维护的 manifest + capability matrix**上。当�
 
 **执行（`FlowRunner._run_mobileworld_step`）**：`FlowRunner` 为整条 flow **只起一次** MW server（`run()` 的 `finally` 里 `_ensure_mw_server` / `_teardown_mw_server`），多 MW leg 复用。每条 leg shell 出 `scripts/run_mobileworld.py`，带 `--no-start-server --server-url <flow 托管>`，以及 `--agent-type general_e2e --output <leg_dir>`（轨迹落 `<leg_dir>/user_task/traj.json`），有 `app` 提示则 `--app`，否则 `--no-prelaunch`。跑完 `_harvest_mw_traj` 取**最后一个 `answer` action 的 text** 当 leg reply→回灌 blackboard（`bind`/`extract` 与 app leg 同路径），并合成 `summary.json` + `agent_reply.json`。**leg judge** 照常跑（`final_frames` 在 `steps/` 缺失时回退读 `user_task/screenshots/*.png`）；MW leg **不进路由固化**（不是 matrix 表项，无 `x_route_key`）。flow 级 LLM call 照常折进 leg 的 `traj.json`。
 
-**开关 / 旋钮**：`RELAY_MW_FALLBACK`(默认 `1`；`0` 或 `run_plan.py --no-mw-fallback` 关，关掉则恢复旧的 unsatisfiable 退出行为) / `RELAY_MW_SERVER_URL`(默认 `http://127.0.0.1:6800`) / `RELAY_MW_MAX_ROUND`(默认 25) / `RELAY_MW_TIMEOUT`(默认 600)。预览里 MW leg 标 `[MobileWorld fallback]`。
+**开关 / 旋钮**：`RELAY_MW_FALLBACK`(默认 `1`；`0` 或 `run_plan.py --no-mw-fallback` 关) / `RELAY_MW_SERVER_URL`(默认 `http://127.0.0.1:6800`) / `RELAY_MW_MAX_ROUND`(默认 25) / `RELAY_MW_TIMEOUT`(默认 600)。预览里 MW leg 标 `[MobileWorld fallback]`。
+
+### 10.1 通用兜底（general fallback，MW 不可用时）
+
+MW 兜底依赖主机侧 MobileWorld runtime（optional extra `mw` + server），**端侧 App 没有、开源用户多半也不装**。因此上面所有触发点在 **MW 关闭**（`RELAY_MW_FALLBACK=0`，端侧默认如此）且 `RELAY_GENERAL_FALLBACK=1`（默认开）时，转成 `type: general` leg，交给**本仓库自己的无 manifest 通用 GUI agent**（`agents/agent/general_agent.py:GeneralGUIAgent`，基于 a11y 树逐步驱动，继承 A11yTextAgent 的循环/序列化/CTA 安全护栏）在**同一套 native runtime** 上执行——不 shell 出外部进程，端侧 in-process 直接跑。优先级严格 **MW > general > unsatisfiable**，主机默认行为零漂移。
+
+- **leg 形态**：与 MW leg 同契约（保留 `id`/`prompt`/`bind`/`extract`，`app` 仅作启动提示；无提示时 `RELAY_TARGET_APP=__home__`，agent 按 HOME 从桌面自行找 app）。校验/路由跳过均复用 MW leg 的通道（`_is_fallback_leg`）。
+- **执行**（`FlowRunner._run_general_step`）：经 LegExecutor 跑 `native_runner`，`RELAY_AGENT_FILE` 指向 general agent(打包形态回落模块 spec)；`finish` 动作可带 `answer` 文本 → 经 `RELAY_REPLY_OUT` 回灌 blackboard,judge 照常跑。步数上限 `RELAY_GENERAL_MAX_STEP`(默认 25,对齐 `RELAY_MW_MAX_ROUND`)。
+- **恢复梯子**：MW 关闭时,梯子最后一档同样换成 general(`recovered_via: general_fallback`);handoff 能力红线不变(仍只允许重试档)。
+- **开关**：`RELAY_GENERAL_FALLBACK`(默认 `1`;`0` 或 `run_plan.py --no-general-fallback` 关,两个兜底都关才回到 unsatisfiable 退出)。`run_benchmark_test.py` 无条件强制 `0`(eval 的兜底轴是 MW)。
+- **安全**：general agent 永不跨越不可逆 CTA(支付/下单标签命中即转 ask_user handoff),与 a11y baseline 同表。
 
 **留待后续**：MW leg 的 route solidification。

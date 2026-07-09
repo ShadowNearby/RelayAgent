@@ -337,6 +337,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="Disable the MobileWorld fallback: a leg RA can't cover "
                         "makes the plan unsatisfiable instead of running via "
                         "MobileWorld's general_e2e agent. Same as RELAY_MW_FALLBACK=0.")
+    p.add_argument("--no-general-fallback", action="store_true",
+                   help="Disable the general fallback (the manifest-free "
+                        "GeneralGUIAgent used when MobileWorld fallback is off/"
+                        "unavailable). Same as RELAY_GENERAL_FALLBACK=0.")
     args, extra = p.parse_known_args(argv)
 
     try:
@@ -367,8 +371,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     llm.purpose = "plan"
     mw_fallback = not args.no_mw_fallback
+    general_fallback = False if args.no_general_fallback else None  # None → env default
+    # The runtime recovery ladder reads the env, not the planner flags — set
+    # both so "--no-*-fallback" really means what the help text promises.
+    if args.no_mw_fallback:
+        os.environ["RELAY_MW_FALLBACK"] = "0"
+    if args.no_general_fallback:
+        os.environ["RELAY_GENERAL_FALLBACK"] = "0"
     planner = FlowPlanner(
-        catalog, llm, env["LLM_MODEL"], matrix=matrix, mw_fallback=mw_fallback
+        catalog, llm, env["LLM_MODEL"], matrix=matrix, mw_fallback=mw_fallback,
+        general_fallback=general_fallback,
     )
 
     # The flow traj root is only known once execution starts; capture it so

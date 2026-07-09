@@ -1261,6 +1261,10 @@ def main(argv: list[str] | None = None) -> int:
     # the post-flow memory-propose pass would add an LLM call to every
     # successful relay task's token count (P3).
     os.environ["RELAY_PROFILE"] = "0"
+    # General fallback ALWAYS OFF under benchmark: the eval design's fallback
+    # axis is MobileWorld (plan-only tiers + recovery telemetry assume it); a
+    # general leg sneaking in when MW is off would blur the strata.
+    os.environ["RELAY_GENERAL_FALLBACK"] = "0"
 
     systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     bad = [s for s in systems if s not in SYSTEMS]

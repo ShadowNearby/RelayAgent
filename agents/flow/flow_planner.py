@@ -56,9 +56,13 @@ from agents.flow.user_profile import load_profile
 # MW_STEP_TYPE / _to_mw_leg / _mw_whole_request_plan from here, and the class
 # below uses every name as a module global).
 from agents.flow.flow_planner_mw import (
+    GENERAL_STEP_TYPE,  # noqa: F401 — re-exported
     MW_STEP_TYPE,  # noqa: F401 — re-exported (tests and callers import it from here)
+    _general_whole_request_plan,
     _mw_whole_request_plan,
+    _to_general_leg,
     _to_mw_leg,
+    general_fallback_enabled,
     mw_fallback_enabled,
 )
 from agents.flow.flow_planner_util import (
@@ -66,7 +70,8 @@ from agents.flow.flow_planner_util import (
     _fill_template,
     _has_slot_value,
     _is_ask_user,
-    _is_mw_leg,
+    _is_fallback_leg,
+    _is_mw_leg,  # noqa: F401 — re-exported
     _var_roots,
 )
 
@@ -253,6 +258,7 @@ class FlowPlanner:
         *,
         matrix: dict[str, Any] | None = None,
         mw_fallback: bool | None = None,
+        general_fallback: bool | None = None,
     ) -> None:
         self.catalog = catalog
         self._llm = llm
@@ -261,6 +267,12 @@ class FlowPlanner:
         # When True, a leg RA can't cover (or a request judged unsatisfiable) is
         # handed to MobileWorld instead of failing the plan.
         self.mw_fallback = mw_fallback_enabled() if mw_fallback is None else mw_fallback
+        # The no-MobileWorld counterpart (manifest-free GeneralGUIAgent on the
+        # native runtime). Strictly below MW in priority — only reached when
+        # mw_fallback is off (on-device, or a host without the mw extra).
+        self.general_fallback = (
+            general_fallback_enabled() if general_fallback is None else general_fallback
+        )
         # Trace-guided route solidification: a confidently-successful route is
         # short-circuited here (0 LLM); leg verdicts feed it from FlowRunner.
         self._overlay = RouteOverlay()
@@ -326,9 +338,11 @@ class FlowPlanner:
             )
         if data.get("unsatisfiable"):
             reason = data.get("reason")
-            if self.mw_fallback:
-                logger.info(f"planner: unsatisfiable — {reason!r}; MobileWorld fallback (whole request)")
-                return _mw_whole_request_plan(nl_request, str(reason or "no app covers this request"))
+            fallback = self._whole_request_fallback(
+                nl_request, str(reason or "no app covers this request"), "planner"
+            )
+            if fallback is not None:
+                return fallback
             logger.info(f"planner: unsatisfiable — {reason!r}")
             return data
 
@@ -364,20 +378,18 @@ class FlowPlanner:
                         "Required capability has no app authorized in the catalog: "
                         + "; ".join(coverage_gaps)
                     )
-                    if self.mw_fallback:
-                        return self._apply_mw_fallback_to_gaps(data, nl_request, reason)
+                    if self.mw_fallback or self.general_fallback:
+                        return self._apply_fallback_to_gaps(data, nl_request, reason)
                     logger.info(f"planner: unsatisfiable (coverage gap) — {reason}")
                     return {"unsatisfiable": True, "reason": reason}
                 # No coverage gap, but the plan still fails validation after all
                 # repair rounds (e.g. an unfillable prompt template, a handoff
-                # structure RA can't satisfy). With MW fallback on, don't give
-                # up: hand the whole request to MobileWorld rather than failing.
-                if self.mw_fallback:
-                    reason = "plan failed validation after repair: " + "; ".join(errors)
-                    logger.info(
-                        f"planner: unrepairable plan — {reason!r}; MobileWorld fallback (whole request)"
-                    )
-                    return _mw_whole_request_plan(nl_request, reason)
+                # structure RA can't satisfy). With a fallback on, don't give
+                # up: hand the whole request to it rather than failing.
+                reason = "plan failed validation after repair: " + "; ".join(errors)
+                fallback = self._whole_request_fallback(nl_request, reason, "planner: unrepairable plan")
+                if fallback is not None:
+                    return fallback
                 raise PlanValidationError(nl_request, data, errors)
             logger.info(
                 f"planner: {len(errors)} error(s); repair round {attempt + 1}/{_REPAIR_ROUNDS}: {errors}"
@@ -389,46 +401,67 @@ class FlowPlanner:
                 )
             if data.get("unsatisfiable"):
                 reason = data.get("reason")
-                if self.mw_fallback:
-                    logger.info(
-                        f"planner (repair): unsatisfiable — {reason!r}; MobileWorld fallback (whole request)"
-                    )
-                    return _mw_whole_request_plan(nl_request, str(reason or "no app covers this request"))
+                fallback = self._whole_request_fallback(
+                    nl_request, str(reason or "no app covers this request"), "planner (repair)"
+                )
+                if fallback is not None:
+                    return fallback
                 logger.info(f"planner (repair): unsatisfiable — {reason!r}")
                 return data
         # unreachable (loop returns or raises), but keeps type-checkers happy
         return data
 
-    def _apply_mw_fallback_to_gaps(
+    def _whole_request_fallback(
+        self, nl_request: str, reason: str, log_prefix: str
+    ) -> dict | None:
+        """One-leg fallback plan carrying the whole request, or None when no
+        fallback is enabled (the caller then surfaces unsatisfiable/raises).
+        MobileWorld first, general second — see flow_planner_mw."""
+        if self.mw_fallback:
+            logger.info(f"{log_prefix}: {reason!r}; MobileWorld fallback (whole request)")
+            return _mw_whole_request_plan(nl_request, reason)
+        if self.general_fallback:
+            logger.info(f"{log_prefix}: {reason!r}; general fallback (whole request)")
+            return _general_whole_request_plan(nl_request, reason)
+        return None
+
+    def _apply_fallback_to_gaps(
         self, plan: dict, nl_request: str, reason: str
     ) -> dict:
         """Convert every coverage-gap step (tagged by `_route_one_step`) into a
-        MobileWorld fallback leg, then re-validate the now-satisfiable plan.
+        fallback leg (MobileWorld when enabled, else general), then re-validate
+        the now-satisfiable plan.
 
         Repair has already had its rounds to re-route the gap to a real
         capability (preferred); this is the last resort so the plan runs instead
         of failing. Any non-gap step keeps its resolved app/capability."""
+        to_leg = _to_mw_leg if self.mw_fallback else _to_general_leg
+        kind = "MobileWorld" if self.mw_fallback else "general"
         converted = [
-            _to_mw_leg(step, step.get("x_coverage_gap") or reason)["id"]
+            to_leg(step, step.get("x_coverage_gap") or reason)["id"]
             for step in plan.get("steps", [])
             if isinstance(step, dict) and step.get("x_coverage_gap")
         ]
         logger.info(
-            f"planner: coverage gap unrepaired — MobileWorld fallback for leg(s) {converted}"
+            f"planner: coverage gap unrepaired — {kind} fallback for leg(s) {converted}"
         )
         self._refresh_apps_required(plan)
         errors = self._validate(plan)
         if errors:
             # The gap-leg fallback itself produced an invalid plan (e.g. a
             # downstream {var} that only the dropped capability could have
-            # bound). This method only runs with MW fallback on, so don't give
-            # up: hand the whole request to MobileWorld rather than running a
+            # bound). This method only runs with a fallback on, so don't give
+            # up: hand the whole request to the fallback rather than running a
             # broken plan or reporting unsatisfiable.
             logger.warning(
-                f"planner: MobileWorld gap-fallback plan still invalid: {errors}; "
-                "MobileWorld fallback (whole request)"
+                f"planner: {kind} gap-fallback plan still invalid: {errors}; "
+                f"{kind} fallback (whole request)"
             )
-            return _mw_whole_request_plan(nl_request, reason)
+            return (
+                _mw_whole_request_plan(nl_request, reason)
+                if self.mw_fallback
+                else _general_whole_request_plan(nl_request, reason)
+            )
         return plan
 
     def validate_plan(self, plan: dict, nl_request: str) -> None:
@@ -461,9 +494,9 @@ class FlowPlanner:
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
-            # MobileWorld fallback legs have no app/capability to route (a cached
-            # plan can already carry them); skip routing, like ask_user.
-            if not _is_ask_user(step) and not _is_mw_leg(step):
+            # Fallback legs (MobileWorld/general) have no app/capability to route
+            # (a cached plan can already carry them); skip routing, like ask_user.
+            if not _is_ask_user(step) and not _is_fallback_leg(step):
                 self._route_one_step(step, i, nl_request, produced, errors, gaps)
             bind = step.get("bind")
             # Only track string binds; a non-string bind (the LLM occasionally
@@ -524,7 +557,7 @@ class FlowPlanner:
             # an error (so a repair round can try to re-route, e.g. to
             # foundation_llm) and as a gap (so an unrepaired plan is classified
             # unsatisfiable rather than invalid). Tag the step too, so that if
-            # repair never closes the gap, `_apply_mw_fallback_to_gaps` can turn
+            # repair never closes the gap, `_apply_fallback_to_gaps` can turn
             # exactly these steps into MobileWorld legs.
             msg = f"step {step.get('id') or i!r}: route failed: {e}"
             errors.append(msg)
@@ -535,7 +568,7 @@ class FlowPlanner:
             # The request needs a concrete on-device action a chat assistant
             # can't perform, and no vertical capability matched either. This is
             # NOT a foundation task: treat it as a coverage gap so repair can
-            # retry and, failing that, `_apply_mw_fallback_to_gaps` routes it to
+            # retry and, failing that, `_apply_fallback_to_gaps` routes it to
             # MobileWorld instead of force-fitting it into foundation_llm.
             msg = f"step {step.get('id') or i!r}: not a foundation task: {e}"
             errors.append(msg)
@@ -852,7 +885,7 @@ class FlowPlanner:
 
             if _is_ask_user(step):
                 self._validate_ask_user(step, sid, produced, errors)
-            elif _is_mw_leg(step):
+            elif _is_fallback_leg(step):
                 self._validate_mw_leg(step, sid, produced, errors)
             else:
                 self._validate_app_step(step, sid, steps, i, produced, errors)

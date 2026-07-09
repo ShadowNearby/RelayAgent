@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import re
 
-from agents.flow.flow_runner_util import MW_STEP_TYPE, _VAR_RE, _select_from_path
+from agents.flow.flow_runner_util import (
+    GENERAL_STEP_TYPE,
+    MW_STEP_TYPE,
+    _VAR_RE,
+    _select_from_path,
+)
 
 
 def _is_ask_user(step: dict) -> bool:
@@ -19,6 +24,11 @@ def _is_ask_user(step: dict) -> bool:
 
 def _is_mw_leg(step: dict) -> bool:
     return isinstance(step, dict) and step.get("type") == MW_STEP_TYPE
+
+
+def _is_fallback_leg(step: dict) -> bool:
+    """A leg with no app/capability to route: MobileWorld or general fallback."""
+    return isinstance(step, dict) and step.get("type") in (MW_STEP_TYPE, GENERAL_STEP_TYPE)
 
 
 def _var_roots(template: str) -> set[str]:

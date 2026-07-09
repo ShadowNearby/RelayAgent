@@ -48,6 +48,7 @@ from agents.flow.leg_judge import LOADING, LegVerdict, final_frames, judge_leg
 from agents.flow.leg_recovery import (
     ENV_FAIL,
     ROUTE_FAIL,
+    TIER_GENERAL,
     TIER_MW,
     TIER_REROUTE,
     TIER_RETRY,
@@ -55,7 +56,12 @@ from agents.flow.leg_recovery import (
     RecoveryController,
     classify_leg_failure,
 )
-from agents.flow.flow_planner_mw import _to_mw_leg, mw_fallback_enabled
+from agents.flow.flow_planner_mw import (
+    _to_general_leg,
+    _to_mw_leg,
+    general_fallback_enabled,
+    mw_fallback_enabled,
+)
 from agents.llm.llm_client import make_llm_client
 from agents.routing.route_overlay import RouteOverlay
 from agents.runtime.runtime_config import ensure_llm_env
@@ -71,6 +77,8 @@ from agents.flow.flow_leg_executor import (
 )
 from agents.flow.flow_runner_util import (
     ENV_FILE,
+    GENERAL_HOME_TARGET,
+    GENERAL_STEP_TYPE,
     MW_STEP_TYPE,
     REPO_ROOT,
     RUN_MOBILEWORLD,
@@ -91,6 +99,7 @@ __all__ = [
     "SubprocessLegExecutor",
     "_RecordingLLM",
     "MW_STEP_TYPE",
+    "GENERAL_STEP_TYPE",
     "_harvest_mw_traj",
 ]
 
@@ -199,10 +208,12 @@ class FlowRunner:
         for step in self.flow.get("steps", []):
             pkg = step.get("app")
             if not pkg:
-                # A MobileWorld fallback leg with no app hint still gets a label
-                # so an all-fallback flow isn't named after the file stem.
+                # A fallback leg with no app hint still gets a label so an
+                # all-fallback flow isn't named after the file stem.
                 if step.get("type") == MW_STEP_TYPE and "mw" not in apps:
                     apps.append("mw")
+                elif step.get("type") == GENERAL_STEP_TYPE and "general" not in apps:
+                    apps.append("general")
                 continue
             short = str(pkg).rsplit(".", 1)[-1]
             if short and short not in apps:
@@ -231,6 +242,8 @@ class FlowRunner:
                     self._run_ask_user(step)
                 elif kind == MW_STEP_TYPE:
                     self._run_mobileworld_step(step)
+                elif kind == GENERAL_STEP_TYPE:
+                    self._run_general_step(step)
                 else:
                     raise ValueError(f"Unknown step type: {kind}")
                 interaction.emit_status({"event": "leg_end", "id": step["id"]})
@@ -494,6 +507,10 @@ class FlowRunner:
                 tier = TIER_REROUTE
             elif mw_fallback_enabled():
                 tier = TIER_MW
+            elif general_fallback_enabled():
+                # No MobileWorld runtime (on-device / no mw extra): the last
+                # tier is the manifest-free general agent on the native runtime.
+                tier = TIER_GENERAL
             else:
                 break
             if not rec.can_spend_leg():
@@ -531,20 +548,25 @@ class FlowRunner:
                 new_result = self._execute_app_leg(cur_step, dir_suffix="_reroute")
                 spent = rec.spend_leg(new_result.summary)
                 target = f"{cur_step['app']}/{cur_step['capability']}"
-            else:  # TIER_MW
-                mw_step = _to_mw_leg(
+            else:  # TIER_MW / TIER_GENERAL — the last tier either way
+                to_leg = _to_mw_leg if tier == TIER_MW else _to_general_leg
+                label = "mobileworld" if tier == TIER_MW else "general"
+                fb_step = to_leg(
                     {**cur_step},
                     f"runtime recovery: {failure.kind} — {failure.reason}",
                 )
                 rec.spend_leg(None)
                 try:
                     # Runs, judges, binds and folds itself (same path as a
-                    # plan-time MW leg) — nothing left to commit here.
-                    self._run_mobileworld_step(mw_step)
-                except Exception as e:  # noqa: BLE001 — MW is the last tier
-                    _log_attempt(tier, "mobileworld", "failed", str(e))
+                    # plan-time fallback leg) — nothing left to commit here.
+                    if tier == TIER_MW:
+                        self._run_mobileworld_step(fb_step)
+                    else:
+                        self._run_general_step(fb_step)
+                except Exception as e:  # noqa: BLE001 — last tier
+                    _log_attempt(tier, label, "failed", str(e))
                     break
-                _log_attempt(tier, "mobileworld", "ok", "leg completed via MobileWorld fallback")
+                _log_attempt(tier, label, "ok", f"leg completed via {label} fallback")
                 committed = True
                 self._note_outcome(step, "recovered", first_failure, recovered_via=tier)
                 break
@@ -680,6 +702,100 @@ class FlowRunner:
         self._judge_leg(
             step, app_hint or MW_STEP_TYPE, "fallback", prompt, reply,
             step_log_root, terminal_action,
+        )
+
+        if step.get("bind"):
+            if "extract" in step:
+                value = self._extract(reply, step["extract"])
+            else:
+                value = reply
+            self.bb[step["bind"]] = value
+
+        self._fold_flow_llm_calls(step_log_root, llm_call_start)
+
+    # -------------------------------------------------------- general leg
+
+    def _run_general_step(self, step: dict) -> None:
+        """Execute a fallback leg with the manifest-free general GUI agent
+        (agents/agent/general_agent.py) on the SAME native runtime — the
+        no-MobileWorld fallback (on-device, or a host without the mw extra).
+
+        Mirrors `_run_mobileworld_step`'s contract: `app` is only a launch
+        hint (absent → the agent starts from HOME and finds an app itself);
+        the agent's final `answer` text is the leg reply, feeding the same
+        blackboard bind/extract, leg-judge and traj-fold paths as an app leg."""
+        prompt = render(step["prompt"], self.bb)
+
+        self._step_idx += 1
+        step_log_root = self.flow_traj_root / f"{self._step_idx:02d}_{step['id']}"
+        step_log_root.mkdir(parents=True, exist_ok=True)
+        llm_call_start = len(self._llm.calls)
+        app_hint = step.get("app")
+        target = app_hint or GENERAL_HOME_TARGET
+        summary_path = step_log_root / "summary.json"
+
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".json", prefix="relay_reply_", delete=False
+        ) as fh:
+            reply_path = Path(fh.name)
+        try:
+            child_env = {
+                **self.env,
+                **os.environ,
+                "RELAY_TARGET_APP": target,
+                "RELAY_SKIP_OPEN_APP": "1",
+                "RELAY_AGENT_LAUNCH": "1",
+                # The general agent module; on packaged runtimes (Chaquopy) the
+                # file path is absent and native_runner._agent_spec falls back
+                # to the agents.agent.general_agent module spec.
+                "RELAY_AGENT_FILE": str(REPO_ROOT / "agents" / "agent" / "general_agent.py"),
+                "RELAY_REPLY_OUT": str(reply_path),
+                "RELAY_SUMMARY_OUT": str(summary_path),
+                "RELAY_TRAJ_DIR": str(step_log_root),
+                "RELAY_WALL_OUT": str(step_log_root / "wall_clock.json"),
+            }
+            max_step = os.getenv("RELAY_GENERAL_MAX_STEP", "25")
+            logger.info(
+                f"→ general fallback leg {step['id']!r} target={target} "
+                f"(reason: {step.get('x_fallback_reason')!r}) prompt={prompt!r}"
+            )
+            timing = os.getenv("RELAY_TIMING", "0") == "1"
+            t0 = time.monotonic()
+            # Appended after self.extra_args so this cap wins an argparse tie.
+            rc = self._leg_executor.run(
+                target, prompt, child_env, [*self.extra_args, "--max-step", str(max_step)]
+            )
+            if timing:
+                logger.info(f"general leg gross wall_s={round(time.monotonic() - t0, 1)}")
+            if rc != 0:
+                logger.warning(f"general leg exited rc={rc}; continuing if a reply was captured")
+
+            reply = ""
+            if reply_path.exists() and reply_path.stat().st_size > 0:
+                payload = json.loads(reply_path.read_text(encoding="utf-8"))
+                reply = (payload.get("reply") or "").strip()
+            summary = _read_json_file(summary_path)
+        finally:
+            try:
+                reply_path.unlink()
+            except OSError:
+                pass
+
+        needs_reply = bool(step.get("bind") or step.get("extract"))
+        if not reply and needs_reply:
+            raise RuntimeError(
+                f"General fallback leg {step['id']!r}: no answer captured. "
+                f"Check {step_log_root}/."
+            )
+        if reply:
+            logger.info(f"captured general-fallback answer ({len(reply)} chars)")
+        else:
+            logger.info(f"no answer captured for output-free general leg {step['id']!r}")
+
+        # Best-effort semantic check — same success definition as an MW leg.
+        self._judge_leg(
+            step, app_hint or GENERAL_STEP_TYPE, "fallback", prompt, reply,
+            step_log_root, summary.get("last_action_type"),
         )
 
         if step.get("bind"):

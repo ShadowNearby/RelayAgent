@@ -139,6 +139,13 @@ def parse_action(raw: str) -> dict:
 class A11yTextAgent(RelayAgent):
     """Pure re-driving baseline fed the a11y tree as text (no screenshots)."""
 
+    # Subclass seams (see agents/agent/general_agent.py): the general-fallback
+    # agent swaps the system prompt and widens the CTA stop-list, keeping the
+    # loop/serialization identical. The baseline pins both to the module
+    # constants so its benchmark behavior never drifts.
+    SYSTEM_PROMPT: str = _SYSTEM
+    CTA_LABELS: tuple[str, ...] = _CTA_LABELS
+
     def __init__(self, *a: Any, **kw: Any) -> None:
         super().__init__(*a, **kw)
         self.max_nodes = int(os.getenv("A11Y_MAX_NODES", "60"))
@@ -210,7 +217,7 @@ class A11yTextAgent(RelayAgent):
         raw = self.openai_chat_completions_create(
             model=self.model_name,
             messages=[
-                {"role": "system", "content": _SYSTEM},
+                {"role": "system", "content": self.SYSTEM_PROMPT},
                 {"role": "user", "content": user},
             ],
         )
@@ -228,7 +235,7 @@ class A11yTextAgent(RelayAgent):
             nd = nodes[idx]
             label = nd["label"]
             # Safety: a tap on an irreversible CTA is converted to a handoff.
-            if any(c in label for c in _CTA_LABELS):
+            if any(c in label for c in self.CTA_LABELS):
                 self._history.append(f"{self._nstep}: reached CTA {label!r} → handoff")
                 return (f"{thought} [CTA stop: {label!r}]", JSONAction(
                     action_type="ask_user",
@@ -252,6 +259,15 @@ class A11yTextAgent(RelayAgent):
 
         if kind == "finish":
             status = str(act.get("status", "complete"))
+            # Optional final answer (the general-fallback agent's prompt asks
+            # for one on information tasks): persist it through the same
+            # RELAY_REPLY_OUT / agent_reply.json path as a card leg, so a flow
+            # bind/extract downstream can consume it. The baseline's prompt
+            # never emits `answer`, so its behavior is unchanged.
+            answer = str(act.get("answer") or "").strip()
+            if answer:
+                self._last_agent_reply = answer
+                self._maybe_persist_reply()
             self._history.append(f"{self._nstep}: finish {status}")
             return thought, JSONAction(
                 action_type="finished",

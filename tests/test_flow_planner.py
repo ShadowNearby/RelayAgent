@@ -1,4 +1,5 @@
-"""Unit tests for FlowPlanner validation, repair, and MobileWorld fallback."""
+"""Unit tests for FlowPlanner validation, repair, and fallback legs
+(MobileWorld + general)."""
 from __future__ import annotations
 
 import json
@@ -6,10 +7,13 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from agents.flow.flow_planner import (
+    GENERAL_STEP_TYPE,
     MW_STEP_TYPE,
     FlowPlanner,
     PlanValidationError,
+    _general_whole_request_plan,
     _mw_whole_request_plan,
+    _to_general_leg,
     _to_mw_leg,
 )
 
@@ -141,7 +145,7 @@ class FlowPlannerMwFallbackTests(unittest.TestCase):
         self.assertEqual(plan["steps"][0]["type"], MW_STEP_TYPE)
         self.assertEqual(plan["steps"][0]["prompt"], "book a table")
 
-    def test_apply_mw_fallback_to_gaps(self) -> None:
+    def test_apply_fallback_to_gaps(self) -> None:
         plan = {
             "steps": [
                 {
@@ -151,9 +155,92 @@ class FlowPlannerMwFallbackTests(unittest.TestCase):
                 }
             ]
         }
-        out = self.planner._apply_mw_fallback_to_gaps(plan, "find foo", "reason")
+        out = self.planner._apply_fallback_to_gaps(plan, "find foo", "reason")
         self.assertEqual(out["steps"][0]["type"], MW_STEP_TYPE)
         self.assertEqual(self.planner._validate(out), [])
+
+
+class FlowPlannerGeneralFallbackTests(unittest.TestCase):
+    """MW off + general on: uncovered legs fall to the manifest-free general
+    agent instead of MobileWorld; both off restores the unsatisfiable path."""
+
+    def _planner(self, *, mw: bool, general: bool) -> FlowPlanner:
+        return FlowPlanner(
+            _minimal_catalog(), MagicMock(), "test-model",
+            mw_fallback=mw, general_fallback=general,
+        )
+
+    def test_to_general_leg_converts_in_place(self) -> None:
+        step = {
+            "id": "gap",
+            "app": "com.example.app",
+            "capability": "missing_cap",
+            "prompt": "do something",
+            "x_coverage_gap": "no app",
+            "x_route_key": "abc",
+        }
+        _to_general_leg(step, "no runnable app")
+        self.assertEqual(step["type"], GENERAL_STEP_TYPE)
+        self.assertNotIn("capability", step)
+        self.assertNotIn("x_coverage_gap", step)
+        self.assertNotIn("x_route_key", step)
+        self.assertEqual(step["x_fallback_reason"], "no runnable app")
+        self.assertEqual(step["app"], "com.example.app")  # kept as launch hint
+
+    def test_general_whole_request_plan_shape(self) -> None:
+        plan = _general_whole_request_plan("book a table", "no coverage")
+        self.assertEqual(len(plan["steps"]), 1)
+        self.assertEqual(plan["steps"][0]["type"], GENERAL_STEP_TYPE)
+        self.assertEqual(plan["steps"][0]["prompt"], "book a table")
+
+    def test_general_leg_valid_without_app_or_capability(self) -> None:
+        planner = self._planner(mw=False, general=True)
+        plan = {
+            "steps": [
+                {
+                    "id": "g",
+                    "type": GENERAL_STEP_TYPE,
+                    "prompt": "open settings and enable wifi",
+                    "x_fallback_reason": "coverage gap",
+                }
+            ]
+        }
+        self.assertEqual(planner._validate(plan), [])
+
+    def test_gaps_fall_to_general_when_mw_off(self) -> None:
+        planner = self._planner(mw=False, general=True)
+        plan = {
+            "steps": [
+                {"id": "gap", "prompt": "find foo", "x_coverage_gap": "no app"}
+            ]
+        }
+        out = planner._apply_fallback_to_gaps(plan, "find foo", "reason")
+        self.assertEqual(out["steps"][0]["type"], GENERAL_STEP_TYPE)
+        self.assertEqual(planner._validate(out), [])
+
+    def test_mw_takes_priority_over_general(self) -> None:
+        planner = self._planner(mw=True, general=True)
+        plan = {
+            "steps": [
+                {"id": "gap", "prompt": "find foo", "x_coverage_gap": "no app"}
+            ]
+        }
+        out = planner._apply_fallback_to_gaps(plan, "find foo", "reason")
+        self.assertEqual(out["steps"][0]["type"], MW_STEP_TYPE)
+
+    def test_whole_request_fallback_priority_and_off(self) -> None:
+        general = self._planner(mw=False, general=True)._whole_request_fallback(
+            "req", "reason", "planner"
+        )
+        self.assertEqual(general["steps"][0]["type"], GENERAL_STEP_TYPE)
+        mw = self._planner(mw=True, general=True)._whole_request_fallback(
+            "req", "reason", "planner"
+        )
+        self.assertEqual(mw["steps"][0]["type"], MW_STEP_TYPE)
+        neither = self._planner(mw=False, general=False)._whole_request_fallback(
+            "req", "reason", "planner"
+        )
+        self.assertIsNone(neither)
 
 
 class FlowPlannerFoundationFallbackTests(unittest.TestCase):
@@ -183,7 +270,7 @@ class FlowPlannerFoundationFallbackTests(unittest.TestCase):
         self.assertIn("x_coverage_gap", step)
         self.assertTrue(gaps)
         # the gap then resolves to a MobileWorld leg
-        out = self.planner._apply_mw_fallback_to_gaps({"steps": [step]}, "rename files", "reason")
+        out = self.planner._apply_fallback_to_gaps({"steps": [step]}, "rename files", "reason")
         self.assertEqual(out["steps"][0]["type"], MW_STEP_TYPE)
         self.assertEqual(self.planner._validate(out), [])
 
@@ -252,12 +339,27 @@ class FlowPlannerRepairTests(unittest.TestCase):
         self.assertEqual(result["steps"][0]["type"], MW_STEP_TYPE)
         self.assertEqual(result["steps"][0]["prompt"], "do an unrepairable thing")
 
-    def test_unrepairable_plan_without_mw_fallback_still_raises(self) -> None:
+    def test_unrepairable_plan_with_mw_off_falls_to_general_leg(self) -> None:
+        # MW off but general fallback on (the on-device configuration): an
+        # unrepairable plan becomes a whole-request GENERAL leg, not a raise.
         bad = _unrepairable_plan()
         responses = [_llm_response(bad)] * 8
         with patch("agents.flow.flow_planner.create_with_retry", side_effect=responses):
             planner = FlowPlanner(
-                _minimal_catalog(), MagicMock(), "test-model", mw_fallback=False
+                _minimal_catalog(), MagicMock(), "test-model",
+                mw_fallback=False, general_fallback=True,
+            )
+            result = planner.plan("do an unrepairable thing")
+        self.assertEqual(result["steps"][0]["type"], GENERAL_STEP_TYPE)
+        self.assertEqual(result["steps"][0]["prompt"], "do an unrepairable thing")
+
+    def test_unrepairable_plan_without_any_fallback_still_raises(self) -> None:
+        bad = _unrepairable_plan()
+        responses = [_llm_response(bad)] * 8
+        with patch("agents.flow.flow_planner.create_with_retry", side_effect=responses):
+            planner = FlowPlanner(
+                _minimal_catalog(), MagicMock(), "test-model",
+                mw_fallback=False, general_fallback=False,
             )
             with self.assertRaises(PlanValidationError):
                 planner.plan("do an unrepairable thing")
