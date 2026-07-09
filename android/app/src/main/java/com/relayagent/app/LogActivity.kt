@@ -6,10 +6,12 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.chip.Chip
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.relayagent.app.databinding.ActivityLogListBinding
 import com.relayagent.app.databinding.ItemRunBinding
 
@@ -21,27 +23,58 @@ import com.relayagent.app.databinding.ItemRunBinding
  */
 class LogActivity : AppCompatActivity() {
 
+    private lateinit var ui: ActivityLogListBinding
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val ui = ActivityLogListBinding.inflate(layoutInflater)
+        ui = ActivityLogListBinding.inflate(layoutInflater)
         setContentView(ui.root)
         ui.toolbar.setNavigationOnClickListener { finish() }
-        ui.toolbar.inflateMenu(R.menu.run_detail)
+        ui.toolbar.inflateMenu(R.menu.log_list)
         ui.toolbar.setOnMenuItemClickListener {
-            if (it.itemId == R.id.action_raw_files) {
-                startActivity(Intent(this, RawLogActivity::class.java)); true
-            } else false
+            when (it.itemId) {
+                R.id.action_raw_files -> {
+                    startActivity(Intent(this, RawLogActivity::class.java)); true
+                }
+                R.id.action_clear_logs -> { confirmClearLogs(); true }
+                else -> false
+            }
         }
 
+        ui.list.layoutManager = LinearLayoutManager(this)
+        reload()
+    }
+
+    private fun reload() {
         val runs = TrajLog.listRuns(TrajLog.trajRoot(filesDir))
         ui.empty.visibility = if (runs.isEmpty()) View.VISIBLE else View.GONE
-        ui.list.layoutManager = LinearLayoutManager(this)
         ui.list.adapter = Adapter(runs) { run ->
             startActivity(
                 Intent(this, RunDetailActivity::class.java)
                     .putExtra(RunDetailActivity.EXTRA_DIR, run.dir.absolutePath)
             )
         }
+    }
+
+    /** Delete every run directory under traj_logs after an explicit confirm.
+     * The dialog restates what the logs contain (per-step screen frames), so
+     * clearing is an informed choice; deletion is best-effort per subtree. */
+    private fun confirmClearLogs() {
+        val count = TrajLog.listRuns(TrajLog.trajRoot(filesDir)).size
+        if (count == 0) {
+            Toast.makeText(this, R.string.logs_empty, Toast.LENGTH_SHORT).show()
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.clear_logs_title)
+            .setMessage(getString(R.string.clear_logs_message, count))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.action_clear_logs) { _, _ ->
+                TrajLog.trajRoot(filesDir).listFiles()?.forEach { it.deleteRecursively() }
+                Toast.makeText(this, R.string.clear_logs_done, Toast.LENGTH_SHORT).show()
+                reload()
+            }
+            .show()
     }
 
     private class Adapter(

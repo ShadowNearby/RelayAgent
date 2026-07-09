@@ -12,10 +12,13 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 
 /**
@@ -61,7 +64,19 @@ class ScreenCaptureService : Service() {
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+    private var latestImage: Image? = null
     private val frameLock = Any()
+
+    /**
+     * Monotonic frame-arrival counter for settle detection: the VirtualDisplay
+     * surface only receives buffers when the screen CHANGES (same property the
+     * host's scrcpy stream exploits, P2-S2), so "frameSeq unchanged for a quiet
+     * window" means the screen is static. Read from the Python worker thread
+     * via [DeviceBridge.captureFrameSeq].
+     */
+    @Volatile
+    var frameSeq: Long = 0
+        private set
 
     val isActive: Boolean get() = projection != null
 
@@ -111,7 +126,25 @@ class ScreenCaptureService : Service() {
         val metrics = resources.displayMetrics
         val w = metrics.widthPixels
         val h = metrics.heightPixels
-        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+        // 3 buffers: one held as latestImage + one being acquired + producer
+        // headroom, so holding the latest frame never stalls the pipeline.
+        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 3)
+        // Frames are drained as they arrive (keep-latest): each callback swaps
+        // the held Image and bumps frameSeq. Without a consumer the queue
+        // would fill after maxImages frames and arrival events would stop —
+        // which would make settle detection see a static screen mid-animation.
+        reader.setOnImageAvailableListener({ r ->
+            synchronized(frameLock) {
+                val img = try {
+                    r.acquireLatestImage()
+                } catch (e: Exception) {
+                    null  // reader closing under us during teardown
+                } ?: return@setOnImageAvailableListener
+                latestImage?.close()
+                latestImage = img
+                frameSeq += 1
+            }
+        }, Handler(Looper.getMainLooper()))
         virtualDisplay = proj.createVirtualDisplay(
             "relay-capture", w, h, metrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
@@ -124,31 +157,35 @@ class ScreenCaptureService : Service() {
 
     /**
      * Latest frame as ARGB_8888 Bitmap, or null when the pipeline is down or
-     * no frame has arrived yet. Called from the Python worker thread.
+     * no frame has arrived yet. Called from the Python worker thread. Reads
+     * the listener-held latest Image; the Image stays owned by the listener
+     * (closed on the next swap), so it is NOT closed here.
      */
     fun captureBitmap(): Bitmap? {
-        val reader = imageReader ?: return null
         synchronized(frameLock) {
-            val image = reader.acquireLatestImage() ?: return null
-            image.use { img ->
-                val plane = img.planes[0]
-                val rowStride = plane.rowStride
-                val pixelStride = plane.pixelStride
-                val padded = Bitmap.createBitmap(
-                    rowStride / pixelStride, img.height, Bitmap.Config.ARGB_8888
-                )
-                padded.copyPixelsFromBuffer(plane.buffer)
-                // Trim row-stride padding to the true width.
-                return if (padded.width != img.width) {
-                    Bitmap.createBitmap(padded, 0, 0, img.width, img.height)
-                } else padded
-            }
+            val img = latestImage ?: return null
+            val plane = img.planes[0]
+            val rowStride = plane.rowStride
+            val pixelStride = plane.pixelStride
+            plane.buffer.rewind()
+            val padded = Bitmap.createBitmap(
+                rowStride / pixelStride, img.height, Bitmap.Config.ARGB_8888
+            )
+            padded.copyPixelsFromBuffer(plane.buffer)
+            // Trim row-stride padding to the true width.
+            return if (padded.width != img.width) {
+                Bitmap.createBitmap(padded, 0, 0, img.width, img.height)
+            } else padded
         }
     }
 
     private fun tearDownProjection() {
         virtualDisplay?.release()
         virtualDisplay = null
+        synchronized(frameLock) {
+            latestImage?.close()
+            latestImage = null
+        }
         imageReader?.close()
         imageReader = null
         projection = null
@@ -186,10 +223,3 @@ class ScreenCaptureService : Service() {
             .build()
     }
 }
-
-private inline fun <R> android.media.Image.use(block: (android.media.Image) -> R): R =
-    try {
-        block(this)
-    } finally {
-        close()
-    }

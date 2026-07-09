@@ -117,6 +117,11 @@
     <string name="label_steps">步骤轨迹</string>
     <string name="label_reply">回复</string>
     <string name="action_raw_files">查看原始文件</string>
+    <string name="action_clear_logs">清除全部日志</string>
+    <string name="clear_logs_title">清除全部运行日志？</string>
+    <string name="clear_logs_message">将删除全部 %d 次运行，包括每一步的屏幕截图，且不可恢复。</string>
+    <string name="clear_logs_done">运行日志已清除</string>
+    <string name="logs_privacy_note">运行日志包含每一步的屏幕截图，可能含聊天内容、地址等敏感信息；分享前请先自查。</string>
     <string name="badge_failed">失败</string>
     <string name="log_run_title">运行 %s</string>
     <string name="log_leg_count">  ·  %d 个子任务</string>

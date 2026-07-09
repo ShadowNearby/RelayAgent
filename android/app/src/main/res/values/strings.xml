@@ -117,6 +117,11 @@
     <string name="label_steps">Step trajectory</string>
     <string name="label_reply">Reply</string>
     <string name="action_raw_files">View raw files</string>
+    <string name="action_clear_logs">Clear all logs</string>
+    <string name="clear_logs_title">Clear all run logs?</string>
+    <string name="clear_logs_message">This deletes all %d runs, including every per-step screenshot. This cannot be undone.</string>
+    <string name="clear_logs_done">Run logs cleared</string>
+    <string name="logs_privacy_note">Run logs include a screenshot of every step — they may contain chats, addresses or other sensitive content. Review before sharing.</string>
     <string name="badge_failed">failed</string>
     <string name="log_run_title">Run %s</string>
     <string name="log_leg_count">  ·  %d subtasks</string>

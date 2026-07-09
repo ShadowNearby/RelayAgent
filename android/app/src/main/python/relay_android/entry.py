@@ -39,6 +39,10 @@ _PASSTHROUGH_ENV = (
     "RELAY_RECOVERY",
     "RELAY_PROFILE",
     "RELAY_TRAJ_REDACT",
+    # General fallback (manifest-free GeneralGUIAgent for uncovered legs —
+    # the on-device replacement for the host's MobileWorld fallback).
+    "RELAY_GENERAL_FALLBACK",
+    "RELAY_GENERAL_MAX_STEP",
 )
 
 
@@ -141,8 +145,11 @@ def run_flow(nl: str, config_json: str) -> str:
             retry=False,
         )
         llm.purpose = "plan"
-        # mw_fallback=False: no host MobileWorld runtime on the phone —
-        # uncovered legs surface as unsatisfiable instead.
+        # mw_fallback=False: no host MobileWorld runtime on the phone. With MW
+        # off, uncovered legs fall to the GENERAL fallback (manifest-free
+        # GeneralGUIAgent on this same runtime, in-process) instead of
+        # surfacing as unsatisfiable; RELAY_GENERAL_FALLBACK=0 (Settings)
+        # restores the old give-up behavior.
         planner = FlowPlanner(
             catalog, llm, os.environ["LLM_MODEL"], matrix=matrix, mw_fallback=False
         )

@@ -55,6 +55,14 @@ object DeviceBridge {
         return intArrayOf(dm.widthPixels, dm.heightPixels)
     }
 
+    /** Monotonic frame-arrival counter off the MediaProjection pipeline, for
+     * settle detection (the on-device analogue of the host's scrcpy
+     * frame_seq — see OnDeviceAndroidBackend.wait_settled). -1 when the
+     * projection is down (caller falls back to fixed sleeps). */
+    @JvmStatic
+    fun captureFrameSeq(): Long =
+        ScreenCaptureService.instance?.takeIf { it.isActive }?.frameSeq ?: -1L
+
     @JvmStatic
     fun uiDumpXml(): String? = a11y?.uiDumpXml()
 

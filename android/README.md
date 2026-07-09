@@ -1,5 +1,7 @@
 # RelayAgent Android App（Phase 1 骨架）
 
+> English: [README.en.md](README.en.md)
+
 把 RelayAgent 运行时装进独立 Android App：**纯无障碍方案**（AccessibilityService 手势注入 + uiautomator 格式 a11y 树序列化 + MediaProjection 截屏），**Chaquopy 内嵌 CPython** 原样复用仓库的 `agents/`（构建期 `syncRelayPython` 同步），不需要电脑、不需要 adb。
 
 ## 架构对应关系
@@ -15,9 +17,9 @@
 | `.env` | 设置页 → EncryptedSharedPreferences → entry 装入 env |
 | 终端 ask_user / EOF | 悬浮面板 回答 / 我来接管（=None=handoff 成功终止） |
 | 子进程 per leg | `InProcessLegExecutor`（`RELAY_LEG_EXECUTOR=inprocess`） |
-| MobileWorld 兜底 | 砍掉：`mw_fallback=False` + `allow_mw_legs=False` + `RELAY_MW_FALLBACK=0`（连恢复梯子的 MW 档一起关）→ 「无法处理」 |
+| MobileWorld 兜底 | 换成**通用兜底**：`mw_fallback=False` + `allow_mw_legs=False` + `RELAY_MW_FALLBACK=0`，覆盖外 leg / 恢复梯子最后一档改走 `type: general` leg——无 manifest 的 `GeneralGUIAgent`（a11y 树逐步驱动，in-process，`RELAY_GENERAL_MAX_STEP` 限步）；`RELAY_GENERAL_FALLBACK=0`（设置页可覆盖）才回到「无法处理」 |
 | `~/.relayagent/profile.yaml`（P3 记忆层） | `RELAY_PROFILE_ROOT=<filesDir>/profile`；M3 写入前的 y/n 走悬浮面板 ask_user；`RELAY_PROFILE`/`RELAY_TRAJ_REDACT`/`RELAY_RECOVERY` 可由设置页经 `_PASSTHROUGH_ENV` 覆盖 |
-| scrcpy 流式抓帧 + settle 检测（P2，主机侧 only） | 不适用：App 本就走 MediaProjection ~50ms/帧；`DeviceBackend.wait_settled` 默认 False → 固定 sleep 行为不变 |
+| scrcpy 流式抓帧 + settle 检测（P2） | 抓帧本就走 MediaProjection ~50ms/帧；settle 检测已对齐——`OnDeviceAndroidBackend.wait_settled` 轮询 `DeviceBridge.captureFrameSeq()`（VirtualDisplay 只在画面变化收帧，与 scrcpy 同性质），quiet 窗口内无新帧即安定；`RELAY_SETTLE_DETECT=0` 或投影断开时回退固定 sleep |
 
 ## 构建（需要 Android Studio 的机器）
 
@@ -60,13 +62,20 @@ Material 3 主题（`res/values/themes.xml` + `colors.xml`，品牌色靛紫）�
 - **主页 `MainActivity`（会话式，2026-07 改版，对标 Codex/Claude App）**：整屏是一条任务对话流（`RecyclerView` + `ChatThread.kt`）——用户任务是右侧气泡（`item_chat_user`），运行过程是实时活动卡（`item_chat_working`：spinner + 每条子任务一行 ▸/✓ + 当前步骤行，由 `RunEvents` 喂），结果是左侧结果卡（`item_chat_answer`：成败标注 + 回复文本 + 「查看运行详情」跳 `RunDetailActivity`）。底部常驻胶囊输入栏，运行中发送键变停止键；空线程显示问候语 + 3 条示例建议（读 `res/raw/examples.json`）。无障碍 / 网关未就绪时顶部横幅提示（点「去开启」直达设置），历史任务 / 任务示例 / 设置收进 toolbar（`menu/main.xml`）。对话线程存内存单例 `ChatStore`（同 `RunLog` 模式），持久记录仍在轨迹日志查看器。
 - **`RunEvents.kt`**：`emit_status` JSON → 类型化事件总线（`LegStart`/`Step`/`LegEnd`/`AskUser`/`AskAnswered`），`OverlayController.postStatus` 分发（悬浮 chip / RunLog / 对话流三路同源）；`DeviceBridge.askUser` 阻塞前后补发 ask 事件，线程里能看到「等待你的回答」。
 - **任务示例 `ExamplesActivity`**：读 `res/raw/examples.json`（50 条：30 RelayBench + 20 AndroidDaily，由 `scripts/android/gen_app_examples.py` 从 `benchmark/` 生成），卡片 + 标签（来源 / App / 类别 / 难度），点按回填任务框。改基准后重跑脚本即可刷新。
-- **运行日志（结构化查看器）**：三级——`LogActivity`（运行列表：任务原文 / 时间 / App 标签 / 子任务数，新→旧）→ `RunDetailActivity`（一次运行的任务卡 + 各子任务卡：状态徽章 / 步数 / 墙钟 / token / 回复预览）→ `LegDetailActivity`（步骤时间线：每步标注截图缩略图 + action 类型 + 坐标/参数 + thought，点缩略图全屏看帧）。解析在 `TrajLog.kt`（吃 `meta.json` / `summary.json` / `wall_clock.json` / `agent_reply.json` / `leg_verdict.json` / `steps/steps.json`，缺字段优雅降级），App 名映射在 `AppLabels.kt`。原始文件树退到 toolbar 溢出菜单「查看原始文件」→ `RawLogActivity`（+ `LogDetailActivity` 渲染单文件：JSON 美化 / PNG 进 ImageView）。`entry.py` 落 `meta.json`（任务原文 + kind），查看器才能显示「这是什么任务」。主页实时日志卡只是当次运行的 tail。
+- **运行日志（结构化查看器）**：三级——`LogActivity`（运行列表：任务原文 / 时间 / App 标签 / 子任务数，新→旧；溢出菜单可**清除全部日志**，列表顶部有截图隐私提示）→ `RunDetailActivity`（一次运行的任务卡 + 各子任务卡：状态徽章 / 步数 / 墙钟 / token / 回复预览）→ `LegDetailActivity`（步骤时间线：每步标注截图缩略图 + action 类型 + 坐标/参数 + thought，点缩略图全屏看帧）。解析在 `TrajLog.kt`（吃 `meta.json` / `summary.json` / `wall_clock.json` / `agent_reply.json` / `leg_verdict.json` / `steps/steps.json`，缺字段优雅降级），App 名映射在 `AppLabels.kt`。原始文件树退到 toolbar 溢出菜单「查看原始文件」→ `RawLogActivity`（+ `LogDetailActivity` 渲染单文件：JSON 美化 / PNG 进 ImageView）。`entry.py` 落 `meta.json`（任务原文 + kind），查看器才能显示「这是什么任务」。主页实时日志卡只是当次运行的 tail。
 - **实时日志**：`RunLog` 单例滚动缓冲。`OverlayController.postStatus` 把 `emit_status` 事件（`leg_start` / `leg_end` / `step`）格式成中文短行，同时喂悬浮 chip 和主页日志卡。悬浮 chip / ask_user 面板用圆角 drawable。
 
 ## 接线状态
 
 - **`agents.device` 注入缝已落地并接线**：`relay_android/backend.py:install()` 经 `set_default_backend` 注入 `OnDeviceAndroidBackend`，已在模拟器上跑通（CPython 启动 → backend 注入 → MediaProjection 截帧 → 三段式路由 → flow 规划 → in-process leg 执行 → traj/wall_clock 落 filesDir）。模拟器搭建与 APK 安装步骤见 [`../docs/emulator_testing.zh.md`](../docs/emulator_testing.zh.md) §7。
 - 主机侧复用件：`run_leg` 进程内执行、`InProcessLegExecutor`、`InteractionProvider`、`make_llm_client` HTTP shim、`nl_flow.plan_request/execute_plan`、`RELAY_TRAJ_ROOT` 重定向。`native_runner._agent_spec` 在磁盘无 `agents/agent/relay_agent.py` 时（Chaquopy AssetFinder 打包形态）回落包内 module spec 加载 agent。
+
+## 安全与隐私
+
+- **不可逆动作护栏**：卡片能力经 `handoff_to_user_required` + `stop_before` 在支付/下单等不可逆 CTA 前**停下交还用户**；通用兜底 agent（`GeneralGUIAgent`）带中英双语 CTA 停止表（支付/转账/下单/订房等），命中即转 ask_user，**永不自行跨越**。
+- **系统权限弹窗自动点击**：运行中目标 App 弹出的系统权限对话框（相机/定位/麦克风…）默认自动点**最宽松的允许**（永不点拒绝；仅当前台是已知权限控制器包名才触发，每任务上限 8 次）。这意味着 agent 会替你授予目标 App 请求的运行时权限——不接受就在**设置页关掉「自动允许权限弹窗」**（= `RELAY_DISMISS_PERMISSIONS=0`），弹窗将留在屏上等你手点。
+- **运行日志含原始截图**：`traj_logs/` 里每步落屏幕帧（聊天内容、余额、地址都可能在内）。分享排障日志前先过一遍;`RELAY_TRAJ_REDACT=1` 只替换 profile 文本值,**不会**擦除截图像素。
+- **用户画像本地存储**：`filesDir/profile/profile.yaml`,只在本机,随 App 数据清除;写入前必经 y/n 确认。
 
 ## 运行时数据布局（filesDir）
 

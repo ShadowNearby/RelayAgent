@@ -15,6 +15,16 @@
         app:title="@string/title_logs" />
 
     <TextView
+        android:id="@+id/privacyNote"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="8dp"
+        android:text="@string/logs_privacy_note"
+        android:textColor="@color/on_surface_muted"
+        android:textSize="12sp" />
+
+    <TextView
         android:id="@+id/empty"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

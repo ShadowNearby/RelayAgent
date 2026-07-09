@@ -13,12 +13,12 @@ AndroidBackend, and subprocess adb doesn't exist on the phone.
 Known semantic drift vs. host (accepted, see plan §risks):
 - no real force-stop without shell — cold launch approximates it with a
   CLEAR_TASK relaunch, so target-app in-memory state may survive across legs.
-- no permission-popup auto-dismiss yet (base default: no-op).
 - recording is a Phase 4 item; `start_recording` returns None.
 """
 from __future__ import annotations
 
 import io
+import os
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -29,7 +29,7 @@ from loguru import logger
 from agents.device import DeviceBackend, Key, UINode
 # Same uiautomator XML dialect on both sides — share the normalizer and the
 # logical-key mapping with the host adb backend.
-from agents.device.android import _KEYCODES, _xml_to_nodes
+from agents.device.android import _KEYCODES, AndroidBackend, _xml_to_nodes
 
 Bridge = jclass("com.relayagent.app.DeviceBridge")
 
@@ -72,6 +72,41 @@ class OnDeviceAndroidBackend(DeviceBackend):
     def foreground_app(self, *, timeout: float = 5.0) -> str | None:
         pkg = Bridge.foregroundPackage()
         return str(pkg) if pkg else None
+
+    def wait_settled(self, budget: float, quiet: float | None = None) -> bool:
+        """Frame-arrival settle detection off the MediaProjection pipeline —
+        the on-device analogue of the host's scrcpy version (P2-S2): the
+        VirtualDisplay surface only receives buffers when the screen CHANGES,
+        so "frameSeq unchanged for a whole quiet window" means settled. Worst
+        case (continuous animation) spends exactly `budget`, identical to the
+        fixed sleep it replaces. Returns False (→ caller sleeps fixed) when
+        the projection is down or `RELAY_SETTLE_DETECT=0`.
+
+        No blocking primitive crosses the Chaquopy bridge, so this polls
+        `Bridge.captureFrameSeq()` (~a cheap static field read) instead of
+        waiting on a condition variable.
+        """
+        if os.getenv("RELAY_SETTLE_DETECT", "1") != "1":
+            return False
+        seq = int(Bridge.captureFrameSeq())
+        if seq < 0:
+            return False  # projection down → keep the fixed-sleep behavior
+        if quiet is None:
+            quiet = float(os.getenv("RELAY_SETTLE_QUIET", "0.2"))
+        deadline = time.monotonic() + budget
+        last_change = time.monotonic()
+        poll = 0.03
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                return True  # budget spent — proceed, like the old fixed sleep
+            if now - last_change >= quiet:
+                return True  # no new frame for a whole quiet window → settled
+            time.sleep(min(poll, deadline - now))
+            new_seq = int(Bridge.captureFrameSeq())
+            if new_seq != seq and new_seq >= 0:
+                seq = new_seq
+                last_change = time.monotonic()
 
     # -- gestures / input -----------------------------------------------------
     def tap(self, x: int, y: int, *, timeout: float = 5.0) -> bool:
@@ -126,6 +161,13 @@ class OnDeviceAndroidBackend(DeviceBackend):
 
     def teardown_input_channel(self) -> None:
         pass
+
+    # -- permission popups -----------------------------------------------------
+    # The host implementation only touches the DeviceBackend interface
+    # (foreground_app / dump_ui_tree / tap) + the vendor tables, so it works
+    # verbatim over the Kotlin bridge. Same opt-out (RELAY_DISMISS_PERMISSIONS,
+    # exposed in the Settings screen) and same never-Deny policy.
+    dismiss_permission_popup = AndroidBackend.dismiss_permission_popup
 
     # -- recording ------------------------------------------------------------
     def start_recording(self, out_dir: Path, *, basename: str = "recording"):
