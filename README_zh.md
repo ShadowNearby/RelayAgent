@@ -27,7 +27,12 @@ RelayAgent 是一个移动端 Agent：它通过把子任务**委派给 App 内�
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent 架构：一条自然语言请求被分解为子任务，每个子任务委派给合适的 App 内置助手" width="820">
   <br>
-  <em>RelayAgent 架构：先将任务拆解，再把每个子任务委派给对应的 App 内置助手</br><b>例如：找一家高分的附近餐厅</b> → 小红书助手；<b>导航前往</b> → 高德地图助手</em>
+  <em>RelayAgent 架构：先将任务拆解，再把每个子任务委派给对应的 App 内置助手</em>
+</p>
+<p align="center">
+  <img src="assets/RelayAgentDemoFlow/RelayAgentDemoFlow.gif" alt="跨 App 委派：小红书「点点」助手推荐餐厅，用户选定后由高德地图助手规划路线并打车前往" width="320">
+  <br>
+  <em><b>例如：搜索附近高分餐厅并打车前往</b><br><b>1. 找一家高分的附近餐厅</b> → 小红书「点点」助手搜索并推荐附近餐厅<br><b>2. 打车前往</b> → 高德地图助手规划路线并打车</em>
 </p>
 
 ---
@@ -82,14 +87,6 @@ RelayAgent 在三个测试集（AndroidDaily、MobileWorld、RelayBench）上均
   <em>任务 token 消耗</em>
 </p>
 
-## 🎬 演示
-
-*「帮我点三杯蜜雪冰城蜜桃四季春，温度和糖度都用默认」* → 将任务委派给千问 App 内置助手，助手帮助完成点外卖，完成后停在支付页。
-
-<p align="center">
-  <img src="assets/RelayAgentDemoOrder/RelayAgentDemoOrder.gif" alt="经 App 内置助手下单，支付前停住" width="320">
-</p>
-
 ## 🚀 快速开始
 
 开启 USB 调试的安卓手机（当前能力卡仅支持 Google Pixel 9）或模拟器，需安装并启用 ADB Keyboard 输入法（`com.android.adbkeyboard/.AdbIME`）。详见 [真机配置](docs/device_setup.zh.md) 和 [模拟器测试](docs/emulator_testing.zh.md)。
@@ -100,7 +97,7 @@ uv venv --python 3.12 && uv sync --no-install-project --extra dev
 cp .env.example .env
 # 修改 .env 中的 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
 uv run python scripts/validate/check_device_env.py    # 检查运行环境
-uv run python scripts/run_plan.py --yes     "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
 ### 运行测试
@@ -149,4 +146,6 @@ uv run python scripts/run_benchmark_test.py               # 有设备；运行�
 - [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld)（Tongyi MAI）—— 所用测试集之一，也是 GUI Agent Baseline 的来源。
 - **AndroidDaily** —— 所采用的测试集之一。
 
-## 📄 [LICENSE](LICENSE)
+## 📄 License
+
+Apache 2.0，见 [LICENSE](LICENSE)。

@@ -27,7 +27,12 @@ RelayAgent is a mobile agent that completes tasks end-to-end by **delegating sub
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent architecture: a natural-language request is decomposed into subtasks, each delegated to a suitable in-app assistant" width="820">
   <br>
-  <em>RelayAgent architecture: the task is first decomposed, then each subtask is delegated to the corresponding in-app assistant.</br><b>e.g. Find a top-rated nearby restaurant</b> → Xiaohongshu's assistant; <b>navigate there</b> → Amap's assistant.</em>
+  <em>RelayAgent architecture: the task is first decomposed, then each subtask is delegated to the corresponding in-app assistant.</em>
+</p>
+<p align="center">
+  <img src="assets/RelayAgentDemoFlow/RelayAgentDemoFlow.gif" alt="Cross-app delegation: Xiaohongshu's Dot assistant recommends restaurants, then Amap's assistant plans a route and hails a ride once the user picks one" width="320">
+  <br>
+  <em><b>e.g. Search a nearby top-rated restaurant and hail a ride there</b><br><b>1. Find a top-rated nearby restaurant</b> → Xiaohongshu's Dot assistant searches and recommends nearby restaurants<br><b>2. Hail a ride there</b> → Amap's assistant plans the route and hails a ride</em>
 </p>
 
 ---
@@ -82,14 +87,6 @@ RelayAgent outperforms a pure GUI agent baseline (MobileWorld's `general_e2e`) o
   <em>Task token consumption</em>
 </p>
 
-## 🎬 Demo
-
-*"帮我点三杯蜜雪冰城蜜桃四季春，温度和糖度都用默认"* (Order three Mixue drinks, defaults for temperature and sweetness) → the task is delegated to Qwen's in-app assistant, which places the order and stops at the payment screen.
-
-<p align="center">
-  <img src="assets/RelayAgentDemoOrder/RelayAgentDemoOrder.gif" alt="Order food via the in-app assistant, stopping before payment" width="320">
-</p>
-
 ## 🚀 Quick Start
 
 An Android phone with USB debugging enabled (current capability cards only support Google Pixel 9) or an emulator, with the ADB Keyboard IME (`com.android.adbkeyboard/.AdbIME`) installed and enabled. See [device setup](docs/device_setup.md) and [emulator testing](docs/emulator_testing.md).
@@ -100,7 +97,7 @@ uv venv --python 3.12 && uv sync --no-install-project --extra dev
 cp .env.example .env
 # fill in LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in .env
 uv run python scripts/validate/check_device_env.py    # check the runtime environment
-uv run python scripts/run_plan.py --yes     "帮我点三杯蜜雪冰城蜜桃四季春"
+uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"   # "Order three cups of Mixue peach four-seasons tea"
 ```
 
 ### Run tests
@@ -149,4 +146,6 @@ If you find RelayAgent useful, please cite the paper and this repository:
 - [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld) (Tongyi MAI) — one of the test suites used, and the source of the GUI agent baseline.
 - **AndroidDaily** — one of the test suites used.
 
-## 📄 [LICENSE](LICENSE)
+## 📄 License
+
+Apache 2.0, see [LICENSE](LICENSE).
