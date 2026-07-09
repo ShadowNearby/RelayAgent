@@ -3,6 +3,7 @@
 <p align="center">
   <a href="report/RelayAgent-TechReport.md">技术报告</a> •
   <a href="SPEC.md">规范 (v0.1)</a> •
+  <a href="docs/roadmap.zh.md">路线图</a> •
   <a href="CONTRIBUTING.md">参与贡献</a> •
   <a href="https://github.com/ShadowNearby/RelayAgent/issues">Issues</a>
 </p>
@@ -18,9 +19,35 @@
 
 每个 App 一张机器可读的**卡片（card）**。默认走 GUI 中介，厂商配合**可选不强制**。
 
-> **状态：** 早期，但已有实测。SPEC v0.1、10 张已验证的安卓参考卡片（50 个声明能力）、一个原生 Android 中继适配器，以及一组真机 A/B 基准测试。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
+<p align="center">
+  <img src="assets/paper/arch.png" alt="RelayAgent 总览：一条自然语言请求被分解为子任务，每个子任务委派给合适的 App 内置助手" width="820">
+  <br>
+  <em>一条请求、多个内置助手：planner 分解指令，把每个子任务委派给那个本就握着用户上下文的 App 内助手。</em>
+</p>
 
----
+> **状态：** 早期，但已有实测。SPEC v0.1、10 张已验证的安卓参考卡片（50 个声明能力）、一个原生 Android 中继适配器、一套带执行期失败恢复与覆盖兜底的 NL 跨 App 规划器、一个端上 Android App，以及与纯 GUI 基线的真机对比基准。完整方法与数据见 [**技术报告**](report/RelayAgent-TechReport.md)。欢迎贡献。
+
+## 📢 更新
+
+- **2026-07-08 —— 路线图 P1–P3 落地。**（1）*执行期失败恢复*：失败的 app leg 先分类（`env_fail`/`route_fail`/`app_fail`），再爬梯子——重试（route_fail 先 LLM 换措辞）→ 换路由到别的 App → 运行期兜底 → 部分成功报告——benchmark 侧带逐次尝试的 token 遥测（[nl_flow §6.1](docs/nl_flow.zh.md)）。（2）*流式抓帧*：`RELAY_CAPTURE_BACKEND=scrcpy` 用常驻 H.264 流替换 ~1.5 秒的 `screencap`（Pixel 9 实测 **~8 ms/帧**），帧到达稳定检测替换各处固定 sleep。（3）*用户记忆*：磁盘 profile 注入规划与槽位抽取（「导航回家」直接解析成存的地址），偏好写入先问 y/n，轨迹落盘可脱敏。
+- **2026-07-07 —— 端上 Android App 里程碑。** 完整 NL flow 现在跑在一个独立 App 里（[`android/`](android/README.md)，无障碍服务 + Chaquopy 嵌入 Python）——**无电脑、无 adb**：会话式任务流主页、实时运行卡、结构化运行日志查看器、中文界面 + 深色主题；仪器化测试套件在 Pixel 9 真机验证通过。同时发布[产品化路线图](docs/roadmap.zh.md)。
+- **2026-06-14 —— 仓库重整 + CI。** `agents/` 按功能域拆成子包（`device/`、`llm/`、`runtime/`、`routing/`、`agent/`、`flow/`），上 GitHub CI，可选 extras（`dev`/`mw`/`stream`），manifest 与设备校验工具链。
+
+## 📋 目录
+
+- [第三条路](#第三条路)
+- [工作原理——三块拼图](#工作原理三块拼图)
+- [不止一张卡片：跨 App flow](#不止一张卡片跨-app-flow)
+- [演示](#演示)
+- [实测结果](#实测结果)
+- [仓库结构](#仓库结构)
+- [运行（真机、多 VLM）](#运行真机多-vlm)
+- [运行测试](#运行测试)
+- [文档](#文档)
+- [MVP 范围（v0.1）](#mvp-范围v01)
+- [已知阻塞点](#已知阻塞点)
+- [这个项目不是什么](#这个项目不是什么)
+- [参与进来](#参与进来)
 
 ## 第三条路
 
@@ -32,6 +59,20 @@
 RelayAgent 背后的观察是：大多数超级 App **本身就已经内置了一个登录态的 AI 助手** —— 高德的助手 tab、微信里的元宝、淘宝/闪购的购物助手、小红书的点点、WPS AI。对相当大一部分真实意图来说，用户想要的能力*本就存在、本就登录、本就握着用户的上下文*，就在 App 里面。
 
 所以我们主张**第三条路：把用户意图委派给 App 自己的内置助手** —— 而不是自己重做任务（纯 GUI 智能体），也不是等接口（A2A）。这条路需要的不是更聪明的自动化模型，而是一份*契约*：一个按 App 组织的发现层，告诉 OS 智能体哪些 App 内置了助手、它的输入框在哪、它能做什么，以及——最关键的——**什么时候必须把控制权交还给用户。**
+
+同一个导航任务，两条路对照：
+
+<p align="center">
+  <img src="assets/paper/gui-agent.png" alt="纯 GUI 智能体：每一步一张截图 + 一次 VLM 往返" width="820">
+  <br>
+  <em><b>纯 GUI 智能体</b> —— 每一步都是截图 + VLM 往返：找搜索框、输入、选结果、点开始……一个任务几十次视觉调用。</em>
+</p>
+
+<p align="center">
+  <img src="assets/paper/dele-agent.png" alt="RelayAgent 委派：卡片提供确定性入口脚本，内置助手执行任务" width="820">
+  <br>
+  <em><b>经卡片委派</b> —— manifest 提供确定性入口脚本（打开 App → 输入模板化 prompt → 提交）；真正干活的是握着用户上下文的内置助手。</em>
+</p>
 
 | | 厂商 API<br>(A2A / App Intents / HMAF) | 纯 GUI 智能体<br>(Mobile-Agent、MobiAgent…) | **RelayAgent（本项目）** |
 | --- | --- | --- | --- |
@@ -68,6 +109,19 @@ OS 级智能体
 
 目标 App 是**显式指定**的。OS 智能体在其中选一个能力。内置助手执行。卡片就是那份契约。
 
+## 不止一张卡片：跨 App flow
+
+一张卡片回答的是「怎么把*这个*任务交给*这个* App」。v0.1 之后落地的所有东西，把这个原语扩展成了一套完整的智能体架构——分解、委派、编排：
+
+- **NL 规划 + 三段式路由。** `scripts/run_plan.py` 从一条自然语言请求合成多 App flow；每一步经三段式路由（非 foundation 预筛 → 重排 → foundation 兜底独立成段）对着[能力矩阵](docs/app_capability_matrix.csv)解析 app + capability，blackboard 在 leg 间传递结果。（[NL flow 架构](docs/nl_flow.zh.md)）
+- **执行期失败恢复**（路线图 P1，默认开）。失败的 leg 先分类，再爬梯子：重试（route_fail 先 LLM 换措辞）→ 换路由到别的 App → 运行期兜底 → 部分成功报告（`flow_report.json`）。带 handoff 契约的能力只允许重试——绝不绕过安全契约换路由。（[nl_flow §6.1](docs/nl_flow.zh.md)）
+- **覆盖兜底。** 没有任何卡片覆盖某条 leg——或恢复梯子爬完——时，这条 leg 交给同一 runtime 上的无 manifest 通用 GUI agent（装了 `mw` extra 时则交给 MobileWorld 的 `general_e2e`），而不是直接放弃。优先级：MW > general > unsatisfiable。（[nl_flow §10](docs/nl_flow.zh.md)）
+- **流式抓帧 + 稳定检测**（P2）。`RELAY_CAPTURE_BACKEND=scrcpy` 把每步 ~1.5 秒的 `screencap` 变成 ~8 ms 读一帧最新解码缓冲；「quiet 窗口内无新帧」替换固定 sleep。任何失败永久回退 `screencap`，不搞重启风暴。
+- **用户记忆**（P3，默认开；无 profile 文件即 no-op）。YAML profile（`spec/profile.schema.json`）注入规划与模板槽位抽取；偏好只在显式 y/n 确认后写入；`RELAY_TRAJ_REDACT=1` 在所有日志落盘点把 profile 值换成占位符。
+- **路由固化。** 有 verdict 背书的路由固化成 0-LLM 查表，重复请求不再花 token。（[nl_flow §9](docs/nl_flow.zh.md)）
+- **端上 App。** 整条 pipeline——路由、规划、leg 执行、日志——跑在一个独立 Android App 里（无障碍服务 + 嵌入式 Python）：无电脑、无 adb。（[`android/`](android/README.md)）
+- **平台接缝。** 设备 I/O 走后端抽象层（`agents/device/`；Android=直 adb，iOS/HarmonyOS 骨架），manifest 声明 `platforms` / 各平台 `app_ids`。（[设备后端](docs/device_backends.zh.md)）
+
 ## 演示
 
 一段真机端到端运行：
@@ -77,6 +131,8 @@ OS 级智能体
 ![通过内置助手下单](assets/RelayAgentDemoOrder/RelayAgentDemoOrder.gif)
 
 ## 实测结果
+
+### 委派在单个任务上省下了什么（技术报告）
 
 真机上的四配置 A/B（技术报告 §8）用来分离*委派到底省下了什么*。这里保留 **T1**：单 App 点三杯蜜雪冰城。所有配置下的**同一笔单子都走同一个后端**（淘宝闪购的助手*就是*千问），只有交互方式不同。中位数 token，RelayAgent / 纯 VLM 配置取 n=3：
 
@@ -96,9 +152,27 @@ OS 级智能体
 
 **「可预测性」本身就是一个结果。** RelayAgent 每个任务的成本几乎恒定——T1 为 **3987 / 3986 / 3950** token（VLM 调用固定为 2 次）——而纯 VLM 智能体在同一个任务上波动于 **38k → 97k token、46 → 379 秒**（三次都到了同一个支付前页面），早期探索中还出现过过早退出和失控空转的长尾。对按 token 付费的人来说，一个可预测的 ~4k 胜过几倍的方差。换算成钱（§8.2），RelayAgent optimized 约 **$0.001/任务**，纯 VLM 约 **$0.016**（16.6×）。
 
-**安全保障守住了。** 每一次 `handoff_to_user_required` 运行都停在了不可逆 CTA 之前——下单停在 `立即支付`——零次确认点击。冻结的 benchmark 目录中，7 张卡片的 **28/28 个能力**都到达了预期终态（§8.2.1）；当前 manifest 目录已扩展到 9 张卡片，Reddit Ask 和 Booking.com AI 聊天已单独真机验证。
+**安全保障守住了。** 每一次 `handoff_to_user_required` 运行都停在了不可逆 CTA 之前——下单停在 `立即支付`——零次确认点击。冻结的 benchmark 目录中，7 张卡片的 **28/28 个能力**都到达了预期终态（§8.2.1）；当前 manifest 目录已扩展到 10 张卡片，Reddit Ask、Booking.com AI 聊天与 Microsoft Copilot 已单独真机验证。
 
 > 上述数字为 2026-06-02 的 n=3 复跑结果；完整方法、有效性威胁与冻结数据见[技术报告](report/RelayAgent-TechReport.md)及 `report/benchmark-data-n3.md`。
+
+### 三个基准上委派 vs GUI 智能体（论文评估）
+
+整机评估（论文 preprint，arXiv 即将发布）把 RelayAgent（**RA** = 带 GUI 兜底的 NL flow）与纯 GUI 基线在三个真机基准上正面对比——**AndroidDaily**、**MobileWorld**、**DeleBench**（我们自建的 30 条长链路日常任务）——每条任务由两套系统在相同设备状态下先后执行，任务间冷启动复位：
+
+<p align="center">
+  <img src="assets/paper/fig1_completion_bars.png" alt="成功率：RA 46/49/83%，GUI 基线 31/34/77%（AndroidDaily / MobileWorld / DeleBench）" width="640">
+</p>
+
+- **三个基准上成功率全面更高** —— AndroidDaily / MobileWorld / DeleBench 上分别 46% / 49% / 83%，GUI 基线为 31% / 34% / 77%。内置助手覆盖到的任务由助手可靠执行，替掉脆弱的 GUI 动作序列；覆盖不到的由 GUI 兜底保底。
+- **端到端快 1.4–2×**（平均 1.8×，取双方都无兜底成功的任务）；需要兜底时，委派尝试平均只多花 ~4 秒（总时长的 7%）——因为能力边界建模得足够准，不做无谓的委派尝试。
+- **LLM token 少 7–10×**（平均 8.8×，无兜底时）；走兜底时平均只多 ~10K token（5%）：
+
+<p align="center">
+  <img src="assets/paper/fig3_paired_tokens.png" alt="逐任务 token 消耗，RA vs 基线，按任务配对" width="820">
+  <br>
+  <em>逐任务 token 配对图：蓝=RelayAgent（RA），橙=GUI 基线。阴影区是经 GUI 兜底完成的任务——助手覆盖到的地方委派大赢，覆盖不到的地方也几乎不多花钱。</em>
+</p>
 
 ## 仓库结构
 
@@ -106,11 +180,14 @@ OS 级智能体
 RelayAgent/
 ├── SPEC.md                    # manifest 规范 (v0.1)
 ├── SPEC-OPEN-QUESTIONS.md     # 仍在讨论的设计问题
-├── spec/schema.json           # SPEC 的 JSON Schema 镜像（规范性校验器）
+├── spec/                      # schema.json（manifest）+ profile.schema.json（用户记忆）
 ├── manifests/                 # 每个 App 一张 YAML 卡片；10 张安卓卡片
-├── agents/                    # 中继适配器、planner、能力路由、卡片加载器、adb 辅助
-├── scripts/                   # run_plan.py（NL flow）、benchmark runner、metrics
-├── docs/                      # 设计文档 —— NL flow、manifest 约定、prompt 模板、能力分类法
+├── agents/                    # 设备后端、LLM client、运行时循环、路由、中继适配器、NL flow
+├── scripts/                   # run_plan.py（NL flow）、benchmark runner、校验、metrics
+├── android/                   # 端上 App：完整 NL flow 跑在手机里，无电脑无 adb
+├── benchmark/                 # A/B 基准的任务集
+├── tests/                     # 无设备单元测试（CI）
+├── docs/                      # 设计文档——见下方「文档」
 ├── report/                    # 技术报告 + 冻结的基准数据
 ├── CONTRIBUTING.md
 └── LICENSE                    # Apache-2.0
@@ -125,13 +202,14 @@ RelayAgent/
 ```bash
 # 1. 建 venv（靠 `uv run` 跑源码，不安装本项目）
 uv venv --python 3.12
-uv sync --no-install-project
+uv sync --no-install-project --extra dev
+#   可选 extras：--extra stream（scrcpy 流式抓帧）、--extra mw（MobileWorld A/B 基线）
 
 # 2. 填好 .env（LLM_BASE_URL / LLM_API_KEY / LLM_MODEL），然后跑一个目标
 uv run python -m agents.runtime.native_runner com.aliyun.tongyi "帮我点三杯蜜雪冰城蜜桃四季春"
 ```
 
-`agents.runtime.native_runner` 会 load `.env`、激活 AdbKeyboard 输入法、通过 `agents/runtime/_adb.py` 冷启动目标 App（force-stop + monkey LAUNCHER）、设置 `RELAY_SKIP_OPEN_APP=1` 让 planner 跳过自己的 `open_app` 步、在进程内直 adb 跑循环，并把额外 flag（如 `--max-step 40`）原样转发给 agent。不走 `.env` 时可用 `--model` / `--base-url` / `--api-key` 覆盖 LLM 配置。
+`agents.runtime.native_runner` 会 load `.env`、激活 AdbKeyboard 输入法、经 `agents/device/` 后端抽象层冷启动目标 App（force-stop + monkey LAUNCHER）、设置 `RELAY_SKIP_OPEN_APP=1` 让 planner 跳过自己的 `open_app` 步、在进程内直 adb 跑循环，并把额外 flag（如 `--max-step 40`）原样转发给 agent。不走 `.env` 时可用 `--model` / `--base-url` / `--api-key` 覆盖 LLM 配置。
 
 `--model` 对各家通用——指向任意 OpenAI 兼容的 VLM 即可（`qwen/qwen3-vl-235b-a22b`、`anthropic/claude-sonnet-4-5`、`google/gemini-3`……）。每个任务里 VLM 用得很省（这正是 §8 成本数字的来源）：
 
@@ -144,6 +222,7 @@ uv run python -m agents.runtime.native_runner com.aliyun.tongyi "帮我点三杯
 可选环境变量（完整列表见 `.env.example`）：
 
 - `RELAY_MANIFESTS=/path/to/manifests` —— 覆盖默认的 `./manifests/`。
+- `RELAY_CAPTURE_BACKEND=scrcpy` —— 流式抓帧（~1.5 秒 → ~8 ms/帧；需 `--extra stream` + 主机装 scrcpy），并启用帧到达稳定检测；任何失败永久回退 `screencap`。
 - `RELAY_PRECHECK=0 RELAY_SCRAPE=0` —— 关闭 §7 两项优化（复现基准 baseline）。
 - `RELAY_TIMING=1` —— 写出每次运行的 `wall_clock.json`。
 - `RELAY_FRESH_CONV=0` —— 跨 run 保留上一轮对话（默认每次开新对话）。
@@ -153,7 +232,7 @@ uv run python -m agents.runtime.native_runner com.aliyun.tongyi "帮我点三杯
 
 ### 自然语言入口
 
-推荐用 `scripts/run_plan.py` 作为自然语言入口。它会合成 flow，对每个 app step 用共享的 matrix 三段式路由解析 app + capability，预览后执行；加 `--yes` 可跳过确认。
+推荐用 `scripts/run_plan.py` 作为自然语言入口。它会合成 flow，对每个 app step 用共享的 matrix 三段式路由解析 app + capability，预览后执行（加 `--yes` 跳过确认）——执行期失败恢复与覆盖兜底默认开启（`RELAY_RECOVERY=0` / `--no-general-fallback` 关闭，见 [nl_flow §6.1 / §10](docs/nl_flow.zh.md)），存在 profile 时用户记忆自动注入（`RELAY_PROFILE=0` 关闭）。
 
 ```bash
 uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"
@@ -161,21 +240,33 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 uv run python scripts/run_plan.py --dry-run "把这段材料整理成一份中文总结文档"
 ```
 
-设计文档：
-
-- [NL 跨 App Flow 架构](docs/nl_flow.zh.md) —— 合成、三段式路由、校验、执行、leg judge、handoff（pipeline 与 CLI 用法见[自动跨 App 规划器](docs/cross_app_planner.zh.md)）。
-- [Manifest 约定](docs/manifest_conventions.zh.md) —— 语言约定、`prompt_template`、`x_capture_full_reply`、卡片 `swipe` 方向、capability 关键字段（[prompt 模板细节](docs/prompt_template.zh.md)）。
-
 ## 运行测试
 
 ```bash
-uv sync --no-install-project
-uv run python -m unittest discover -s tests -v       # 无设备；planner/runner 单元测试，不需要 adb
+uv sync --no-install-project --extra dev
+uv run python -m unittest discover -s tests -v            # 无设备；planner/runner 单元测试，不需要 adb
+uv run python scripts/validate/validate_manifests.py      # manifest schema + prompt_template 规则（CI gate）
 ```
 
 真机运行（不是单元测试）直接走入口脚本——见[运行](#运行真机多-vlm)：单 App 用 `python -m agents.runtime.native_runner <pkg> "<goal>"`，NL flow 用 `scripts/run_plan.py --yes`，A/B 基准用 `scripts/run_benchmark_test.py`。需要连好的安卓设备、装好目标 App，`com.android.adbkeyboard/.AdbIME` 可用（runner 自己启用/复位输入法）。
 
 把 `.env.example` 复制成 `.env` 并填好（LLM endpoint 必填）。`test-results/` 和 `traj_logs/` 已 gitignore —— 不要提交含用户数据的轨迹。
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [NL 跨 App Flow](docs/nl_flow.zh.md) | 合成、三段式路由、校验、leg judge、失败恢复、覆盖兜底、路由固化 |
+| [跨 App 规划器](docs/cross_app_planner.zh.md) | planner pipeline、CLI 用法、plan 缓存、真机示例 |
+| [Manifest 约定](docs/manifest_conventions.zh.md) | 语言约定、`prompt_template`、`x_capture_full_reply`、卡片 `swipe` 方向、capability 关键字段 |
+| [Prompt 模板](docs/prompt_template.zh.md) | 模板化 submit prompt：槽位、可选段、加载期校验 |
+| [能力分类法](docs/capability_taxonomy.zh.md) | capability id 背后的受控词表 |
+| [设备后端](docs/device_backends.zh.md) | 多平台后端抽象层（Android adb、iOS/HarmonyOS 接缝） |
+| [轨迹日志](docs/trajectory_logging.zh.md) | 日志目录形态、写入方、轮转、消费方 |
+| [端侧环境](docs/device_setup.zh.md) | 真机准备 + 各 benchmark 的 App 需求 |
+| [模拟器测试](docs/emulator_testing.zh.md) | AVD 搭建、安装步骤、远程观察 |
+| [路线图](docs/roadmap.zh.md) | 产品化五阶段 P1–P5 与验收指标（P1–P3 已落地） |
+| [端上 App](android/README.md) | Android App：架构、主机↔端侧接缝、界面 |
 
 ## MVP 范围（v0.1）
 
@@ -212,7 +303,7 @@ uv run python -m unittest discover -s tests -v       # 无设备；planner/runne
 ## 参与进来
 
 - **读设计：** 先看[技术报告](report/RelayAgent-TechReport.md)，再看 [SPEC.md](SPEC.md) 和 [SPEC-OPEN-QUESTIONS.md](SPEC-OPEN-QUESTIONS.md)。
-- **接下来往哪走：** [产品化路线图](docs/roadmap.zh.md)——五个阶段（执行期失败恢复、流式抓帧、用户记忆、卡片 CI 与半自动生成、多平台），每阶段带验收指标，适合从这里认领工作。
+- **接下来往哪走：** [产品化路线图](docs/roadmap.zh.md)——五个阶段，每阶段带验收指标。**P1（失败恢复）、P2（流式抓帧）、P3（用户记忆）已落地**；P4（卡片 CI 与半自动生成）、P5（多平台 / OEM 集成）开放认领。
 - **提交卡片：** 见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 - **行为准则：** 见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - **讨论：** GitHub Issues。
@@ -220,6 +311,7 @@ uv run python -m unittest discover -s tests -v       # 无设备；planner/runne
 ## 致谢
 
 - [**MobiAgent**](https://github.com/IPADS-SAI/MobiAgent)（SJTU IPADS）—— 我们对标定位的纯 GUI 移动智能体路线，也是我们[技术报告](report/RelayAgent-TechReport.md)的结构范本。
+- [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld)（Tongyi MAI）—— 我们三个评估基准之一，也是 A/B 对比中 `general_e2e` 纯 GUI 基线的来源。
 
 ## 许可证
 
