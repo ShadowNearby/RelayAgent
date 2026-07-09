@@ -1,14 +1,18 @@
-# Auto cross-app planner (`run_plan.py` / `FlowPlanner`)
+<h1 align="center">Auto Cross-App Planner</h1>
 
-> 中文版：[`cross_app_planner.zh.md`](cross_app_planner.zh.md)
+<p align="center">
+  <b>One NL sentence → LLM auto-synthesizes a cross-app plan → validate → persist → preview & confirm → run on a real device</b>
+</p>
 
-> One NL sentence → LLM **auto-synthesizes** a cross-app plan → validate → persist → preview & confirm → run on a real device.
->
+<p align="center">
+  <b>English</b> | <a href="cross_app_planner.zh.md">中文</a>
+</p>
+
 > How it relates to the existing entries: `run_plan.py` is now the NL entry. Direct app-pinned runs use `python -m agents.runtime.native_runner`.
 
 ---
 
-## 1. What it solves
+## 🎯 1. What it solves
 
 The former single-app NL router could only route a sentence to **one** app + capability; it could not decompose a cross-app goal into a multi-app step sequence. Given an instruction that spans several apps, it fell back to a single app, or picked the wrong one.
 
@@ -16,7 +20,7 @@ The former single-app NL router could only route a sentence to **one** app + cap
 
 ---
 
-## 2. Pipeline
+## 🔁 2. Pipeline
 
 ```
 one sentence
@@ -50,7 +54,7 @@ Files involved:
 
 ---
 
-## 3. Generated plan schema
+## 📄 3. Generated plan schema
 
 The output is a flow plan fed straight to `FlowRunner`. There is **no `inputs` block** — the sentence is concrete, so literal values are baked directly into each step's `prompt`; cross-leg data flow uses `extract` / `bind` / `{var}`.
 
@@ -95,7 +99,7 @@ Templating: `{var}` and `{var.field}` resolve against the blackboard (`FlowRunne
 
 ---
 
-## 4. Planner rules (baked into the system prompt)
+## 📏 4. Planner rules (baked into the system prompt)
 
 Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 
@@ -111,7 +115,7 @@ Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 
 ---
 
-## 5. Local validation
+## ✅ 5. Local validation
 
 `FlowPlanner._validate()` blocks bad plans before execution (returns an error list; empty = valid):
 
@@ -126,7 +130,7 @@ Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 
 ---
 
-## 6. Handoff round-trip: phase A first, then B
+## 🤝 6. Handoff round-trip: phase A first, then B
 
 "after `handoff_to_user`, be able to switch back to the agent" has two granularities; this version ships A and leaves a seam for B:
 
@@ -137,7 +141,7 @@ Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 
 ---
 
-## 7. Cache
+## 🗃️ 7. Cache
 
 - **Persist**: a validated plan is written to `manifests/_generated/<slug>_<hash8>.yaml`, carrying `source_request` (the normalized original sentence).
 - **Reuse**: before planning, scan `_generated/`; if a plan's **normalized `source_request` exactly matches**, reuse it directly (still goes through preview + confirm, no LLM call). Skipped by `--no-cache`.
@@ -145,7 +149,7 @@ Hard constraints `FlowPlanner._PLANNER_SYSTEM` gives the model:
 
 ---
 
-## 8. Usage
+## 🚀 8. Usage
 
 ```bash
 # basic: synthesize → preview → ask y/N → execute
@@ -190,7 +194,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 ---
 
-## 9. Known limitations / TODO
+## 🚧 9. Known limitations / TODO
 
 | Item | Status | Location |
 | --- | --- | --- |
@@ -202,7 +206,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 ---
 
-## 10. A real-device run (worked example)
+## 📱 10. A real-device run (worked example)
 
 Input: `"在上海找三家评价好的小众书店，挑一家打车过去"` (Pixel 9, `--yes`, stdin `</dev/null`).
 
@@ -224,7 +228,7 @@ The whole cross-app task ≈ **2.5 minutes**, exit 0 throughout with no errors.
 
 ---
 
-## 11. Change notes (introduced here)
+## 📝 11. Change notes (introduced here)
 
 This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
 

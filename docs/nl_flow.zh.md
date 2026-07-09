@@ -1,15 +1,20 @@
-# NL 跨 App Flow 架构
+<h1 align="center">NL 跨 App Flow 架构</h1>
 
-> English: [`nl_flow.md`](nl_flow.md)
+<p align="center">
+  <b>一句自然语言 → 自动合成的多 App 协作计划 → 执行——架构深挖</b>
+</p>
 
-> 一句自然语言 → 自动合成的多 App 协作计划 → 执行。本文是**架构深挖**（合成 / 三段式路由 / 校验 / 执行 / leg judge / handoff / 路由固化）。
+<p align="center">
+  <a href="nl_flow.md">English</a> | <b>中文</b>
+</p>
+
 > pipeline、CLI 用法、缓存、真机实跑示例见 [`cross_app_planner.zh.md`](cross_app_planner.zh.md)。
 >
 > 涉及代码：`agents/flow/flow_planner.py` / `agents/flow/flow_runner.py` / `agents/routing/capability_matrix_router.py` / `agents/flow/leg_judge.py` / `agents/routing/route_overlay.py` / `scripts/run_plan.py`。
 
 ---
 
-## 1. 总览
+## 🧭 1. 总览
 
 ```
 NL request
@@ -32,7 +37,7 @@ NL request
 - **每个 app step 是全新子进程**，不复用一个长生命周期 RelayAgent 跨 App：plan cursor / chat history 都是 single-card 作用域的。
 - **router 在子进程里被旁路**：`RELAY_FORCE_CAPABILITY` + `RELAY_INVOCATION_TEXT` 让子进程跳过路由 LLM 调用，直接进 plan building。
 
-## 2. Plan 合成（`FlowPlanner.plan`，`_PLANNER_SYSTEM`）
+## 📝 2. Plan 合成（`FlowPlanner.plan`，`_PLANNER_SYSTEM`）
 
 输入：`build_catalog()` 产出的全 App catalog（含每个 capability 的 id / description / example_prompts / executable / `handoff_to_user_required` / `x_skip_wait_for_reply`） + 用户 NL。
 
@@ -65,7 +70,7 @@ NL request
 7. **`foundation_llm` 是通用信息/知识兜底**：信息 / 问答 / 总结 / 起草 / 查询类任务，若无专属 capability 覆盖（解释 GitHub repo、总结 arXiv 论文、通用知识），路由到 `foundation_llm` capability，而不是判 unsatisfiable。
 8. 仅当任务**要求一个现有 capability 给不了的具体设备/App 动作**（往 catalog 没有的聊天平台发消息、拍照）**且 `foundation_llm` 顶替不了**时，才返回 `{"unsatisfiable": true, "reason": "..."}`。
 
-## 3. 三段式路由（`capability_matrix_router.route`）
+## 🚦 3. 三段式路由（`capability_matrix_router.route`）
 
 单 App NL 路由策略的可复用版。`docs/app_capability_matrix.csv` 是 **cap × app 归属的 source of truth**；catalog 仅作 availability 校验（剔除 matrix 里指向已不存在 (app,cap) 的 stale 项）。
 
@@ -82,7 +87,7 @@ NL request
 
 > **locale policy**：goal 句子默认用所选 App 第一 locale 语言；用户显式要别的语言才换；专名/地址等保留原文。三段都带这条。
 
-## 4. 路由后填 prompt（`_route_one_step`）
+## 🧩 4. 路由后填 prompt（`_route_one_step`）
 
 入口先算并盖上 `step["x_route_key"]`（归一化 prompt 的 sha1，供 §9 固化回路；复用已持久化的 key 避免 cache 重跑漂移），并把 `route_key`+`overlay` 传给 router。只有路由完知道了 capability，才知道用哪个模板，所以填 prompt 在这步：
 
@@ -91,7 +96,7 @@ NL request
 
 完整 prompt 模板机制见 [`prompt_template.zh.md`](prompt_template.zh.md)。
 
-## 5. 本地校验 + LLM repair（`_validate` → `_repair`）
+## ✅ 5. 本地校验 + LLM repair（`_validate` → `_repair`）
 
 合成完（含路由）跑本地校验。校验内容：
 
@@ -106,7 +111,7 @@ NL request
 
 路由阶段还会清理：`_drop_unused_no_reply_binds`（no-reply step 上下游没人引用的装饰性 `bind`/`extract` 去掉）、`_refresh_apps_required`（按实际路由结果重建 `apps_required`）。
 
-## 6. 执行（`FlowRunner.run`）
+## ⚙️ 6. 执行（`FlowRunner.run`）
 
 按 step 顺序跑，blackboard `self.bb` 起空、随 step bind 增长。`render()` 做 `{var}`/`{var.field}` 替换（缺键 → `''`）。
 
@@ -135,7 +140,7 @@ app leg 失败不再直接杀掉整条 flow：`FlowRunner` 先给失败定类，
 
 **Extract（`_extract`）：** 对 `.env` 同端点跑文本-only chat completion，把上一 leg 回复解析成 fenced JSON；`bind_to_array_key` 从结果对象里拎出某 key。
 
-## 7. Leg Judge（`leg_judge.py`，语义结果判定）
+## ⚖️ 7. Leg Judge（`leg_judge.py`，语义结果判定）
 
 **leg** = 一个 native-runner 子运行，钉死一 app + 一 capability。`flow_runner` 的硬信号（崩溃 / 空回复 / 非终态）只抓**显性**失败，区分不了「自信地答错」和「答对」。
 
@@ -146,12 +151,12 @@ app leg 失败不再直接杀掉整条 flow：`FlowRunner` 先给失败定类，
 - **best-effort**：任何错误（无帧 / LLM 挂 / 无法解析）返回 `UNKNOWN`(`judged=False`)。**caller 绝不能让 judge 失败中断 flow**——按 CLAUDE.md fallback policy surface 后继续。`LegVerdict.score`（1.0/0.0/-1.0）落 `leg_verdict.json` 存到 leg 目录旁。`RELAY_LEG_JUDGE=0` 关。
 - **折回固化表**：verdict 写盘后，`_judge_leg` 末尾调 `overlay.record(step["x_route_key"], ..., verdict.status)`，把这条 verdict 折进路由固化回路（§9）。这是固化表的**唯一写入点**，复用现有 verdict，不增加任何 LLM 调用。
 
-## 8. Phase-A / Phase-B Handoff
+## 🤝 8. Phase-A / Phase-B Handoff
 
 - **Phase A（现状）**：handoff 在 flow 粒度——handoff leg 后接 flow-level `ask_user`，再起一个**全新** leg 消费答案。会丢 in-app 会话状态，所以后续 leg 必须重述完整意图。
 - **Phase B（TODO，`flow_runner` 内注释）**：same-session handoff round-trip。leg 带 `resume:true` 时不用 EOF 关 stdin，保活子进程并接一条 flow⇄agent 通道（fifo/文件），让 in-app agent 的 handoff ask_user 阻塞等答案、在**同一会话**里 resume `predict()`，保住 in-app 状态。
 
-## 9. 路由固化（route overlay，trace-guided solidification）
+## 📌 9. 路由固化（route overlay，trace-guided solidification）
 
 把 §7 的 leg verdict 从"只写日志"变成路由优化器的输入：被反复确认 `success` 的 `(意图 → app/capability)` 决策**固化成表查**，下次同意图零 LLM 命中；反复 `failure` 的自动失效、回落三段式。代码 `agents/routing/route_overlay.py`，存储 `traj_logs/route_overlay.json`（git-ignored 学习产物，**非权威**；matrix CSV 仍是 source of truth，提升回 matrix 是独立人工 review 步骤）。
 
@@ -194,7 +199,7 @@ route(route_key, overlay):                  _judge_leg 末尾:
 
 **开关 / 阈值**：`RELAY_ROUTE_OVERLAY`(默认1) / `RELAY_ROUTE_OVERLAY_PATH` / `RELAY_ROUTE_KEY_MODE`(默认 `b`) / `RELAY_ROUTE_SOLIDIFY_HITS`(3) / `RELAY_ROUTE_SOLIDIFY_RATE`(0.8) / `RELAY_ROUTE_MAX_FAILS`(2) / `RELAY_PROMOTE_MIN_HITS`(5) / `RELAY_PROMOTE_MIN_RATE`(0.9)。
 
-## 10. MobileWorld 兜底（capability 不覆盖时）
+## 🛟 10. MobileWorld 兜底（capability 不覆盖时）
 
 RA 的路由建立在**人工维护的 manifest + capability matrix**上。当一条 leg（或整条请求）**没有任何 app/capability 覆盖**时，与其放弃，不如交给 **MobileWorld 的 `general_e2e`**——一个**无需 manifest 的通用端到端 UI agent**，能从当前屏自行开 app、导航完成任意目标（fork 已 pin 在 `pyproject.toml` 的 `mobile-world` 依赖里，装进 `.venv/.../mobile_world/`）。
 

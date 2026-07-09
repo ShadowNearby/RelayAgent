@@ -1,8 +1,10 @@
-# Contributing
+<h1 align="center">Contributing</h1>
 
-This project lives or dies on **card quality**, not card count.
+<p align="center">
+  <b>This project lives or dies on card quality, not card count</b>
+</p>
 
-## What we accept
+## ✅ What we accept
 
 - **New cards** for apps with a real, user-visible embedded agent.
 - **Card updates** — `provenance` refresh, new capabilities, fixed selectors after an app update.
@@ -10,7 +12,7 @@ This project lives or dies on **card quality**, not card count.
 
 We do **not** accept cards for apps without a genuine embedded agent (a search box that calls an LLM is not enough — SPEC §5), cards built from reverse-engineered private endpoints, or bulk-generated cards not verified on a real device.
 
-## Submitting a card
+## 📮 Submitting a card
 
 1. Read [SPEC.md](SPEC.md) — especially §8 (`executable`, `handoff_to_user_required`); getting these wrong has user-visible cost.
 2. Copy a reference card from `manifests/` as a template.
@@ -21,7 +23,7 @@ We do **not** accept cards for apps without a genuine embedded agent (a search b
    ```
 5. Open a PR with the card at `manifests/<reverse-dns-app-id>.yaml` and a note: device + app version used, anything fragile or that didn't work.
 
-## Review checklist
+## 🔍 Review checklist
 
 - [ ] `validate_manifests.py` passes; `spec_version` matches current SPEC; no unknown top-level keys.
 - [ ] Every capability has ≥2 real example prompts (not paraphrased from the description).
@@ -30,10 +32,10 @@ We do **not** accept cards for apps without a genuine embedded agent (a search b
 - [ ] Selectors prefer `accessibility_id` > `resource_id` > `text` > `text_contains`; fall back to `screen_fraction: { x_ratio, y_ratio }` (in `[0,1]`, at the affordance's visible center) only when nothing else is exposed (SPEC §6.1).
 - [ ] `provenance.last_verified` within 30 days; `known_issues` calls out anything that bit you.
 
-## Updating a stale card
+## 🔄 Updating a stale card
 
 Bump `card_version` per SPEC §11 (patch for prose/provenance, minor for new capabilities or re-pathed selectors, major for removed/renamed ids), and refresh the **entire** `provenance` block. If selectors changed for a UI redesign, leave the old `tap_sequence` in the PR description.
 
-## Legal
+## ⚖️ Legal
 
 Contributions are licensed under Apache-2.0 ([LICENSE](LICENSE)); by submitting you confirm you have the right to contribute the content. Do not submit anything obtained by violating an app's terms of service (decompilation, scraping private APIs). Cards describe what a user can do by hand — that's the line.

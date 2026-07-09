@@ -1,6 +1,12 @@
-# 设备后端 —— 多平台抽象层
+<h1 align="center">设备后端</h1>
 
-English: [`device_backends.md`](device_backends.md)
+<p align="center">
+  <b>所有设备 I/O 收口到一个缝合层 agents/device/：Android（adb）已实现，iOS / HarmonyOS 为骨架</b>
+</p>
+
+<p align="center">
+  <a href="device_backends.md">English</a> | <b>中文</b>
+</p>
 
 所有设备 I/O 收口到一个缝合层：**`agents/device/`**。上层（runner 循环、
 RelayAgent、scripts）不再直接拼 adb/WDA/hdc 命令。
@@ -24,7 +30,7 @@ from agents.device import get_backend
 backend = get_backend()
 ```
 
-## 平台与设备选择
+## 🎛️ 平台与设备选择
 
 | 环境变量 | 默认 | 含义 |
 | --- | --- | --- |
@@ -33,7 +39,7 @@ backend = get_backend()
 | `RELAY_VENDOR_PROFILE` | 未设 | JSON overlay 路径，扩充厂商权限控制器包名 / Allow 标签（见 `vendor_profiles.py`）。 |
 | `RELAY_CROP_TOP` / `RELAY_CROP_BOTTOM` | `0.08` / `0.18` | 状态栏 / 输入栏裁剪比例，reply scrape 与截图区域 hash 共用。 |
 
-## 归一化 a11y 树：`UINode`
+## 🌳 归一化 a11y 树：`UINode`
 
 `backend.dump_ui_tree()` 返回文档序的扁平 `list[UINode]` —— 消费者
 （grounding、文本 hash、回复 scrape、权限弹窗、`a11y_agent.serialize_tree`）
@@ -51,7 +57,7 @@ backend = get_backend()
 `UINode.center` 是 tap 点；bounds 缺失或零面积时返回 `None`
 （消费者以此作为可见性过滤）。
 
-## 能力映射
+## 🗺️ 能力映射
 
 | DeviceBackend | Android (adb) | iOS (WebDriverAgent) | HarmonyOS NEXT (hdc) |
 | --- | --- | --- | --- |
@@ -69,7 +75,7 @@ backend = get_backend()
 | `start_recording` | `screenrecord` 分段 + pull | mjpeg 端口；真机文件录屏是 **gap** | `uitest record`（待验证） |
 | `dismiss_permission_popup` | 厂商包名 + Allow 标签 | springboard alerts：`/alert/text` + `/alert/accept` | 弹窗在 dumpLayout 内，同标签策略 |
 
-## iOS 前置（实装时）
+## 🍎 iOS 前置（实装时）
 
 Mac + Xcode（用开发者账号构建并签名 WebDriverAgent）+ 打开开发者模式的
 iPhone。WDA 以 XCUITest 形态跑在手机上，后端连它的 HTTP 端点（USB 转发
@@ -79,7 +85,7 @@ iPhone。WDA 以 XCUITest 形态跑在手机上，后端连它的 HTTP 端点（
 而非 `resource_id`；声明 ios 的卡若 selector 只有 Android 专属字段，
 `scripts/validate/validate_manifests.py` 会 WARN）。
 
-## 多设备
+## 🔀 多设备
 
 隔离边界是每条 leg/task 的子进程：驱动方把 `RELAY_ANDROID_SERIAL` 写进
 子进程 env（`flow_runner`/`run_benchmark_test` 本来就这么传 per-run 配

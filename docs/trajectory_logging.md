@@ -1,15 +1,16 @@
-# Trajectory logging convention
+<h1 align="center">Trajectory Logging Convention</h1>
 
-> 中文: [`trajectory_logging.zh.md`](trajectory_logging.zh.md)
+<p align="center">
+  <b>Where a run's trajectory lands, what the directory looks like, and who reads it — one env var, RELAY_TRAJ_DIR</b>
+</p>
 
-> Where a run's trajectory lands, what the directory looks like, and who reads
-> it. The core is **one env var, `RELAY_TRAJ_DIR`**, that every writer honors;
-> the NL flow / benchmark pin it to each leg's own dir, so there is no global
-> scratch, no `user_task/` nesting, and no copytree.
+<p align="center">
+  <b>English</b> | <a href="trajectory_logging.zh.md">中文</a>
+</p>
 
 ---
 
-## 1. One line
+## 🎯 1. One line
 
 **`RELAY_TRAJ_DIR` decides this run's trajectory dir** (`traj.json` + `steps/` +
 `agent_reply.json` all land there).
@@ -20,7 +21,7 @@
   global `user_task`, no copytree**. The NL flow pins one per leg:
   `traj_logs/<ts>_plan_<apps>/NN_<id>/`.
 
-## 2. Three writers read the same env
+## ✍️ 2. Three writers read the same env
 
 | Writer | Writes | How it picks the dir |
 | --- | --- | --- |
@@ -32,7 +33,7 @@
 explicit envs (`RELAY_WALL_OUT` / `RELAY_SUMMARY_OUT` / `RELAY_REPLY_OUT`) —
 callers usually point those at the same leg dir too.
 
-## 3. Rotation: standalone only
+## 🔄 3. Rotation: standalone only
 
 `native_runner._rotate_traj_dir`:
 
@@ -43,7 +44,7 @@ callers usually point those at the same leg dir too.
 - **Set** (flow/benchmark leg): each leg dir is already unique, so **skip the
   backup rename** — just mkdir + seed.
 
-## 4. Layout of one NL-flow leg
+## 📁 4. Layout of one NL-flow leg
 
 `flow_runner` sets `RELAY_TRAJ_DIR=<flow_root>/NN_<id>` for the subprocess, so:
 
@@ -67,7 +68,7 @@ Recovery attempts (nl_flow §6.1) land in sibling leg dirs suffixed `_retryN` /
 (per-step outcomes + recovery attempts + blackboard keys), written on success
 and on mid-flow aborts alike.
 
-## 5. `flow_llm_calls` — the flow process's LLM calls land in the leg too
+## 📞 5. `flow_llm_calls` — the flow process's LLM calls land in the leg too
 
 The in-app agent's LLM calls are written by `relay_agent` to `traj.json`'s
 `["0"]["llm_calls"]`. But the **flow process** itself also calls the LLM:
@@ -90,7 +91,7 @@ in-app `["0"]["llm_calls"]`). `purpose` is stamped at the call site
 > in `run_plan.py` / `FlowPlanner`) is a separate stage; its LLM calls do **not**
 > go through `FlowRunner._RecordingLLM` and are not in `flow_llm_calls` today.
 
-## 6. Consumers
+## 👥 6. Consumers
 
 - **`scripts/run_plan.py` / `FlowRunner`**: the NL-flow entry point; one flat dir
   per leg per the convention above.
@@ -107,7 +108,7 @@ in-app `["0"]["llm_calls"]`). `purpose` is stamped at the call site
 - **standalone `python -m agents.runtime.native_runner <pkg> "<goal>"`**: leaves the env
   unset, lands in the default `traj_logs/user_task/`, with backup rotation.
 
-## 7. Related env cheat-sheet
+## 🎛️ 7. Related env cheat-sheet
 
 | env | Effect | Default |
 | --- | --- | --- |

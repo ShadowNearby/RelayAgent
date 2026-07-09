@@ -1,10 +1,16 @@
-# Productization Roadmap — from "measurable in a paper" to "usable every day"
+<h1 align="center">Productization Roadmap</h1>
 
-> 中文版: [roadmap.zh.md](roadmap.zh.md)
->
+<p align="center">
+  <b>From "measurable in a paper" to "usable every day" — five phases ordered by return on effort</b>
+</p>
+
+<p align="center">
+  <b>English</b> | <a href="roadmap.zh.md">中文</a>
+</p>
+
 > An engineering roadmap for contributors: five phases ordered by return on effort, each anchored to existing seams in the codebase and gated by the repo's own A/B evaluation infrastructure. Discussion and claiming work happens in GitHub Issues.
 
-## Baseline (why this ordering)
+## 📊 Baseline (why this ordering)
 
 Internal phase-B real-device A/B runs (186 tasks, preliminary, mixed manual judging) put end-to-end success at **RelayBench ~67% / AndroidDaily ~51% / MobileWorld ~42%**, with median task wall-clock of 75–128 s. Conclusions:
 
@@ -22,12 +28,11 @@ Internal phase-B real-device A/B runs (186 tasks, preliminary, mixed manual judg
 
 ---
 
-## P1 Runtime failure-recovery loop (~3 weeks)
+## ♻️ P1 Runtime failure-recovery loop (~3 weeks)
 
 > **Status (2026-07-08)**: R0–R3 shipped (`agents/flow/leg_recovery.py`, nl_flow §6.1);
-> mini-eval in [`report/p1-recovery-mini-eval.md`](../report/p1-recovery-mini-eval.md) —
-> the full four-tier ladder exercised end-to-end on device, flipping one historical
-> failure. R4 telemetry shipped: `recovery.json` carries per-attempt token cost;
+> a mini-eval exercised the full four-tier ladder end-to-end on device, flipping one
+> historical failure. R4 telemetry shipped: `recovery.json` carries per-attempt token cost;
 > `run_benchmark_test.py --recovery` lands a per-row `recovery` block and
 > `summary.json`/`summary.md` report first-try vs final success, per-tier hit rate
 > and recovery-token inflation (pinned by `tests/test_benchmark_recovery.py`).
@@ -72,7 +77,7 @@ Add `exclude: [(app_id, capability_id)]` to the three-stage router (enforced in 
 
 ---
 
-## P2 Streaming capture + latency engineering (~2 weeks, parallel with P1 — P1 lives in the flow layer, P2 in the device layer)
+## ⚡ P2 Streaming capture + latency engineering (~2 weeks, parallel with P1 — P1 lives in the flow layer, P2 in the device layer)
 
 > **Status (2026-07-08)**: S1 shipped (`agents/device/android_stream.py`,
 > `RELAY_CAPTURE_BACKEND=scrcpy`; default screencap unchanged; PyAV via the
@@ -106,7 +111,7 @@ The key risk is **behavioral drift**: decoded frames differ from screencap frame
 
 ---
 
-## P3 User memory layer (~2 weeks)
+## 🧠 P3 User memory layer (~2 weeks)
 
 > **Status (2026-07-08)**: M1–M4 shipped (`agents/flow/user_profile.py`, schema
 > `spec/profile.schema.json`, unit tests `tests/test_user_profile.py`).
@@ -136,7 +141,7 @@ The key risk is **behavioral drift**: decoded frames differ from screencap frame
 
 ---
 
-## P4 Card regression CI + semi-automated authoring
+## 🃏 P4 Card regression CI + semi-automated authoring
 
 - **C1 Card-health CI** (1 week, first — it protects the existing assets): nightly, per card: install check (reuse `check_device_env`) → walk the entry path and assert reachability (`native_runner --max-step`, no prompt sent, zero tokens); weekly full pass: one example_prompt per capability, assert a reply is captured. Output: a health table; two consecutive failing nights auto-file an issue (the `card_issue` template + `gh` CLI). Starting hardware = one real phone + the relay-test AVD (international apps).
 - **C2 Card recorder** (3 weeks): `scripts/card_recorder.py` — a human walks the path into the in-app agent once on a real device; the recorder listens to the a11y event stream, translates the tap sequence into draft entry-path selectors, sends probe prompts to classify capabilities, and emits a YAML draft with a `provenance` skeleton → human revision → PR. Cuts card authoring from a day to an hour — the lever that makes community contribution scale.
@@ -144,7 +149,7 @@ The key risk is **behavioral drift**: decoded frames differ from screencap frame
 
 ---
 
-## P5 Platforms / OEM (ongoing, milestone-based)
+## 🌍 P5 Platforms / OEM (ongoing, milestone-based)
 
 - **H1**: bring the HarmonyOS app (`harmony/`) to feature parity with `android/`; hdc backend from skeleton to usable;
 - **H2**: iOS WDA backend running one international card end-to-end (Booking / Copilot have iOS builds; the `app_ids` multi-platform mapping already exists);
@@ -152,7 +157,7 @@ The key risk is **behavioral drift**: decoded frames differ from screencap frame
 
 ---
 
-## Sequencing and global discipline
+## 📅 Sequencing and global discipline
 
 ```
 wk 1-3   P1 recovery loop (R0→R4)

@@ -1,8 +1,14 @@
-# Supported reference cards (MVP scope, v0.1)
+<h1 align="center">Supported Reference Cards</h1>
 
-[中文](cards.zh.md)
+<p align="center">
+  <b>MVP scope, v0.1 — 10 verified Android reference cards · 50 declared capabilities</b>
+</p>
 
-Ten verified Android reference cards, **50 declared capabilities** total. *Card class* (single-bubble TextView vs. multi-node RecyclerView) drives the reply-extraction strategy — see [`x_capture_full_reply`](manifest_conventions.md#3-when-to-set-x_capture_full_reply) in the manifest conventions.
+<p align="center">
+  <b>English</b> | <a href="cards.zh.md">中文</a>
+</p>
+
+Ten verified Android reference cards, **50 declared capabilities** total. *Card class* (single-bubble TextView vs. multi-node RecyclerView) drives the reply-extraction strategy — see [`x_capture_full_reply`](manifest_conventions.md#-3-when-to-set-x_capture_full_reply) in the manifest conventions.
 
 | App | Package | Capabilities | Card class |
 | --- | --- | --- | --- |

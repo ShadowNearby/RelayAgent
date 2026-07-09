@@ -1,10 +1,16 @@
-# 模拟器测试（无真机路径）
+<h1 align="center">模拟器测试</h1>
 
-> English: [`emulator_testing.md`](emulator_testing.md)
+<p align="center">
+  <b>无真机路径：模拟器上能测什么、怎么搭</b>
+</p>
+
+<p align="center">
+  <a href="emulator_testing.md">English</a> | <b>中文</b>
+</p>
 
 运行时是**纯 Python over adb**（`screencap` / `uiautomator dump` / `input` / `monkey`，见 `agents/runtime/native_runtime.py`），不依赖任何真机特有接口——Android 模拟器（AVD）天然兼容，且截图通常比真机的 ~1.5s/帧 快得多。本文给出没有真机时能测什么、怎么搭。
 
-## 1. 没有设备也能跑的部分（纯 LLM，零 adb）
+## 💻 1. 没有设备也能跑的部分（纯 LLM，零 adb）
 
 规划侧完全不碰设备，装好 `.env` 就能跑：
 
@@ -14,7 +20,7 @@ uv run python scripts/run_benchmark_test.py --benchmark relaybench --plan-only  
 uv run python -m unittest discover -s tests -v                                           # planner/runner 单元测试
 ```
 
-## 2. 模拟器上能测什么 / 不能测什么
+## 📋 2. 模拟器上能测什么 / 不能测什么
 
 | 层 | 模拟器可行性 |
 | --- | --- |
@@ -25,7 +31,7 @@ uv run python -m unittest discover -s tests -v                                  
 
 x86_64 镜像装 ARM-only 的国内 App 依赖 ARM 转译（API 30+ 自带），但 native 重的 App（微信等）转译下崩溃——见 §8.1 实测。Apple Silicon / ARM 主机用 arm64-v8a 镜像无此问题。
 
-## 3. 搭一台 AVD
+## 🛠️ 3. 搭一台 AVD
 
 > **本仓库开发期使用的参考配置**：AVD `relay-test`（**android-36.0-Baklava（Android 16）/ google_apis_playstore / x86_64，pixel_9 档位 1080x2424**），KVM 加速，冷启动 ~15s，serial `emulator-5554`。选 **playstore 镜像**是为了能从 Play 商店官方装国际 App（见 §7）。`sdkmanager`/`avdmanager`/`emulator` 都需要 `JAVA_HOME`（snap Android Studio 的 JBR 即可：`export JAVA_HOME=/snap/android-studio/current/jbr`）。
 
@@ -46,7 +52,7 @@ adb wait-for-device
 
 > 镜像选型：**playstore** 镜像能官方装国际 App，但 system 分区只读、拿不到 `adb root`；要 `adb root`（侧载、改 system）就换 `google_apis`（非 playstore）镜像。两种都自带 `libndk_translation.so`（ARM 转译），但见 §7 的硬限制。
 
-## 4. 设备侧准备（与真机一致）
+## 📱 4. 设备侧准备（与真机一致）
 
 ```bash
 # AdbKeyboard（文本输入必须）
@@ -64,7 +70,7 @@ uv run python scripts/validate/check_device_env.py
 
 `check_device_env.py` 会通过 `ro.kernel.qemu` / `ro.boot.qemu` 识别并标注模拟器，其余检查项与真机相同。
 
-## 5. 烟测建议路径
+## 🔥 5. 烟测建议路径
 
 1. `check_device_env.py` 全绿（IME / uiautomator / screencap）。
 2. 装 + 登录一个国际 App（Copilot 最轻），跑单 App 入口：
@@ -74,7 +80,7 @@ uv run python scripts/validate/check_device_env.py
    覆盖完整 obs→predict→execute 循环：cold-launch、入口 tap、AdbKeyboard 输入、`wait_for_reply` 文本-hash 判 done、scrape 回复。
 3. （可选）NL flow 真跑：`uv run python scripts/run_plan.py --yes "Ask Copilot ..."`。
 
-## 6. 用 scrcpy 观察/操控模拟器屏幕
+## 🖥️ 6. 用 scrcpy 观察/操控模拟器屏幕
 
 模拟器以 `-no-window` headless 跑时，用 scrcpy 镜像屏幕（走设备端视频编码流，与有无原生窗口无关；对 agent 的 `screencap`/`uiautomator` 链路零影响，可一直开着旁观）。adb server（5037）与模拟器（5554/5555）都只监听 `127.0.0.1`，远程访问必须走 SSH 隧道。
 
@@ -100,7 +106,7 @@ adb connect localhost:15555 && scrcpy -s localhost:15555               # 终端 
 
 > **首选方案 B。** 方案 A 常见报 `Device is unauthorized`——本地 adb 的密钥没被模拟器 adbd 信任，而 headless 模拟器没有授权弹窗可点，于是卡死。方案 B 让本地 scrcpy 复用**服务器侧那个已与模拟器握手过的 adb server**，根本不经过本地 adb 密钥认证，绕过此坑。真要用 A，得在服务器侧把本地公钥灌进模拟器（`adb root` 镜像才行）或关 `ro.adb.secure`，不值当。
 
-## 7. 在模拟器上跑端侧 APK（android/ App）
+## 📦 7. 在模拟器上跑端侧 APK（android/ App）
 
 debug 构建的 `abiFilters` 含 `x86_64`（Chaquopy 只认 `defaultConfig` 里的 abiFilters，见 `android/app/build.gradle.kts`），所以同一个 APK 真机/模拟器都能装：
 
@@ -116,7 +122,7 @@ adb shell settings put secure accessibility_enabled 1
 
 LLM 网关在 App 设置页填（同 `.env` 三项）；MediaProjection 授权弹窗每次运行都要点一次「Start now」（Android 14 起 per-session）。已在 relay-test AVD 上验证：CPython 启动、`OnDeviceAndroidBackend` 注入、MediaProjection 截帧（喂 grounding VLM）、三段式路由 + flow 规划 + in-process leg 执行、traj/wall_clock 落 filesDir。**垂类 App 没装时 leg 在 cold-launch / grounding 处明确失败**——端到端成功仍需装好并登录目标 App（§2 的限制）。
 
-## 8. 装 manifest 里的垂类 App（实测结论）
+## 🧪 8. 装 manifest 里的垂类 App（实测结论）
 
 manifest 共 10 个 App，按来源分两类，**结论：x86_64 模拟器只适合装国际 App，国内 ARM-only App 装得上但跑不起来。**
 
@@ -136,7 +142,7 @@ playstore 镜像 + **用户自己登录 Google 账号**后从 Play 商店装（x
 - 落地登录页：`adb shell monkey -p com.android.vending -c android.intent.category.LAUNCHER 1`，停在 `UnauthenticatedMainActivity` 的 Sign in。
 - 登录后再装 App：可 `adb shell am start -a android.intent.action.VIEW -d 'market://details?id=<pkg>'` 跳详情页人工点 Install，或在商店内搜。
 
-## 9. 已知差异（模拟器 vs 真机）
+## ⚠️ 9. 已知差异（模拟器 vs 真机）
 
 - 截图快（典型 <0.5s/帧）→ 墙钟数字**不可与真机混在同一张表**；评测结论仍以真机为准。
 - 无蜂窝/短信/NFC；定位是模拟值（高德「附近」类任务结果不真实）。

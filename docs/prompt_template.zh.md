@@ -1,12 +1,18 @@
-# 模板化向 App Agent 提交的 prompt（`prompt_template`）
+<h1 align="center">模板化 submit prompt（prompt_template）</h1>
 
-> English: [`prompt_template.md`](prompt_template.md)
+<p align="center">
+  <b>发给 in-app agent 的 submit 措辞由每能力一个模板固定，LLM 只负责抽槽位</b>
+</p>
+
+<p align="center">
+  <a href="prompt_template.md">English</a> | <b>中文</b>
+</p>
 
 > 一句话：发给 in-app agent 的 submit 措辞由**每能力一个模板**固定，LLM 只负责**抽槽位**，把"措辞漂移"这个难抓的失败面换成"抽槽"这个可校验的失败面。
 
 ---
 
-## 1. 解决什么
+## 🎯 1. 解决什么
 
 原来发给 in-app agent 的 prompt 完全由 `FlowPlanner` 的 LLM **自由合成**（`_PLANNER_SYSTEM`），合成后再过 `_maybe_localize_prompt` 改语言。即"对 App agent 说什么话"的**措辞和取值都交给 LLM**。
 
@@ -20,7 +26,7 @@
 
 > **保证边界。** 模板固定的是**措辞与结构**，所以 App 端意图路由确定；它**不**保证**槽位取值**正确——取值仍由 LLM 抽取（`temperature=0` 降方差但不消除）。即保证的是"提交措辞 / 意图路由确定"，不是"提交内容正确"。
 
-## 2. Manifest schema（核心 spec 字段）
+## 📄 2. Manifest schema（核心 spec 字段）
 
 挂在 capability 上，**无 `x_` 前缀**（已转正为核心 spec 字段）：
 
@@ -60,7 +66,7 @@
 
 样板：Gemini `live_navigation` = `Navigate to {place}[ by {mode}].`（必填 `place` + 可选 `mode`）；高德 `live_navigation` = `导航去{place}`。其余结构化能力（订餐/订票/闹钟）后续按同 pattern 增量加，无需改代码。
 
-## 3. 落地链路（`agents/flow/flow_planner.py`）
+## 🔌 3. 落地链路（`agents/flow/flow_planner.py`）
 
 数据流：`FlowPlanner.plan()` LLM 合成自由 prompt → `resolve_app_routes()` 逐 step 路由出 app+capability → **填充** → `step["prompt"]` 经 `render()` 替换 `{var}` 后作为 `RELAY_INVOCATION_TEXT` 传子进程。
 
@@ -87,7 +93,7 @@
 
 **加载期校验。** 构建 catalog 时 `_validate_prompt_template` 逐个检查 templated 能力，命中即抛 `ManifestValidationError`（fail-fast）：占位符 `{}` 未声明（如拼错 `{palce}`）、声明了却没用到的死槽、**required** 槽只出现在 `[...]` 段内（会被 drop）、**optional** 槽没包进 `[...]`（会留空隙）、或括号不配对/嵌套。把作者笔误从"该 step 跑到时才 `PromptTemplateError`"提前到加载期。
 
-## 4. 设计决策
+## ⚖️ 4. 设计决策
 
 | 决策 | 取值 | 理由 |
 | --- | --- | --- |
@@ -96,12 +102,12 @@
 | planner system prompt | **不改** | planner 此时尚不知路由结果，无法知道哪条套模板；抽槽器从合成 prompt 取值即可，零 planner 改动、风险最低 |
 | `example_prompts` | **保留** | 作为模板缺失时的 few-shot 回退 |
 
-## 5. TODO
+## 🚧 5. TODO
 
 - **嵌套可选段**：`_OPT_SEGMENT_RE` 只匹配非嵌套 `[...]`，暂不支持 `[a[b]]`。当前需求用平铺段已够。
 - 把模板机制提案进 card spec 正式版后，考虑 bump 各 manifest 的 `spec_version`。
 
-## 6. 验证
+## ✅ 6. 验证
 
 ```bash
 # 确定串（无 LLM 措辞抖动）

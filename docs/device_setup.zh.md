@@ -1,12 +1,17 @@
-# 端侧测试环境（Device Setup）
+<h1 align="center">端侧测试环境</h1>
 
-> English: [`device_setup.md`](device_setup.md)
+<p align="center">
+  <b>跑 RelayAgent（单 App 调试 / NL flow / A/B benchmark）之前，设备侧需要准备什么</b>
+</p>
 
-> 跑 RelayAgent（单 App 调试 / NL flow / A/B benchmark）之前，设备侧需要准备什么。
+<p align="center">
+  <a href="device_setup.md">English</a> | <b>中文</b>
+</p>
+
 > 一键体检：`uv run python scripts/validate/check_device_env.py [--benchmark relaybench|androiddaily|mobileworld|all]`（无 FAIL 退出码为 0）。
 > 模拟器（无真机）路径见 [`emulator_testing.zh.md`](emulator_testing.zh.md)。
 
-## 1. 主机侧
+## 💻 1. 主机侧
 
 | 项 | 要求 |
 | --- | --- |
@@ -15,7 +20,7 @@
 | LLM 端点 | `.env` 填好 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` |
 | MobileWorld（仅 A/B baseline / MW 兜底需要）| `third_party/MobileWorld` 符号链接到 sibling checkout（机器本地，见 [`mobileworld_real_device.md`](mobileworld_real_device.md)），否则用 pyproject 钉死的 git 快照 |
 
-## 2. 设备通用要求（真机或模拟器都一样）
+## 📱 2. 设备通用要求（真机或模拟器都一样）
 
 | 项 | 要求 | 说明 |
 | --- | --- | --- |
@@ -27,7 +32,7 @@
 | 亮屏 | `settings put global stay_on_while_plugged_in 7` | 防任务中途锁屏 |
 | 语言/网络 | 中文垂类 App 建议系统中文 + 国内网络；Gemini / Copilot / Reddit / Booking 需要可达国际网络 + Google 服务（GMS）| 双栈网络环境最省事 |
 
-## 3. App 需求（按用途分层）
+## 📦 3. App 需求（按用途分层）
 
 ### 3.1 核心：10 个 manifest App（covered 层全部收益所在）
 
@@ -64,13 +69,13 @@ MW 的任务跑在 **MobileWorld 自带的应用环境**（Mail、Messages、Mas
 - `MCP-*` 任务（40 条）是 tool-call 非真 GUI，`--skip-mcp` 剔除。
 - Taodian（淘typed电商示例 App）在真机上两系统都失败（风控），Phase B 记 both-fail。
 
-## 4. 跑 benchmark 前的状态卫生
+## 🧹 4. 跑 benchmark 前的状态卫生
 
 - **每个 App open 前必 cold-launch**（`am force-stop` + monkey LAUNCHER，runner 自动做）——不要手工预开 App 留热状态。
 - 任务间 `kill_all_apps()` 硬复位（force-stop 所有在跑的三方包 + HOME），防上一任务的聊天线程/半成单泄漏进下一任务。
 - 评测公平性开关（`run_benchmark_test.py` 默认强制）：`RELAY_ROUTE_OVERLAY=0`、`RELAY_STEP_LOG=0`、`RELAY_CAPTURE_FULL_REPLY=0`、relay 走 `--no-cache`。详见 [`evaluation.zh.md`](evaluation.zh.md) §8。
 
-## 5. 速查
+## ⚡ 5. 速查
 
 ```bash
 # 体检（核心检查 + 10 个 manifest App 是否安装）

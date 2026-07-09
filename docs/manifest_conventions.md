@@ -1,17 +1,22 @@
-# Manifest conventions
+<h1 align="center">Manifest Conventions</h1>
 
-> 中文版：[`manifest_conventions.zh.md`](manifest_conventions.zh.md)
+<p align="center">
+  <b>How to author a manifest: language convention, prompt_template, x_capture_full_reply, card swipe direction, key capability fields</b>
+</p>
 
-> How to author a manifest: language convention, `prompt_template`, `x_capture_full_reply`, card `swipe` direction, key capability fields.
+<p align="center">
+  <b>English</b> | <a href="manifest_conventions.zh.md">中文</a>
+</p>
+
 > The normative field definitions live in [`SPEC.md`](../SPEC.md); `prompt_template` details in [`prompt_template.md`](prompt_template.md).
 
 ---
 
-## 1. Language convention
+## 🌐 1. Language convention
 
 **Write a manifest in the app's own language**: an English app (e.g. `com.google.android.apps.bard`) gets English desc/comments; a Chinese app (e.g. `com.autonavi.minimap`) gets Chinese. `prompt_template`/`prompt_slots.desc` likewise follow the app's target locale.
 
-## 2. `prompt_template` — templated submit prompt
+## 🧩 2. `prompt_template` — templated submit prompt
 
 Structured capabilities (navigation / ticketing / alarms / …) can declare a capability-level `prompt_template` (+`prompt_slots`) that fixes the wording sent to the in-app agent; the LLM only extracts slots (`temperature=0`), so phrasing drift can't throw off the app's intent routing.
 
@@ -22,7 +27,7 @@ Structured capabilities (navigation / ticketing / alarms / …) can declare a ca
 
 Full spec, data flow, fill steps, and design trade-offs: [`prompt_template.md`](prompt_template.md) (中文: [`prompt_template.zh.md`](prompt_template.zh.md)).
 
-## 3. When to set `x_capture_full_reply`
+## 📜 3. When to set `x_capture_full_reply`
 
 Rule of thumb: **single TextView ⇒ off; multi-node RecyclerView ⇒ on**. To decide: after triggering a reply, `adb shell uiautomator dump` — one long TextView (>200 chars) → single-bubble; several medium nodes laid out as cards → multi-node.
 
@@ -32,7 +37,7 @@ Rule of thumb: **single TextView ⇒ off; multi-node RecyclerView ⇒ on**. To d
 
 **Scroll amount** `swipe_down(ratio=0.5)` (clamped to `[0.1, 0.5]`), overridable by `RELAY_CAPTURE_SCROLL_RATIO` (also clamped ≤0.5). Larger → fewer VLM calls but seam word-loss; smaller → more overlap, more robust. Chunks are concatenated in capture order.
 
-## 4. Card `swipe` → scroll action (with direction inversion)
+## 👆 4. Card `swipe` → scroll action (with direction inversion)
 
 A manifest's `swipe: <direction>` is written in terms of the **scroll / content-movement direction**, **not the finger-swipe direction**. It is compiled by `action_planner` into a logical `swipe` step, `_materialize` emits it as a `scroll` action, and `NativeEnv._dispatch` inverts up/down before issuing the low-level adb gesture:
 
@@ -40,7 +45,7 @@ A manifest's `swipe: <direction>` is written in terms of the **scroll / content-
 - `swipe: down` → `scroll(direction="down")` → content moves down / scrolls down visually → the actual low-level gesture is a **finger swipe up**.
 - `left`/`right` are not inverted today. Author cards thinking in scroll semantics throughout.
 
-## 5. Key capability fields (routing / flow related)
+## 🔑 5. Key capability fields (routing / flow related)
 
 | Field | Effect |
 | --- | --- |

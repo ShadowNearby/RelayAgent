@@ -1,15 +1,21 @@
-# RelayAgent Evaluation Design
+<h1 align="center">RelayAgent Evaluation Design</h1>
 
-> Design and implementation record for the paper's Evaluation chapter. Decisions dated 2026-06-09.
-> 中文: [`evaluation.zh.md`](evaluation.zh.md)（权威版本 / authoritative）
+<p align="center">
+  <b>Design and implementation record for the paper's Evaluation chapter (decisions dated 2026-06-09)</b>
+</p>
 
+<p align="center">
+  <b>English</b> | <a href="evaluation.zh.md">中文</a>
+</p>
+
+> The Chinese version ([`evaluation.zh.md`](evaluation.zh.md)) is authoritative when the two diverge.
 > Companion code: `scripts/run_benchmark_test.py` (A/B driver + plan-only), `scripts/eval/plot_eval_figs.py` (figures).
 
-## 1. One sentence
+## 🎯 1. One sentence
 
 On the **same physical device, with the same unified VLM judge**, run the same task set through both **RelayAgent (relay)** and **MobileWorld `general_e2e` (baseline)**, and compare **success rate / wall-clock / tokens / steps**, stratified by **app coverage (covered / fallback)**. Core claim: **on tasks where RA has a specialized in-app agent it saves large amounts of time and tokens with success no worse than the baseline; where coverage is missing it degrades to the baseline and only pays a small planning tax.**
 
-## 2. Baseline
+## 📏 2. Baseline
 
 - Primary baseline: **MobileWorld `general_e2e`** (a general GUI agent, frame-by-frame pixel grinding) — represents the "no specialized routing, pure visual operation" paradigm.
 - Relationship clarification (important): **the baseline is a subset of RA only in the fallback tier, not of RA as a whole**.
@@ -18,7 +24,7 @@ On the **same physical device, with the same unified VLM judge**, run the same t
   - Corollary: "RA ≥ MW" on success is an **empirical expectation, not a logical guarantee** — the covered tier uses a different executor and may be worse per task; the fallback tier additionally loses to **routing / handoff errors**.
 - Planned extra comparisons: RA ablations (`RELAY_SCRAPE=0` / a11y agent — show the gains come from routing + scrape); related-work alignment with MobiAgent / Step-GUI.
 
-## 3. Three benchmarks (co-equal, no primary/secondary)
+## 🧪 3. Three benchmarks (co-equal, no primary/secondary)
 
 | Benchmark | Source | Size | Lang | Nature / role |
 | --- | --- | --- | --- | --- |
@@ -29,7 +35,7 @@ On the **same physical device, with the same unified VLM judge**, run the same t
 - **MCP skip**: MobileWorld tasks touching `MCP-*` (Amap/arXiv/Github/stockstar/jina) are tool-calls, not real GUI; **all are cross-app (no pure-MCP tasks)**. `--skip-mcp` drops 40 → 161 tasks (85 cross + 76 single; 144 en / 17 cn).
 - **AndroidDaily metric mismatch**: its native metric is **step-action-accuracy** against ground-truth trajectories; RA routes to an in-app agent and produces no comparable step sequence → **we reuse only its task instructions and score with the unified end-to-end VLM judge** (same yardstick for both systems).
 
-## 4. Core axis: covered vs fallback
+## 🪜 4. Core axis: covered vs fallback
 
 Instead of ranking benchmarks, **stratify within each benchmark** (criterion: the **kind** of each leg in the planner output — `specialized` true vertical capability / `foundation` generic `foundation_llm` / `mw` MobileWorld fallback leg):
 
@@ -41,7 +47,7 @@ Instead of ranking benchmarks, **stratify within each benchmark** (criterion: th
 
 RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, Xiaohongshu, WPS, Booking, Reddit, Gemini, Copilot. **The gains concentrate in these apps** — the covered stratification deliberately exposes where the gains come from, closing the cherry-pick objection.
 
-## 5. Metrics
+## 📐 5. Metrics
 
 1. **Completion rate** (unified VLM judge `agents/leg_judge`, SUCCESS/total) — overall + per tier.
 2. **Wall-clock** (whole-task subprocess wall time) — **three accountings reported side by side** (closes selection bias): all tasks / each system's completed-only / **intersection where both systems succeed (paired)**. The intersection is the headline efficiency number (per-task RA/baseline ratio on the same task), but it **must not be reported alone** — conditioning on baseline success deletes exactly the cases where MW times out and RA finishes in a few steps (RA's biggest wins). It must sit next to the all-tasks accounting (which contains MW timeout ceilings and overestimates RA in the opposite direction). See §9 fig6/fig7, fig5.
@@ -50,19 +56,19 @@ RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, Xiaohongshu, WPS, Boo
 5. **Cross-app handoff success rate** (reported separately; RA's differentiating capability).
 6. **Failure attribution** (timeout / mis-route / grounding error / handoff false stop).
 
-## 6. Per-tier expectations for time/tokens (present honestly)
+## 💰 6. Per-tier expectations for time/tokens (present honestly)
 
 - **covered tier**: planning tax + one cheap in-app submit ≪ MW's dozens of frame-by-frame steps → **RA wins big**.
 - **mw_fallback tier**: RA = planning overhead (+ coverage-gap repair rounds) + **the same execution as MW** → **RA slightly slower, slightly more tokens, success ≈ MW**. This tier is RA paying a net planning tax — **plotting it honestly is the most convincing** (see fig5 TODO).
 
-## 7. Protocol / honesty items (must be disclosed in the paper)
+## 🔍 7. Protocol / honesty items (must be disclosed in the paper)
 
 1. **Self-judging**: the judge is RA's own leg_judge → manually verify a 30–50 task subsample and report agreement.
 2. **Relay token accounting (fixed, task #8 ✓)**: relay total tokens now read the authoritative `<flow_root>/token_usage.json` written by `run_plan.py`; `total` **includes the plan-synthesis phase** (+ repair rounds), `by_phase` splits plan/flow/agent → the planning tax is directly quantifiable (measured on one Amap POI covered task: plan 16975 / flow 698 / agent 0 tokens — the planning phase dominates). **Per-call logs aligned on both sides**: each results.jsonl row's `llm_calls` holds per-call metrics (tokens+latency+model+purpose); full bodies (messages/response) are persisted — relay in each leg's `traj.json`, mw via the non-invasive probe `agents.llm.mw_llm_probe` writing `<sys>/user_task/llm_calls.json`.
 3. **Completed-only bias**: `_aggregate` currently aggregates time/tokens over each system's own completed tasks → must be co-reported with all-tasks **+ the both-success paired intersection**. The three accountings are biased in opposite directions (completed-only: each system on its own set, unpaired; all-tasks: contains MW timeout ceilings → overestimates RA; intersection: conditions on baseline success → deletes RA's biggest wins → underestimates RA), so only all three together are honest. **Implementation TODO**: `_aggregate` aggregates per system; the paired intersection needs a per-`task_id` join of both-success tasks and per-task ratios (not a ratio of means).
 4. **Fairness switches at test time**: see §8.
 
-## 8. Switches forced off during tests (fairness + clean wall-clock)
+## 🎚️ 8. Switches forced off during tests (fairness + clean wall-clock)
 
 `run_benchmark_test.py` writes `os.environ` after arg-parse; both the relay subprocess and the in-process plan-only planner inherit:
 
@@ -77,7 +83,7 @@ RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, Xiaohongshu, WPS, Boo
 > Note: the overlay is a **real RA efficiency feature**. It defaults off for fair per-task comparison; how many planning calls it saves should be measured in a separate **overlay on/off ablation** (task #6, warm up the overlay table first).
 > Keep enabled (correctness-related, **do not disable**): `RELAY_FRESH_CONV`, the AdbKeyboard IME, cold-launch.
 
-## 9. Figure set
+## 🖼️ 9. Figure set
 
 Code: `scripts/eval/plot_eval_figs.py`, output `docs/eval_figs/{png,pdf}`. **Data is currently MOCK**; the schema matches the real outputs — swapping in real values only touches the `MOCK` block at the top of the script. Fixed palette: relay blue `#0072B2` / baseline orange `#D55E00`, covered dark green, fallback light green/purple.
 
@@ -90,7 +96,7 @@ Code: `scripts/eval/plot_eval_figs.py`, output `docs/eval_figs/{png,pdf}`. **Dat
 
 Layout rules: success and efficiency always share a panel; the three benchmarks reuse one isomorphic figure; report median + distribution, not just means; time/tokens always in both accountings; one palette across the paper.
 
-## 10. Driver implementation map (`scripts/run_benchmark_test.py`)
+## 🗺️ 10. Driver implementation map (`scripts/run_benchmark_test.py`)
 
 - `BENCHMARKS`: `mobileworld` / `relaybench` / `androiddaily` (loader + smoke picker; `single_app` removed).
 - `--skip-mcp`: `_touches_mcp` filters tasks touching `MCP-*`.
@@ -98,7 +104,7 @@ Layout rules: success and efficiency always share a panel; the three benchmarks 
 - `_aggregate` (per system) + `_aggregate_by_app` (per app×system, feeds Fig.4) → `summary.json`'s `by_system` / `by_app`.
 - Unified judge: `_judge` calls `leg_judge.judge_leg`; `loading` triggers one re-capture.
 
-## 11. Current data status
+## 📊 11. Current data status
 
 **Plan-only classification (new four-tier logic, all real values, 2026-06-10)** — classified by leg kind (specialized/foundation/mw), see §4:
 
@@ -113,7 +119,7 @@ Layout rules: success and efficiency always share a panel; the three benchmarks 
 
 **Real-device A/B (Phase B, in progress)**: running relay + mw general_e2e on the 159 covered cases above (logging fixed: plan-synthesis tokens + per-call on both sides). relaybench 8/27 done, rest running (resume-aware: `scripts/eval/_phaseB_run.sh` resumes from results.jsonl). Real efficiency/success values will backfill Fig.2/4/6/7.
 
-## 12. Open TODOs
+## 🚧 12. Open TODOs
 
 | # | Item | Nature |
 | --- | --- | --- |
@@ -124,7 +130,7 @@ Layout rules: success and efficiency always share a panel; the three benchmarks 
 | — | RA-native cross-app suite real-device coverage confirmation (most apps installed and runnable) | data |
 | — | self-judge manual agreement on a subsample | honesty |
 
-## Related docs
+## 🔗 Related docs
 
 - Cross-app flow architecture: [`docs/nl_flow.md`](nl_flow.md); capability matrix (source of truth): `docs/app_capability_matrix.csv`.
 - Route solidification overlay: `nl_flow.md` §9.

@@ -1,10 +1,16 @@
-# Emulator Testing (the no-real-device path)
+<h1 align="center">Emulator Testing</h1>
 
-> 中文: [`emulator_testing.zh.md`](emulator_testing.zh.md)
+<p align="center">
+  <b>The no-real-device path: what an Android emulator can test and how to set it up</b>
+</p>
+
+<p align="center">
+  <b>English</b> | <a href="emulator_testing.zh.md">中文</a>
+</p>
 
 The runtime is **pure Python over adb** (`screencap` / `uiautomator dump` / `input` / `monkey`, see `agents/runtime/native_runtime.py`) and depends on nothing device-specific — an Android emulator (AVD) is natively compatible, and screenshots are usually much faster than the ~1.5 s/frame of real devices. This page covers what you can test without a real device and how to set it up.
 
-## 1. What runs with no device at all (pure LLM, zero adb)
+## 💻 1. What runs with no device at all (pure LLM, zero adb)
 
 The planning side never touches a device; a filled-in `.env` is enough:
 
@@ -14,7 +20,7 @@ uv run python scripts/run_benchmark_test.py --benchmark relaybench --plan-only  
 uv run python -m unittest discover -s tests -v                                           # planner/runner unit tests
 ```
 
-## 2. What the emulator can and cannot test
+## 📋 2. What the emulator can and cannot test
 
 | Tier | Feasibility on emulator |
 | --- | --- |
@@ -25,7 +31,7 @@ uv run python -m unittest discover -s tests -v                                  
 
 Installing ARM-only Chinese apps on an x86_64 image relies on ARM translation (built-in from API 30+), but native-heavy apps (WeChat etc.) crash under it — see §8.1 for measurements. arm64-v8a images on Apple Silicon / ARM hosts avoid this.
 
-## 3. Creating an AVD
+## 🛠️ 3. Creating an AVD
 
 > **Reference setup used while developing this repo**: AVD `relay-test` (**android-36.0-Baklava (Android 16) / google_apis_playstore / x86_64, pixel_9 profile 1080x2424**), KVM-accelerated, ~15 s cold boot, serial `emulator-5554`. The **playstore** image is chosen so international apps install officially from the Play Store (see §8). `sdkmanager`/`avdmanager`/`emulator` need `JAVA_HOME` (the snap Android Studio JBR works: `export JAVA_HOME=/snap/android-studio/current/jbr`).
 
@@ -46,7 +52,7 @@ adb wait-for-device
 
 > Image choice: the **playstore** image installs international apps officially but has a read-only system partition and no `adb root`; switch to a `google_apis` (non-playstore) image when you need `adb root` (sideloading, system edits). Both ship `libndk_translation.so` (ARM translation), but see §8 for the hard limit.
 
-## 4. Device-side prep (same as a real device)
+## 📱 4. Device-side prep (same as a real device)
 
 ```bash
 # AdbKeyboard (required for text input)
@@ -64,7 +70,7 @@ uv run python scripts/validate/check_device_env.py
 
 `check_device_env.py` detects and labels emulators via `ro.kernel.qemu` / `ro.boot.qemu`; all other checks are identical to a real device.
 
-## 5. Suggested smoke path
+## 🔥 5. Suggested smoke path
 
 1. `check_device_env.py` all green (IME / uiautomator / screencap).
 2. Install + sign in to one international app (Copilot is the lightest), then run the single-app entry point:
@@ -74,7 +80,7 @@ uv run python scripts/validate/check_device_env.py
    This exercises the full obs→predict→execute loop: cold-launch, entry taps, AdbKeyboard input, `wait_for_reply` text-hash done detection, reply scraping.
 3. (Optional) real NL-flow run: `uv run python scripts/run_plan.py --yes "Ask Copilot ..."`.
 
-## 6. Watching/controlling the emulator screen with scrcpy
+## 🖥️ 6. Watching/controlling the emulator screen with scrcpy
 
 With the emulator running headless (`-no-window`), mirror its screen via scrcpy (it streams from the device-side video encoder, independent of any native window; zero impact on the agent's `screencap`/`uiautomator` path, so it can stay open as a bystander). The adb server (5037) and the emulator (5554/5555) listen on `127.0.0.1` only — remote access requires an SSH tunnel.
 
@@ -100,7 +106,7 @@ adb connect localhost:15555 && scrcpy -s localhost:15555                 # termi
 
 > **Prefer Option B.** Option A commonly fails with `Device is unauthorized` — the local adb's key isn't trusted by the emulator's adbd, and a headless emulator has no authorization popup to tap, so it hangs. Option B has the local scrcpy reuse the **server-side adb server that already handshook with the emulator**, bypassing local adb key auth entirely. Making A work would mean injecting the local public key into the emulator (`adb root` image only) or disabling `ro.adb.secure` — not worth it.
 
-## 7. Running the on-device APK (android/ app) on the emulator
+## 📦 7. Running the on-device APK (android/ app) on the emulator
 
 The debug build's `abiFilters` include `x86_64` (Chaquopy only reads abiFilters from `defaultConfig`, see `android/app/build.gradle.kts`), so the same APK installs on both real devices and the emulator:
 
@@ -116,7 +122,7 @@ adb shell settings put secure accessibility_enabled 1
 
 Fill the LLM gateway in the app's Settings page (same three values as `.env`); the MediaProjection consent dialog must be accepted once per run ("Start now", per-session since Android 14). Verified on the relay-test AVD: CPython boot, `OnDeviceAndroidBackend` injection, MediaProjection frames (feeding the grounding VLM), 3-stage routing + flow planning + in-process leg execution, traj/wall_clock under filesDir. **With no vertical apps installed the leg fails cleanly at cold-launch / grounding** — a full end-to-end pass still needs the target app installed and signed in (the §2 limitation).
 
-## 8. Installing the manifest's vertical apps (measured findings)
+## 🧪 8. Installing the manifest's vertical apps (measured findings)
 
 The manifest has 10 apps in two source classes. **Bottom line: the x86_64 emulator is only good for installing international apps; ARM-only Chinese apps install but cannot run.**
 
@@ -136,7 +142,7 @@ playstore image + a **Google sign-in the user performs**, then install from the 
 - Land on the sign-in screen: `adb shell monkey -p com.android.vending -c android.intent.category.LAUNCHER 1` stops at `UnauthenticatedMainActivity`'s Sign in.
 - After sign-in: `adb shell am start -a android.intent.action.VIEW -d 'market://details?id=<pkg>'` jumps to the app's detail page for a manual Install tap, or search in the store.
 
-## 9. Known differences (emulator vs real device)
+## ⚠️ 9. Known differences (emulator vs real device)
 
 - Faster screenshots (typically <0.5 s/frame) → wall-clock numbers **must not be mixed into the same table as real-device numbers**; evaluation conclusions stay real-device.
 - No cellular/SMS/NFC; location is simulated (Amap "nearby" tasks return unrealistic results).

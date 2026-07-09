@@ -1,10 +1,16 @@
-# 产品化路线图 — 从"论文可测"到"天天可用"
+<h1 align="center">产品化路线图</h1>
 
-> English: [roadmap.md](roadmap.md)
->
+<p align="center">
+  <b>从「论文可测」到「天天可用」——按投入产出排序的五个阶段</b>
+</p>
+
+<p align="center">
+  <a href="roadmap.md">English</a> | <b>中文</b>
+</p>
+
 > 本文是面向贡献者的工程路线图:按投入产出排序的五个阶段,每阶段锚定到现有代码接缝,并用仓库自带的 A/B 评测基建验收。讨论与认领见 GitHub Issues。
 
-## 现状基线(为什么是这个优先级)
+## 📊 现状基线(为什么是这个优先级)
 
 内部 phase-B 真机 A/B(186 任务,初步数据,人工判读混合)给出的端到端成功率:**RelayBench ~67% / AndroidDaily ~51% / MobileWorld ~42%**;任务中位墙钟 75–128s。结论:
 
@@ -22,9 +28,9 @@
 
 ---
 
-## P1 执行期失败恢复闭环(~3 周)
+## ♻️ P1 执行期失败恢复闭环(~3 周)
 
-> **状态(2026-07-08)**:R0–R3 已实现(`agents/flow/leg_recovery.py`,nl_flow §6.1),mini-eval 见 [`report/p1-recovery-mini-eval.md`](../report/p1-recovery-mini-eval.md)——四档梯子真机完整行使一遍并翻盘一条历史失败任务。R4 **遥测侧已收口**:`recovery.json` 每条尝试带 token 成本;`run_benchmark_test.py --recovery` 每行落 `recovery` 块,`summary.json`/`summary.md` 出首试 vs 最终成功、逐档命中率与恢复 token 通胀表(`tests/test_benchmark_recovery.py` 钉住)。R4 正式评测(三基准各 ~30 条开/关对照)待跑。
+> **状态(2026-07-08)**:R0–R3 已实现(`agents/flow/leg_recovery.py`,nl_flow §6.1),mini-eval 中四档梯子真机完整行使一遍并翻盘一条历史失败任务。R4 **遥测侧已收口**:`recovery.json` 每条尝试带 token 成本;`run_benchmark_test.py --recovery` 每行落 `recovery` 块,`summary.json`/`summary.md` 出首试 vs 最终成功、逐档命中率与恢复 token 通胀表(`tests/test_benchmark_recovery.py` 钉住)。R4 正式评测(三基准各 ~30 条开/关对照)待跑。
 
 **P1 之前的现状**:`flow_runner._run_app_step` 中 leg 失败(rc≠0 / 需 bind 却无 reply / 输出无关断言失败 / leg judge 判 fail)一律 raise,整条 flow 终止。
 
@@ -65,7 +71,7 @@
 
 ---
 
-## P2 流式抓帧 + 延迟工程(~2 周,与 P1 并行;P1 在 flow 层、P2 在 device 层,互不重叠)
+## ⚡ P2 流式抓帧 + 延迟工程(~2 周,与 P1 并行;P1 在 flow 层、P2 在 device 层,互不重叠)
 
 > **状态(2026-07-08)**:S1 已落地(`agents/device/android_stream.py`,`RELAY_CAPTURE_BACKEND=scrcpy`,默认 screencap 不变;PyAV 走 optional extra `stream`)。Pixel 9 实测:exec-out ~2.0s/帧 → 流式稳态 **~8ms/帧**(首帧含启动 ~1.3s),分辨率一致、内容差 0.8/255;千问 QA 端到端全流程在流式帧源下跑通、零回退。**S2 已落地**:`DeviceBackend.wait_settled` seam(默认 False=固定 sleep 不变),scrcpy 流上用"quiet 窗口内无新帧即安定"(scrcpy 只在画面变化出帧,无需像素 diff)替换全部四类固定 sleep(step_wait / wait action / blind-step / poll-skip),最坏花满原预算;`RELAY_SETTLE_DETECT`(1)/`RELAY_SETTLE_QUIET`(0.2s)。实测静止屏 0.5s→0.2s、滑动动画正确等到安定。S3(等价性 n=3 对照 + 30 任务墙钟)待跑。
 
@@ -87,7 +93,7 @@
 
 ---
 
-## P3 用户记忆层(~2 周)
+## 🧠 P3 用户记忆层(~2 周)
 
 > **状态(2026-07-08)**:M1–M4 已落地(`agents/flow/user_profile.py`,schema `spec/profile.schema.json`,单测 `tests/test_user_profile.py`)。M1:`${RELAY_PROFILE_ROOT:-~/.relayagent}/profile.yaml`(`RELAY_PROFILE=0` 整层关;损坏文件降级为无 profile + warning)。M2:①合成 prompt 带 profile 摘要(真机验证:"帮我导航回家"直接出 `导航去<家庭地址>`,零 ask_user)②模板槽位抽取带 profile 候选 ③ask_user select_from 预选上次选择(`last_choices` 自动记录用户自己的显式选择)。M3:flow 成功后一次廉价 LLM 提议偏好 → **询问 y/n 才写**(EOF/批量=拒绝);benchmark 强制 `RELAY_PROFILE=0`(token 公平 + 可复现)。M4:`RELAY_TRAJ_REDACT=1` 在全部日志落盘点(agent/flow llm_calls、steps.json、summary.json、flow_report.json、agent_reply.json 日志副本)把 profile 值换成 `<profile:section.key>`;真机泄漏扫描零明文。验收的 10 条隐式偏好任务对照待跑。注意:profile 解析后的值会固化进 plan 缓存(`manifests/_generated/`,已 gitignore),改 profile 后旧缓存需 `--no-cache` 绕过。
 
@@ -101,7 +107,7 @@
 
 ---
 
-## P4 卡片回归 CI + 半自动生成
+## 🃏 P4 卡片回归 CI + 半自动生成
 
 - **C1 卡片健康 CI**(1 周,先做——保护存量资产):夜间逐卡:安装态检查(复用 `check_device_env`)→ 走 entry path 断言可达(`native_runner --max-step` 限步,不发 prompt,零 token);每周全量:逐 capability 发一条 example_prompt 断言 reply 捕获。产出健康表;连续两晚失败自动开 issue(`card_issue` 模板 + `gh` CLI)。硬件起步 = 一台真机 + relay-test AVD(国际 App)。
 - **C2 卡片录制器**(3 周):`scripts/card_recorder.py`——人在真机上手走一遍进入 in-app agent 的路径,录制器旁听 a11y 事件流,把点击序列翻成 entry path 选择器草稿,发探测 prompt 归类 capability,吐出带 `provenance` 骨架的 YAML → 人工修订 → PR。把建卡成本从一天压到一小时,是社区贡献起量的关键杠杆。
@@ -109,7 +115,7 @@
 
 ---
 
-## P5 多平台 / OEM(长线并行,里程碑制)
+## 🌍 P5 多平台 / OEM(长线并行,里程碑制)
 
 - **H1**:HarmonyOS App(`harmony/`)与 `android/` 功能对齐,hdc backend 从骨架变可用;
 - **H2**:iOS WDA backend 跑通一张国际 App 卡(Booking / Copilot 有 iOS 版,`app_ids` 多平台映射机制现成);
@@ -117,7 +123,7 @@
 
 ---
 
-## 执行顺序与全局纪律
+## 📅 执行顺序与全局纪律
 
 ```
 周 1-3   P1 恢复闭环(R0→R4)

@@ -1,10 +1,12 @@
-# RelayAgent Specification
+<h1 align="center">RelayAgent Specification</h1>
 
-**Version:** 0.1 (draft) · breaking changes expected before 1.0 · Apache-2.0
+<p align="center">
+  <b>Version 0.1 (draft) · breaking changes expected before 1.0 · Apache-2.0</b>
+</p>
 
 ---
 
-## 1. Motivation
+## 🎯 1. Motivation
 
 OS-level agents (HarmonyOS Xiaoyi, Apple Intelligence, …) increasingly need to delegate user intents into third-party apps. The two existing paths both fall short: **A2A / App Intents / HMAF** require vendor cooperation that super-apps largely opt out of; **pure GUI agents** drive the full UI surface and are brittle, slow, and legally gray.
 
@@ -12,7 +14,7 @@ This spec defines a third path: a **machine-readable card** describing how an OS
 
 The card is **agent-to-agent**, not agent-to-app. The OS agent does not infer the target app from the prompt; the app is selected explicitly by `app_id`. Once a card is selected, the OS agent picks a capability within it, and the in-app agent — which already holds the user's login, preferences, and context — does the work.
 
-## 2. Scope
+## 📐 2. Scope
 
 A `Card` describes:
 
@@ -23,13 +25,13 @@ A `Card` describes:
 
 A `Card` does **not** describe the host app's general UI graph, internal/private APIs or anything reverse-engineered, or any data the user did not originate.
 
-## 3. File format
+## 📄 3. File format
 
 - One YAML file per host app: `manifests/<reverse-dns-app-id>.yaml`. UTF-8, LF.
 - Top-level keys are fixed; validators MUST reject unknown top-level keys (there is **no** top-level extension point — top-level `x_` keys are invalid).
 - Extension keys **below** the top MUST be `x_`-prefixed and MAY be ignored by conforming SDKs. The schema permits `x_` keys in every nested object, and additionally pins the shape of the extensions the reference adapter consumes (§13.1) — so a misspelled step inside `x_post_result_flow` fails validation instead of being silently dropped.
 
-## 4. Top-level schema
+## 🧱 4. Top-level schema
 
 ```yaml
 spec_version: "0.1"          # required, semver of this SPEC
@@ -46,7 +48,7 @@ provenance: { ... }          # required, §9
 constraints: { ... }         # required, §10
 ```
 
-## 5. `embedded_agent` block
+## 🤖 5. `embedded_agent` block
 
 ```yaml
 embedded_agent:
@@ -61,7 +63,7 @@ embedded_agent:
   output: { ... }                    # optional, §7.1
 ```
 
-## 6. `entry` block
+## 🚪 6. `entry` block
 
 How to reach the embedded agent's input surface from a cold launch.
 
@@ -101,7 +103,7 @@ Ratios are measured against the visible screenshot's width/height and should poi
 
 **Tap-through on non-clickable anchors** is permitted: routers tap the selected node's center (or declared fraction) and touch dispatch propagates to the nearest clickable ancestor. Prefer the most stable visible text anchor over `screen_fraction` whenever a parent clickable region intercepts the touch.
 
-## 7. `invocation` block
+## 💬 7. `invocation` block
 
 ```yaml
 invocation:
@@ -128,7 +130,7 @@ output:
 
 `method: none` is the recommended v0.1 default: hand off and stop (result read-back is out of scope, §13). `copy_button` is a core enum value whose locator lives in the `output.x_copy_button` extension (§13.1). `screen_text_extract` and `accessibility_tree` are **reserved** enum values with no v0.1 semantics (OQ-5).
 
-## 8. `capabilities` block
+## 🧩 8. `capabilities` block
 
 Each capability is a discrete intent. After the card is selected, the router uses `description` + `example_prompts` to pick the best-matching capability.
 
@@ -182,7 +184,7 @@ Rules (validated at load time):
 
 Guarantee boundary: the template fixes *wording / intent routing*; slot **values** are still LLM-extracted and not guaranteed correct. Full conventions: `docs/prompt_template.md`.
 
-## 9. `provenance` block
+## 🧾 9. `provenance` block
 
 ```yaml
 provenance:
@@ -199,7 +201,7 @@ provenance:
 
 Tooling marks a card **stale** if `last_verified` is >90 days old, or (where store version is observable) `verified_app_version` is >2 minor versions behind (both thresholds placeholder, OQ-9). Stale cards MUST still be served, marked stale, and SHOULD NOT be used by routers without an explicit override.
 
-## 10. `constraints` block
+## 📏 10. `constraints` block
 
 ```yaml
 constraints:
@@ -211,13 +213,13 @@ constraints:
     - "First launch triggers location permission dialog; needs pre-handling"
 ```
 
-## 11. Versioning
+## 🔢 11. Versioning
 
 - `spec_version` follows this document. **While at 0.x, the minor version carries breaking changes** (semver 0.x convention).
 - `card_version` is per-card semver: **major** when capability ids are removed/renamed; **minor** when capabilities/fields are added or `entry`/`invocation` steps change behaviorally (e.g. re-pathing after an app update); **patch** for prose, examples, or `provenance`.
 - Routers MUST refuse cards whose `spec_version` major exceeds what they implement; while 0.x, the **minor** version plays that role (a 0.1 router MUST refuse a 0.2 card).
 
-## 12. Conformance
+## ✅ 12. Conformance
 
 A **conforming card** MUST: (1) validate against `spec/schema.json` (normative); (2) have ≥1 capability, each with ≥2 `example_prompts`; (3) set `provenance.last_verified` to a real dated verification; (4) set `handoff_to_user_required: true` for every capability whose terminal action is irreversible or has user-visible cost.
 
@@ -225,7 +227,7 @@ A **conforming router** MUST: (1) pass user prompts to the embedded agent withou
 
 **Enforcement.** Card rules 1–2 are machine-checked — structure by `spec/schema.json` (layer 1), cross-field consistency (filename↔`app_id`, `platforms`↔`verified_os`, `app_ids`↔`app_id`/`platforms`) by `scripts/validate/validate_manifests.py` (layer 2), and `prompt_template` consistency + capability-id uniqueness at load time (layer 3). Card rules 3–4 (rule 4 needs human judgment about irreversibility) and all router rules are enforced by review and by implementations.
 
-## 13. Out of scope for v0.1
+## 🚫 13. Out of scope for v0.1
 
 - **Result read-back** from the in-app agent — routers hand off and stop; cross-app aggregation is deferred (OQ-5).
 - **Multi-turn sessions** — v0.1 is single-shot (OQ-4).
@@ -251,11 +253,11 @@ A **conforming router** MUST: (1) pass user prompts to the embedded agent withou
 - **`entry.x_prepare_fresh_conversation: { description?, steps: [<step>, …] }`** — steps run at each task start (after `open_app`) to clear prior context; disable per-run with `RELAY_FRESH_CONV=0`.
 - **`output.method: copy_button`** (extends §7.1) + **`output.x_copy_button: { text?, screen_fraction?, valid_x?, valid_y? }`** — tap the in-app 复制 button so the answer lands on the clipboard. Locator priority: VLM grounding via `text`, then `screen_fraction`, with `valid_x`/`valid_y` as a sanity filter against mis-grounding.
 
-## 14. Relationship to A2A and MCP
+## 🔗 14. Relationship to A2A and MCP
 
 The spec reuses concepts from Google's **A2A AgentCard** (`name`, `description`, `capabilities`, `skills`) and Anthropic's **MCP** tool descriptors (rich NL descriptions, structured side-effect metadata), for forward compatibility — a future `to_a2a()` projection should be lossless for the fields A2A expresses. Deliberate differences: RelayAgent is **GUI-mediated by default** (the `entry`/`invocation` blocks are its primary contribution, with no A2A analogue), and it forces explicit `executable` / `handoff_to_user_required` flags because in-app agents are partially capable and routing mistakes have user-visible cost.
 
-## 15. Open questions
+## ❓ 15. Open questions
 
 Design questions deferred from v0.1. Reference the id (e.g. `OQ-3`) in issues and PRs; ids are stable and never reused (gaps at OQ-13/14 were merged or closed pre-publication).
 

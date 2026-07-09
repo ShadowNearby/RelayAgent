@@ -1,8 +1,14 @@
-# 支持的参考卡片（MVP 范围，v0.1）
+<h1 align="center">支持的参考卡片</h1>
 
-[English](cards.md)
+<p align="center">
+  <b>MVP 范围 v0.1 —— 10 张已验证的安卓参考卡片，共 50 个声明能力</b>
+</p>
 
-10 张已验证的安卓参考卡片，共 **50 个声明能力**。*卡片类别*（单气泡 TextView vs. 多节点 RecyclerView）决定取回复的策略——见 manifest 约定里的 [`x_capture_full_reply`](manifest_conventions.zh.md#3-x_capture_full_reply-开不开)。
+<p align="center">
+  <a href="cards.md">English</a> | <b>中文</b>
+</p>
+
+10 张已验证的安卓参考卡片，共 **50 个声明能力**。*卡片类别*（单气泡 TextView vs. 多节点 RecyclerView）决定取回复的策略——见 manifest 约定里的 [`x_capture_full_reply`](manifest_conventions.zh.md#-3-x_capture_full_reply-开不开)。
 
 | App | 包名 | 能力 | 卡片类别 |
 | --- | --- | --- | --- |

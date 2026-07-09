@@ -39,11 +39,10 @@ RelayAgent is a mobile agent that completes tasks end-to-end by **delegating sub
 
 ## 📖 About
 
-RelayAgent is built from three pieces:
+RelayAgent is built from two pieces:
 
 - **🧭 A delegation-based execution flow**: Decomposes the main task into app-local subtasks, routes each subtask to the corresponding in-app assistant for execution; when no assistant can complete a subtask, a GUI agent falls back via step-by-step screenshot-driven execution.
 - **📚 Dynamic capability cards (Capability Card)**: Models each in-app assistant as a capability card (a YAML manifest) describing how to invoke it and the boundaries of what it can do, and routes subtasks accordingly.
-- **🧪 RelayBench**: A self-built mobile-side agent test suite of 30 long-horizon daily tasks, focused on apps and capabilities not covered by existing test suites.
 
 ### Compared with API-based approaches and pure GUI agents
 
@@ -63,7 +62,31 @@ RelayAgent is built from three pieces:
   <img src="assets/paper/dele-agent.png" alt="RelayAgent delegation: a capability card supplies a deterministic entry script, the in-app assistant executes the task" width="820">
   <br>
   <em>RelayAgent: delegates the task to the in-app assistant</em>
+  <br><br>
+  <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare.gif" alt="Left: RelayAgent; right: a pure GUI agent" width="820">
+  <br>
+  <em>Left: RelayAgent; right: a pure GUI agent</em>
 </p>
+
+## 🚀 Quick Start
+
+An Android phone with USB debugging enabled (current capability cards only support Google Pixel 9) or an emulator, with the ADB Keyboard IME (`com.android.adbkeyboard/.AdbIME`) installed and enabled. See [device setup](docs/device_setup.md) and [emulator testing](docs/emulator_testing.md).
+
+```bash
+git clone https://github.com/ShadowNearby/RelayAgent.git && cd RelayAgent
+uv venv --python 3.12 && uv sync --no-install-project --extra dev
+cp .env.example .env
+# fill in LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in .env
+uv run python scripts/validate/check_device_env.py    # check the runtime environment
+uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"   # "Order three cups of Mixue peach four-seasons tea"
+```
+
+### Run tests
+
+```bash
+uv run python -m unittest discover -s tests -v            # device-less unit tests
+uv run python scripts/run_benchmark_test.py               # requires a device; runs the end-to-end A/B benchmark (baseline + RelayAgent)
+```
 
 ## 📊 Results
 
@@ -87,29 +110,9 @@ RelayAgent outperforms a pure GUI agent baseline (MobileWorld's `general_e2e`) o
   <em>Task token consumption</em>
 </p>
 
-## 🚀 Quick Start
-
-An Android phone with USB debugging enabled (current capability cards only support Google Pixel 9) or an emulator, with the ADB Keyboard IME (`com.android.adbkeyboard/.AdbIME`) installed and enabled. See [device setup](docs/device_setup.md) and [emulator testing](docs/emulator_testing.md).
-
-```bash
-git clone https://github.com/ShadowNearby/RelayAgent.git && cd RelayAgent
-uv venv --python 3.12 && uv sync --no-install-project --extra dev
-cp .env.example .env
-# fill in LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in .env
-uv run python scripts/validate/check_device_env.py    # check the runtime environment
-uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"   # "Order three cups of Mixue peach four-seasons tea"
-```
-
-### Run tests
-
-```bash
-uv run python -m unittest discover -s tests -v            # device-less unit tests
-uv run python scripts/run_benchmark_test.py               # requires a device; runs the end-to-end A/B benchmark (baseline + RelayAgent)
-```
-
 ## 📱 Android App
 
-The full pipeline — planning, routing, execution, logging — also runs inside a standalone **Android app**, see [`android/`](android/README.en.md).
+The full pipeline — planning, routing, execution, logging — also runs inside a standalone **Android app**, see [`android/`](android/README.en.md); download the app from [Releases](https://github.com/ShadowNearby/RelayAgent/releases).
 
 <p align="center">
   <img src="assets/android/home.png" alt="RelayAgent Android app — chat-style task thread home" width="300">
@@ -123,7 +126,7 @@ The full pipeline — planning, routing, execution, logging — also runs inside
 - [Android App](android/README.en.md)
 - [Roadmap](docs/roadmap.md)
 
-## 📇 Supported reference capability cards
+### 📇 Supported reference capability cards
 
 10 apps · 50 in-app assistant capabilities (Amap, Tongyi Qwen, Ctrip, Gemini, Xiaohongshu, WeChat, WPS, Reddit, Booking.com, Microsoft Copilot). See [docs/cards.md](docs/cards.md) for details.
 

@@ -1,15 +1,20 @@
-# NL cross-app flow architecture
+<h1 align="center">NL Cross-App Flow Architecture</h1>
 
-> 中文版：[`nl_flow.zh.md`](nl_flow.zh.md)
+<p align="center">
+  <b>One NL sentence → an auto-synthesized multi-app plan → execution — the architecture deep-dive</b>
+</p>
 
-> One NL sentence → an auto-synthesized multi-app plan → execution. This doc is the **architecture deep-dive** (synthesis / three-stage routing / validation / execution / leg judge / handoff / route solidification).
+<p align="center">
+  <b>English</b> | <a href="nl_flow.zh.md">中文</a>
+</p>
+
 > For the pipeline, CLI usage, caching, and a real-device worked example, see [`cross_app_planner.md`](cross_app_planner.md).
 >
 > Code: `agents/flow/flow_planner.py` / `agents/flow/flow_runner.py` / `agents/routing/capability_matrix_router.py` / `agents/flow/leg_judge.py` / `agents/routing/route_overlay.py` / `scripts/run_plan.py`.
 
 ---
 
-## 1. Overview
+## 🧭 1. Overview
 
 ```
 NL request
@@ -32,7 +37,7 @@ Key design choices:
 - **Each app step is a fresh subprocess**; we don't reuse one long-lived RelayAgent across apps — plan cursor / chat history are single-card scoped.
 - **The router is bypassed inside the subprocess**: `RELAY_FORCE_CAPABILITY` + `RELAY_INVOCATION_TEXT` make the sub-run skip the routing LLM call and go straight to plan building.
 
-## 2. Plan synthesis (`FlowPlanner.plan`, `_PLANNER_SYSTEM`)
+## 📝 2. Plan synthesis (`FlowPlanner.plan`, `_PLANNER_SYSTEM`)
 
 Input: the full-app catalog produced by `build_catalog()` (each capability's id / description / example_prompts / executable / `handoff_to_user_required` / `x_skip_wait_for_reply`) plus the user's NL.
 
@@ -65,7 +70,7 @@ Output plan (`json` fence, `temperature=0`):
 7. **`foundation_llm` is the general info/knowledge fallback**: information / Q&A / summarization / drafting / lookup tasks that no dedicated capability covers (explaining a GitHub repo, summarizing an arXiv paper, general knowledge) route to a `foundation_llm` capability instead of being declared unsatisfiable.
 8. Return `{"unsatisfiable": true, "reason": "..."}` only when the task **requires a concrete device/app action** no capability provides (posting to a chat platform the catalog lacks, taking a camera photo) **and `foundation_llm` cannot stand in**.
 
-## 3. Three-stage routing (`capability_matrix_router.route`)
+## 🚦 3. Three-stage routing (`capability_matrix_router.route`)
 
 The reusable version of the single-app NL routing strategy. `docs/app_capability_matrix.csv` is the **source of truth for cap × app membership**; the catalog is only an availability check (drops matrix entries pointing at a now-missing (app,cap) pair).
 
@@ -82,7 +87,7 @@ The reusable version of the single-app NL routing strategy. `docs/app_capability
 
 > **Locale policy**: the goal sentence defaults to the chosen app's first locale language; only switch if the user explicitly asks; preserve proper nouns/addresses/etc. All three stages carry this.
 
-## 4. Filling the prompt after routing (`_route_one_step`)
+## 🧩 4. Filling the prompt after routing (`_route_one_step`)
 
 The entry first computes and stamps `step["x_route_key"]` (the normalized-prompt sha1, fed to the §9 solidification loop; it reuses an already-persisted key to avoid drift on a cache re-run) and passes `route_key`+`overlay` to the router. Only after routing is the capability — and thus which template applies — known, so the prompt is filled here:
 
@@ -91,7 +96,7 @@ The entry first computes and stamps `step["x_route_key"]` (the normalized-prompt
 
 Full prompt-template mechanism: [`prompt_template.md`](prompt_template.md).
 
-## 5. Local validation + LLM repair (`_validate` → `_repair`)
+## ✅ 5. Local validation + LLM repair (`_validate` → `_repair`)
 
 After synthesis (incl. routing) we run local validation. What it checks:
 
@@ -106,7 +111,7 @@ After synthesis (incl. routing) we run local validation. What it checks:
 
 The routing phase also cleans up: `_drop_unused_no_reply_binds` (strip a decorative `bind`/`extract` on a no-reply step that nothing downstream references) and `_refresh_apps_required` (rebuild `apps_required` from the actual routing result).
 
-## 6. Execution (`FlowRunner.run`)
+## ⚙️ 6. Execution (`FlowRunner.run`)
 
 Steps run in order; the blackboard `self.bb` starts empty and grows with each step's bind. `render()` does `{var}`/`{var.field}` substitution (missing key → `''`).
 
@@ -135,7 +140,7 @@ Failure taxonomy (`R0`): `env_fail` (subprocess died before the run loop — dev
 
 **Extract (`_extract`):** runs a text-only chat completion against the same `.env` endpoint, parsing the previous leg's reply into fenced JSON; `bind_to_array_key` pulls one key out of the result object.
 
-## 7. Leg judge (`leg_judge.py`, semantic outcome check)
+## ⚖️ 7. Leg judge (`leg_judge.py`, semantic outcome check)
 
 A **leg** is one native-runner sub-run pinned to one app + one capability. The hard signals in `flow_runner` (crash / empty reply / non-terminal state) only catch **overt** failures — they can't tell a confidently-wrong answer from a correct one.
 
@@ -146,12 +151,12 @@ A **leg** is one native-runner sub-run pinned to one app + one capability. The h
 - **Best-effort**: any error (no frames / LLM down / unparseable) returns `UNKNOWN` (`judged=False`). **The caller must never let a judge failure abort the flow** — surface it (per CLAUDE.md fallback policy) and move on. `LegVerdict.score` (1.0/0.0/-1.0) is persisted to `leg_verdict.json` next to the leg trajectory. `RELAY_LEG_JUDGE=0` disables it.
 - **Folds back into the table**: after the verdict is written, `_judge_leg` calls `overlay.record(step["x_route_key"], ..., verdict.status)`, folding it into the route-solidification loop (§9). This is the **only** writer of the table, reuses the existing verdict, and adds no LLM calls.
 
-## 8. Phase-A / Phase-B handoff
+## 🤝 8. Phase-A / Phase-B handoff
 
 - **Phase A (current)**: handoff at flow granularity — a handoff leg is followed by a flow-level `ask_user`, then a **fresh** leg consumes the answer. In-app session state is lost, so the follow-up leg must re-state the full intent.
 - **Phase B (TODO, commented in `flow_runner`)**: same-session handoff round-trip. When a leg carries `resume:true`, don't close stdin with EOF — keep the subprocess alive and wire a flow⇄agent channel (fifo/file) so the in-app agent's handoff ask_user blocks on the answer and resumes `predict()` in the **same conversation**, preserving in-app state.
 
-## 9. Route solidification (route overlay, trace-guided)
+## 📌 9. Route solidification (route overlay, trace-guided)
 
 Turns the §7 leg verdict from "log only" into an input to the router: an `(intent → app/capability)` decision the judge repeatedly confirms `success` is **solidified into a table lookup** so the next time the same intent shows up the router returns it with zero LLM calls; one that keeps `failure`-ing is auto-invalidated and falls back to the three stages. Code in `agents/routing/route_overlay.py`, store at `traj_logs/route_overlay.json` (a git-ignored **learned, non-authoritative** artifact; the matrix CSV stays the source of truth, and promoting high-confidence entries back into it is a separate human-reviewed step).
 
@@ -194,7 +199,7 @@ route(route_key, overlay):                            end of _judge_leg:
 
 **Switches / thresholds**: `RELAY_ROUTE_OVERLAY` (default 1) / `RELAY_ROUTE_OVERLAY_PATH` / `RELAY_ROUTE_KEY_MODE` (default `b`) / `RELAY_ROUTE_SOLIDIFY_HITS` (3) / `RELAY_ROUTE_SOLIDIFY_RATE` (0.8) / `RELAY_ROUTE_MAX_FAILS` (2) / `RELAY_PROMOTE_MIN_HITS` (5) / `RELAY_PROMOTE_MIN_RATE` (0.9).
 
-## 10. MobileWorld fallback (when no capability covers a leg)
+## 🛟 10. MobileWorld fallback (when no capability covers a leg)
 
 RA's routing rests on a **hand-maintained manifest + capability matrix**. When a leg (or the whole request) is **covered by no app/capability**, rather than give up, hand it to **MobileWorld's `general_e2e`** — a **manifest-free general end-to-end UI agent** that opens apps and navigates from the current screen to accomplish any goal (the fork is already pinned as the `mobile-world` dependency in `pyproject.toml`, installed under `.venv/.../mobile_world/`).
 

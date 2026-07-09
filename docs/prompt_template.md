@@ -1,15 +1,16 @@
-# Templated submit prompt for the in-app agent (`prompt_template`)
+<h1 align="center">Templated Submit Prompt (prompt_template)</h1>
 
-> 中文版：[`prompt_template.zh.md`](prompt_template.zh.md)
+<p align="center">
+  <b>Fix the wording sent to an in-app agent with a per-capability template — the LLM only extracts slots</b>
+</p>
 
-> In one line: the wording submitted to an in-app agent is fixed by a
-> **per-capability template**; the LLM only **extracts slots**. This swaps the
-> hard-to-catch "phrasing drift" failure surface for the verifiable
-> "slot extraction" one.
+<p align="center">
+  <b>English</b> | <a href="prompt_template.zh.md">中文</a>
+</p>
 
 ---
 
-## 1. What it solves
+## 🎯 1. What it solves
 
 The prompt sent to an in-app agent used to be **freely synthesized** by
 `FlowPlanner`'s LLM (`_PLANNER_SYSTEM`), then run through
@@ -38,7 +39,7 @@ and lets the LLM extract only `place`. Benefits:
 > guarantee is "submitted wording / intent routing is determined", not
 > "submitted content is correct".
 
-## 2. Manifest schema (core spec fields)
+## 📄 2. Manifest schema (core spec fields)
 
 Attached to a capability, **no `x_` prefix** (promoted to core spec fields):
 
@@ -90,7 +91,7 @@ Seeds: Gemini `live_navigation` = `Navigate to {place}[ by {mode}].` (required
 structured capabilities (food ordering / ticketing / alarms) can be added
 incrementally with the same pattern, no code change needed.
 
-## 3. Where it plugs in (`agents/flow/flow_planner.py`)
+## 🔌 3. Where it plugs in (`agents/flow/flow_planner.py`)
 
 Data flow: `FlowPlanner.plan()` LLM synthesizes a free prompt →
 `resolve_app_routes()` routes each step to app+capability → **fill** →
@@ -149,7 +150,7 @@ slot never used, a **required** slot that sits only inside a `[...]` segment
 unbalanced/nested brackets. This pulls authoring mistakes forward from "the
 executed step trips `PromptTemplateError`" to load time.
 
-## 4. Design decisions
+## ⚖️ 4. Design decisions
 
 | Decision | Choice | Rationale |
 | --- | --- | --- |
@@ -158,14 +159,14 @@ executed step trips `PromptTemplateError`" to load time.
 | planner system prompt | **Unchanged** | The planner doesn't yet know the routing result, so it can't know which step gets a template; the extractor pulls values from the synthesized prompt — zero planner change, lowest risk |
 | `example_prompts` | **Kept** | Few-shot fallback when no template is present |
 
-## 5. TODO
+## 🚧 5. TODO
 
 - **Nested optional segments**: `_OPT_SEGMENT_RE` matches only non-nested
   `[...]`, so `[a[b]]` is unsupported. Flat segments cover current needs.
 - Once the template mechanism is proposed into a formal card spec version,
   consider bumping each manifest's `spec_version`.
 
-## 6. Verification
+## ✅ 6. Verification
 
 ```bash
 # Deterministic string (no LLM phrasing jitter)

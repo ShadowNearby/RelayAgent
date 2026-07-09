@@ -39,18 +39,17 @@ RelayAgent 是一个移动端 Agent：它通过把子任务**委派给 App 内�
 
 ## 📖 简介
 
-RelayAgent 由三个部分组成：
+RelayAgent 由两个部分组成：
 
 - **🧭 基于委派的核心执行流**： 将主任务分解为 App 内可完成的子任务，每个子任务路由给相应 App 内置助手执行；若无助手可完成，则由 GUI Agent 通过逐步截图/执行的方式来兜底。
 - **📚 动态能力卡（Capability Card）**： 将 App 内置助手建模为能力卡（YAML manifest），描述调用方式与能力边界，并据此进行子任务的路由。
-- **🧪 RelayBench**： 一个自建的移动侧 Agent 测试集，包含 30 个长时序日常任务，重点覆盖现有测试集未涉及的 App 及其功能。
 
 ### 与 API 方案和纯 GUI Agent 方案的对比
 
 |  | 厂商 API<br>(A2A / App Intents / AppFunctions) | 纯 GUI Agent<br>(Mobile-Agent、AppAgent…) | RelayAgent（本项目） |
 | --- | --- | --- | --- |
-| 谁来做任务 | App 暴露的 API | 由 Agent 驱动的用户模拟行为 | App 内置助手 + 由 Agent 驱动的用户模拟行为 |
-| 需要厂商配合 | 必须 | 不需要 | 不需要 |
+| 任务执行 | App 暴露的 API | 由 Agent 驱动的用户模拟行为 | App 内置助手 + 由 Agent 驱动的用户模拟行为 |
+| 厂商配合 | 必须 | 不需要 | 不需要 |
 | 覆盖面 | 窄（只有已发布的接口） | 任意 App | 任意 App |
 | 速度 | 快 | 慢 | 较快 |
 | Token 成本 | 无 | 高 | 低 |
@@ -63,7 +62,31 @@ RelayAgent 由三个部分组成：
   <img src="assets/paper/dele-agent.png" alt="RelayAgent 委派：能力卡给出确定性入口脚本，App 内置助手执行任务" width="820">
   <br>
   <em>RelayAgent：将任务委派给 App 内置助手</em>
+  <br><br>
+  <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare.gif" alt="左：RelayAgent；右：纯 GUI Agent" width="820">
+  <br>
+  <em>左：RelayAgent；右：纯 GUI Agent</em>
 </p>
+
+## 🚀 快速开始
+
+开启 USB 调试的安卓手机（当前能力卡仅支持 Google Pixel 9）或模拟器，需安装并启用 ADB Keyboard 输入法（`com.android.adbkeyboard/.AdbIME`）。详见 [真机配置](docs/device_setup.zh.md) 和 [模拟器测试](docs/emulator_testing.zh.md)。
+
+```bash
+git clone https://github.com/ShadowNearby/RelayAgent.git && cd RelayAgent
+uv venv --python 3.12 && uv sync --no-install-project --extra dev
+cp .env.example .env
+# 修改 .env 中的 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
+uv run python scripts/validate/check_device_env.py    # 检查运行环境
+uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"
+```
+
+### 运行测试
+
+```bash
+uv run python -m unittest discover -s tests -v            # 无设备；单元测试
+uv run python scripts/run_benchmark_test.py               # 有设备；运行端到端测试，包含 Baseline 和 RelayAgent
+```
 
 ## 📊 测试结果
 
@@ -87,29 +110,9 @@ RelayAgent 在三个测试集（AndroidDaily、MobileWorld、RelayBench）上均
   <em>任务 token 消耗</em>
 </p>
 
-## 🚀 快速开始
-
-开启 USB 调试的安卓手机（当前能力卡仅支持 Google Pixel 9）或模拟器，需安装并启用 ADB Keyboard 输入法（`com.android.adbkeyboard/.AdbIME`）。详见 [真机配置](docs/device_setup.zh.md) 和 [模拟器测试](docs/emulator_testing.zh.md)。
-
-```bash
-git clone https://github.com/ShadowNearby/RelayAgent.git && cd RelayAgent
-uv venv --python 3.12 && uv sync --no-install-project --extra dev
-cp .env.example .env
-# 修改 .env 中的 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
-uv run python scripts/validate/check_device_env.py    # 检查运行环境
-uv run python scripts/run_plan.py --yes "帮我点三杯蜜雪冰城蜜桃四季春"
-```
-
-### 运行测试
-
-```bash
-uv run python -m unittest discover -s tests -v            # 无设备；单元测试
-uv run python scripts/run_benchmark_test.py               # 有设备；运行端到端测试，包含 Baseline 和 RelayAgent
-```
-
 ## 📱 Android App
 
-将规划、路由、执行、日志全流程运行在**Android App** 里，见 [`android/`](android/README.md)。
+将规划、路由、执行、日志全流程运行在**Android App** 里，见 [`android/`](android/README.md)，在[`Release`](https://github.com/ShadowNearby/RelayAgent/releases)中下载 App。
 
 <p align="center">
   <img src="assets/android/home_zh.png" alt="RelayAgent Android App 会话式任务流首页" width="300">
@@ -123,7 +126,7 @@ uv run python scripts/run_benchmark_test.py               # 有设备；运行�
 - [Android App](android/README.md)
 - [路线图](docs/roadmap.zh.md)
 
-## 📇 支持的参考能力卡片
+### 📇 支持的参考能力卡片
 
 10 个 App · 50 个 App 内置助手能力（高德、通义千问、携程、Gemini、小红书、微信、WPS、Reddit、Booking.com、Microsoft Copilot）。详见 [docs/cards.zh.md](docs/cards.zh.md)。
 

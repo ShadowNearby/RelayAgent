@@ -1,15 +1,20 @@
-# Capability Taxonomy
+<h1 align="center">Capability Taxonomy</h1>
 
-## Foundation
+<p align="center">
+  <b>34 capability ids across 9 domains, each with a test example</b>
+</p>
 
+<p align="center">
+  <b>English</b> | <a href="capability_taxonomy.zh.md">中文</a>
+</p>
+
+## 🧠 Foundation
 
 | #   | ID             | Capability                                                                                                                                                                                                                                                       | Test example                                                                |
 | --- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | 1   | foundation_llm | Foundation LLM capability — QA, rewriting, translation, summarization, retrieval, outline generation, extraction, filtering, sorting, comparison, dedup, conflict detection, numeric computation & format conversion, and public-web lookups (GitHub repos/issues, securities/finance, weather) | What will the weather be like in Hong Kong tomorrow? |
 
-
-## Maps & travel
-
+## 🗺️ Maps & travel
 
 | #   | ID                | Capability                                                                  | Test example                                                                                                            |
 | --- | ----------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -19,9 +24,7 @@
 | 5   | hail_ride         | Ride hailing                                                                | Help hail an economy ride from People's Square in Shanghai to the Shanghai Science and Technology Museum.                |
 | 6   | plan_trip         | Travel itinerary planning (= POI + route + ticketing + hotel + attractions) | Plan a 3-day Chengdu itinerary with attractions, routes, dining, and hotel-area suggestions.                            |
 
-
-## Ticketing & booking
-
+## 🎫 Ticketing & booking
 
 | #   | ID               | Capability                                | Test example                                                                                      |
 | --- | ---------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -30,9 +33,7 @@
 | 9   | book_hotel       | Hotels — search / book                    | Search hotels near the Bund in Shanghai for tomorrow night under 500 RMB, list 3 options.         |
 | 10  | book_movie_event | Movie / event tickets — search / purchase | Search tonight's movie showtimes in Shanghai for Star Wars with two adjacent seats.               |
 
-
-## E-commerce
-
+## 🛒 E-commerce
 
 | #   | ID                | Capability                                                 | Test example                                                                                             |
 | --- | ----------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -41,9 +42,7 @@
 | 13  | order_food        | Food ordering                                              | Order three Mixue peach oolong drinks with default ice and sugar.                                        |
 | 14  | track_order       | Order / logistics / after-sales status                     | Check the logistics status of my most recent keyboard order.                                             |
 
-
-## Calendar & reminders
-
+## 📅 Calendar & reminders
 
 | #   | ID                 | Capability                                              | Test example                                                                                             |
 | --- | ------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -51,9 +50,7 @@
 | 16  | write_calendar     | Calendar — write (create / modify / delete)             | Create a removable test calendar event tomorrow at 10:00 AM titled 'RelayAgent test' lasting 30 minutes. |
 | 17  | set_alarm_reminder | Alarm / reminder setting                                | Set a test reminder for 9:00 PM tonight: drink water.                                                    |
 
-
-## Communication
-
+## ✉️ Communication
 
 | #   | ID              | Capability                                 | Test example                                                                                                                      |
 | --- | --------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -64,9 +61,7 @@
 | 22  | lookup_contacts | Contacts lookup & natural-name resolution  | Look up the phone number and email for the contact 'Alex Wang'.                                                                   |
 | 23  | phone_call      | Phone call                                 | Prepare to call the contact 'Alex Zhang'.                                                                                         |
 
-
-## Files & office
-
+## 📁 Files & office
 
 | #   | ID                 | Capability                                      | Test example                                                                                                 |
 | --- | ------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -80,17 +75,13 @@
 | 31  | read_task          | Tasks — read                                    | List my incomplete tasks due this week.                                                                      |
 | 32  | write_task         | Tasks — write                                   | Add a task 'Submit report' due tomorrow.                                                                     |
 
-
-## Vertical lookup
-
+## 🔎 Vertical lookup
 
 | #   | ID                      | Capability                           | Test example                                                                                                         |
 | --- | ----------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | 33  | search_vertical_content | App-specific vertical content search | Search within the current app for 'hidden bookstores in Shanghai' and list the 3 most relevant results with sources. |
 
-
-## System
-
+## ⚙️ System
 
 | #   | ID                      | Capability                 | Test example                                                                             |
 | --- | ----------------------- | -------------------------- | ---------------------------------------------------------------------------------------- |

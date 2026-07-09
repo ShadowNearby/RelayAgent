@@ -1,12 +1,17 @@
-# Device-Side Test Environment (Device Setup)
+<h1 align="center">Device Setup</h1>
 
-> 中文: [`device_setup.zh.md`](device_setup.zh.md)
+<p align="center">
+  <b>What the device side needs before running RelayAgent (single-app debugging / NL flow / A/B benchmark)</b>
+</p>
 
-> What the device side needs before running RelayAgent (single-app debugging / NL flow / A/B benchmark).
+<p align="center">
+  <b>English</b> | <a href="device_setup.zh.md">中文</a>
+</p>
+
 > One-shot health check: `uv run python scripts/validate/check_device_env.py [--benchmark relaybench|androiddaily|mobileworld|all]` (exit code 0 when nothing FAILs).
 > For the emulator (no real device) path see [`emulator_testing.md`](emulator_testing.md).
 
-## 1. Host side
+## 💻 1. Host side
 
 | Item | Requirement |
 | --- | --- |
@@ -15,7 +20,7 @@
 | LLM endpoint | `.env` with `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` |
 | MobileWorld (only for the A/B baseline / MW-fallback legs) | `third_party/MobileWorld` symlinked to a sibling checkout (machine-local, see [`mobileworld_real_device.md`](mobileworld_real_device.md)); otherwise the git snapshot pinned in pyproject is used |
 
-## 2. Device requirements (identical for real device and emulator)
+## 📱 2. Device requirements (identical for real device and emulator)
 
 | Item | Requirement | Notes |
 | --- | --- | --- |
@@ -27,7 +32,7 @@
 | Stay awake | `settings put global stay_on_while_plugged_in 7` | prevents mid-task lock screens |
 | Locale / network | Chinese vertical apps want a zh system locale + mainland network; Gemini / Copilot / Reddit / Booking need international network + Google services (GMS) | a dual-stack network setup is easiest |
 
-## 3. App requirements (by use case)
+## 📦 3. App requirements (by use case)
 
 ### 3.1 Core: the 10 manifest apps (all covered-tier gains live here)
 
@@ -64,13 +69,13 @@ MW tasks run inside **MobileWorld's own app environment** (Mail, Messages, Masto
 - `MCP-*` tasks (40) are tool-calls, not real GUI; excluded via `--skip-mcp`.
 - Taodian (the toy e-commerce app) fails on real devices for both systems (risk control); Phase B records both-fail.
 
-## 4. State hygiene before benchmark runs
+## 🧹 4. State hygiene before benchmark runs
 
 - **Cold-launch before every app open** (`am force-stop` + monkey LAUNCHER; the runner does this automatically) — do not pre-open apps by hand and leave warm state.
 - `kill_all_apps()` hard reset between tasks (force-stop all running third-party packages + HOME) so a previous task's chat thread / half-finished order can't leak into the next.
 - Fairness switches (forced by `run_benchmark_test.py` by default): `RELAY_ROUTE_OVERLAY=0`, `RELAY_STEP_LOG=0`, `RELAY_CAPTURE_FULL_REPLY=0`, relay runs `--no-cache`. See [`evaluation.md`](evaluation.md) §8.
 
-## 5. Quick reference
+## ⚡ 5. Quick reference
 
 ```bash
 # Health check (core checks + are the 10 manifest apps installed)

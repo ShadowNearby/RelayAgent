@@ -1,10 +1,14 @@
-# Security Policy
+<h1 align="center">Security Policy</h1>
 
-## Reporting
+<p align="center">
+  <b>Private vulnerability reporting and scope for RelayAgent</b>
+</p>
+
+## 🚨 Reporting
 
 Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/ShadowNearby/RelayAgent/security/advisories/new) — **not** a public issue. Include repro steps, the affected component (host runtime / Android app / a specific card), and the impact. Expect a first response within a week.
 
-## In scope
+## 🎯 In scope
 
 RelayAgent drives real, logged-in apps on a real device, so beyond classic code-execution bugs we especially care about:
 
@@ -12,7 +16,7 @@ RelayAgent drives real, logged-in apps on a real device, so beyond classic code-
 - **Prompt / manifest injection** — a crafted card, cached plan, or in-app reply that makes the runtime act outside the declared capability.
 - **Credential leakage** — `.env` / LLM keys or Android config leaking into trajectory logs, `steps/` screenshots, or crash output.
 
-## Out of scope
+## 🚫 Out of scope
 
 - Bugs in the third-party apps the cards describe (report to the vendor).
 - In-app agents' own model behavior (wrong or hallucinated answers).

@@ -1,6 +1,12 @@
-# Device backends — multi-platform abstraction
+<h1 align="center">Device Backends</h1>
 
-中文版: [`device_backends.zh.md`](device_backends.zh.md)
+<p align="center">
+  <b>All device I/O goes through one seam — agents/device/: Android (adb) implemented, iOS / HarmonyOS skeletons</b>
+</p>
+
+<p align="center">
+  <b>English</b> | <a href="device_backends.zh.md">中文</a>
+</p>
 
 All device I/O goes through one seam: **`agents/device/`**. Code above it
 (runtime loop, RelayAgent, scripts) never composes adb/WDA/hdc commands
@@ -25,7 +31,7 @@ from agents.device import get_backend
 backend = get_backend()
 ```
 
-## Selecting platform and device
+## 🎛️ Selecting platform and device
 
 | Env | Default | Meaning |
 | --- | --- | --- |
@@ -34,7 +40,7 @@ backend = get_backend()
 | `RELAY_VENDOR_PROFILE` | unset | Path to a JSON overlay adding vendor permission-controller packages / Allow labels (see `vendor_profiles.py`). |
 | `RELAY_CROP_TOP` / `RELAY_CROP_BOTTOM` | `0.08` / `0.18` | Status-bar / input-bar crop ratios used by the reply scrape and the screenshot-region hash. |
 
-## Normalized accessibility tree: `UINode`
+## 🌳 Normalized accessibility tree: `UINode`
 
 `backend.dump_ui_tree()` returns a flat `list[UINode]` in document order —
 consumers (grounding, text hash, reply scrape, permission dismiss,
@@ -52,7 +58,7 @@ consumers (grounding, text hash, reply scrape, permission dismiss,
 `UINode.center` is the tap point; it returns `None` for absent or
 zero-area bounds (consumers rely on this as the visibility filter).
 
-## Capability mapping
+## 🗺️ Capability mapping
 
 | DeviceBackend | Android (adb) | iOS (WebDriverAgent) | HarmonyOS NEXT (hdc) |
 | --- | --- | --- | --- |
@@ -72,7 +78,7 @@ zero-area bounds (consumers rely on this as the visibility filter).
 
 TBV = to be verified on a real device.
 
-## iOS prerequisites (when implementing)
+## 🍎 iOS prerequisites (when implementing)
 
 Mac + Xcode (to build & sign WebDriverAgent with a developer account) +
 iPhone with developer mode. WDA runs as an XCUITest on the phone; the
@@ -84,7 +90,7 @@ selectors — prefer `accessibility_id`/`text` over `resource_id`;
 `scripts/validate/validate_manifests.py` warns on Android-only selectors in cards
 that declare ios).
 
-## Multi-device runs
+## 🔀 Multi-device runs
 
 Per-leg/task subprocesses are the isolation boundary: drivers put
 `RELAY_ANDROID_SERIAL` into each child's env (this is how

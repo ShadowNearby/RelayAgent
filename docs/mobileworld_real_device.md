@@ -1,14 +1,15 @@
-# 用 MobileWorld 跑真机测试
+<h1 align="center">用 MobileWorld 跑真机测试</h1>
 
-记录如何用 **MobileWorld** 通过 ADB 驱动真机，
-以 **`.env` 中 LLM env（`LLM_BASE_URL`）的 qwen** 作为 agent 大脑，跑一个临时目标（如让 Google Maps 导航）。
+<p align="center">
+  <b>用 MobileWorld 经 ADB 直驱真机，以 .env 的 qwen 作为 agent 大脑跑任意自然语言目标</b>
+</p>
 
 > MobileWorld 已从 RelayAgent 主仓库移除（见项目记忆「Dropped MobileWorld」），
 > 它是一个 Docker 模拟器上的 benchmark（201 个预定义任务 + 评测器）。
 > 但它的 **real-device 模式** 可以直接用 ADB 驱动物理机跑**任意自然语言目标**，
 > 不需要预先写 task 类——这正是录对比视频要用的入口。
 
-## 前置条件
+## ✅ 前置条件
 
 - 物理 Android 机 USB 连接，已开 USB 调试（`adb devices` 能看到 `device`）。
 - 已装 ADB platform-tools。
@@ -21,7 +22,7 @@
 - 目标 app 已装在机上（本机 Pixel 9 已装 `com.google.android.apps.maps`）。
 - 多设备时用 `RELAY_ANDROID_SERIAL` / `ANDROID_SERIAL` 选设备。
 
-## 凭证（`.env` 中的 LLM env，qwen）
+## 🔑 凭证（`.env` 中的 LLM env，qwen）
 
 复用 RelayAgent 的 `.env`（**别提交、别复述完整 key**）：
 
@@ -32,7 +33,7 @@
 | `--api_key` | `.env` 里的 `LLM_API_KEY` |
 | `--agent-type` | `general_e2e`（qwen-3.5 适用，相对坐标 0–1000） |
 
-## 步骤
+## 🚀 步骤
 
 ```bash
 cd RelayAgent
@@ -89,7 +90,7 @@ uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Ma
 goal 仍写完整意图（"Live navigate to the Bund by Google Map"），agent 会在 app 内
 搜索 + 起导航，不受预开影响。
 
-## 实时看屏 / 录屏
+## 🎥 实时看屏 / 录屏
 
 - 看实时设备画面：`uv run mw device`。
 - 录屏默认不开启；给脚本加 `--record` 后会自动分段 `adb screenrecord`，任务结束时结束当前分段并用
@@ -115,7 +116,7 @@ uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Ma
 > `adb screenrecord` 单段上限 180s；脚本会循环分段录制。若本机没有 `ffmpeg`，会保留
 > `chunk_*.mp4` 和 `concat.txt`，不做合并。
 
-## 实测示例（2026-06-07 已跑通）
+## 📱 实测示例（2026-06-07 已跑通）
 
 | 项 | 值 |
 | --- | --- |
@@ -127,7 +128,7 @@ uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Ma
 
 对照：**不预开、从桌面起**那次，agent 卡在 `scroll up` 死循环烧到 step 9 没进 app —— 故必须预开。
 
-## 模型 / 坐标系参考
+## 🧭 模型 / 坐标系参考
 
 `docs/real-devices.md`（MobileWorld 仓库内）的对照表：
 
@@ -138,7 +139,7 @@ uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Ma
 | Claude Opus/Sonnet | `general_e2e` | 绝对像素（Sonnet 需 resize 到 1280×720） |
 | Seed-2.0-Pro | `seed_agent` | 相对 0–1000 |
 
-## 注意
+## 📌 注意
 
 - 这是真机直驱，会真实改设备状态（起导航、定位等）。导航类目标依赖设备真实 GPS / 网络；
   在国内需保证 Google 服务可达。

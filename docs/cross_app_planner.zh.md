@@ -1,14 +1,18 @@
-# 自动跨 App 规划器（`run_plan.py` / `FlowPlanner`）
+<h1 align="center">自动跨 App 规划器</h1>
 
-> English: [`cross_app_planner.md`](cross_app_planner.md)
+<p align="center">
+  <b>一句自然语言 → LLM 自动合成跨 App plan → 校验 → 落盘 → 预览确认 → 真机执行</b>
+</p>
 
-> 一句自然语言 → LLM **自动合成**一条跨 App 的 plan → 校验 → 落盘 → 预览确认 → 真机执行。
->
+<p align="center">
+  <a href="cross_app_planner.md">English</a> | <b>中文</b>
+</p>
+
 > 与已有入口的关系：`run_plan.py` 现在是自然语言入口；指定 App 的直跑用 `python -m agents.runtime.native_runner`。
 
 ---
 
-## 1. 它解决什么
+## 🎯 1. 它解决什么
 
 原来的单 App NL router 只能把一句话路由到**单个** app + capability，无法把跨 App 目标拆解成多 app 步骤序列。给一句横跨多个 app 的指令时，它会回落到单 app 或选错。
 
@@ -16,7 +20,7 @@
 
 ---
 
-## 2. 流水线
+## 🔁 2. 流水线
 
 ```
 一句话
@@ -50,7 +54,7 @@
 
 ---
 
-## 3. 生成的 plan schema
+## 📄 3. 生成的 plan schema
 
 输出是一条 flow plan，直接喂给 `FlowRunner`。**没有 `inputs` 块**——句子是具体的，字面值直接烤进 step 的 `prompt`；leg 间数据流用 `extract` / `bind` / `{var}`。
 
@@ -95,7 +99,7 @@ steps: [ ... ]
 
 ---
 
-## 4. 规划器规则（写进 system prompt）
+## 📏 4. 规划器规则（写进 system prompt）
 
 `FlowPlanner._PLANNER_SYSTEM` 给模型的硬约束：
 
@@ -111,7 +115,7 @@ steps: [ ... ]
 
 ---
 
-## 5. 本地校验
+## ✅ 5. 本地校验
 
 `FlowPlanner._validate()` 在执行前挡住坏 plan（返回错误清单，空 = 通过）：
 
@@ -126,7 +130,7 @@ steps: [ ... ]
 
 ---
 
-## 6. handoff 往返：先 A 后 B
+## 🤝 6. handoff 往返：先 A 后 B
 
 "`handoff_to_user` 后要能 switch 回 agent" 分两个粒度，本版落地 A、给 B 留缝：
 
@@ -137,7 +141,7 @@ steps: [ ... ]
 
 ---
 
-## 7. 缓存
+## 🗃️ 7. 缓存
 
 - **落盘**：校验通过的 plan 写 `manifests/_generated/<slug>_<hash8>.yaml`，内含 `source_request`（归一化后的原句）。
 - **复用**：规划前扫 `_generated/`，**`source_request` 归一化后精确相等**就直接复用那份（仍走预览 + 确认，不再调 LLM）。`--no-cache` 跳过。
@@ -145,7 +149,7 @@ steps: [ ... ]
 
 ---
 
-## 8. 用法
+## 🚀 8. 用法
 
 ```bash
 # 基本：合成 → 预览 → 询问 y/N → 执行
@@ -190,7 +194,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 ---
 
-## 9. 已知局限 / TODO
+## 🚧 9. 已知局限 / TODO
 
 | 项 | 状态 | 位置 |
 | --- | --- | --- |
@@ -202,7 +206,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 ---
 
-## 10. 一次真机实跑（worked example）
+## 📱 10. 一次真机实跑（worked example）
 
 输入：`"在上海找三家评价好的小众书店，挑一家打车过去"`（Pixel 9，`--yes`，stdin `</dev/null`）。
 
@@ -224,7 +228,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 ---
 
-## 11. 改动说明（本次引入）
+## 📝 11. 改动说明（本次引入）
 
 新增"自动合成跨 App plan"这一层，全部改动如下。
 

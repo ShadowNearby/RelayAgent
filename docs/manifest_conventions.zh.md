@@ -1,17 +1,22 @@
-# Manifest 约定
+<h1 align="center">Manifest 约定</h1>
 
-> English: [`manifest_conventions.md`](manifest_conventions.md)
+<p align="center">
+  <b>manifest 该怎么写：语言约定、prompt_template、x_capture_full_reply、卡片 swipe 方向、capability 关键字段</b>
+</p>
 
-> manifest 该怎么写：语言约定、`prompt_template`、`x_capture_full_reply`、卡片 `swipe` 方向、capability 关键字段。
+<p align="center">
+  <a href="manifest_conventions.md">English</a> | <b>中文</b>
+</p>
+
 > manifest 的规范字段定义见 [`SPEC.md`](../SPEC.md)；`prompt_template` 细节见 [`prompt_template.zh.md`](prompt_template.zh.md)。
 
 ---
 
-## 1. 语言约定
+## 🌐 1. 语言约定
 
 **manifest 用对应 App 的语言写**：英文 App（如 `com.google.android.apps.bard`）的 manifest desc/注释用英文；中文 App（如 `com.autonavi.minimap`）用中文。`prompt_template`/`prompt_slots.desc` 同样按 App 目标 locale 写。
 
-## 2. `prompt_template` —— 模板化 submit prompt
+## 🧩 2. `prompt_template` —— 模板化 submit prompt
 
 结构化能力（导航/订票/闹钟等）可声明 capability 级 `prompt_template`（+`prompt_slots`），把发给 in-app agent 的措辞固化，LLM 只抽槽位（`temperature=0`），避免措辞漂移让 App 端意图路由跑偏。
 
@@ -22,7 +27,7 @@
 
 完整规格、数据流、填充步骤、设计取舍见 [`prompt_template.zh.md`](prompt_template.zh.md)（English: [`prompt_template.md`](prompt_template.md)）。
 
-## 3. `x_capture_full_reply` 开不开？
+## 📜 3. `x_capture_full_reply` 开不开？
 
 口诀：**single TextView ⇒ 不开；RecyclerView 多节点 ⇒ 开**。判断法：触发回复后 `adb shell uiautomator dump`——1 个长 TextView(>200字)→single-bubble；多个中等节点按卡片排→multi-node。
 
@@ -32,7 +37,7 @@
 
 **Scroll 幅度** `swipe_down(ratio=0.5)`（clamp `[0.1, 0.5]`），`RELAY_CAPTURE_SCROLL_RATIO` 覆写（同样 clamp ≤0.5）。大→省 VLM 但 seam 丢词；小→重叠多更稳。chunks 按捕获顺序拼接。
 
-## 4. 卡片 `swipe` → scroll 动作（含方向反转）
+## 👆 4. 卡片 `swipe` → scroll 动作（含方向反转）
 
 manifest 里的 `swipe: <direction>` 按 **scroll / 内容移动方向** 写，**不按手指滑动方向**写。它经 `action_planner` 编成逻辑 `swipe` step，`_materialize` 发成 `scroll` 动作，`NativeEnv._dispatch` 对 up/down 做反转后再落底层 adb 手势：
 
@@ -40,7 +45,7 @@ manifest 里的 `swipe: <direction>` 按 **scroll / 内容移动方向** 写，*
 - `swipe: down` → `scroll(direction="down")` → 内容下移/视觉向下滚 → 底层实际手势是**手指向上滑**。
 - `left`/`right` 目前不反转。写卡片统一按 scroll 语义思考。
 
-## 5. capability 关键字段（路由 / flow 相关）
+## 🔑 5. capability 关键字段（路由 / flow 相关）
 
 | 字段 | 作用 |
 | --- | --- |
