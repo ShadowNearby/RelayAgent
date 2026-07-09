@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/PRs-welcome-red.svg" alt="PRs welcome">
 </p>
 
-Mobile agents usually automate apps through **vendor APIs** (MCP, A2A, App Intents) or low-level **GUI actions** (Mobile-Agent, AppAgent, AutoGLM). RelayAgent explores a **third substrate**: the **in-app AI assistants** that popular apps already ship — already holding the user's login, address, and payment context. It decomposes a request into app-local subtasks, **delegates each to a suitable assistant via a natural-language instruction**, orchestrates the results across apps, and **falls back to GUI control** where no assistant covers a subtask — so coverage is never worse than a pure GUI agent.
+RelayAgent is a mobile agent that automates tasks by **delegating each subtask to the in-app AI assistant an app already ships** — reusing the user's existing login and context — and falling back to GUI control only where no assistant covers the task.
 
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent architecture: a natural-language request is decomposed into subtasks, each delegated to a suitable in-app assistant" width="820">

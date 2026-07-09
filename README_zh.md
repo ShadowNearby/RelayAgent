@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/PRs-welcome-red.svg" alt="PRs welcome">
 </p>
 
-移动智能体自动化 App 通常走两条路：**厂商 API**（MCP、A2A、App Intents）或底层 **GUI 动作**（Mobile-Agent、AppAgent、AutoGLM）。RelayAgent 探索**第三种载体**：主流 App **本就内置的 AI 助手**——它们**已经持有用户的登录、地址、支付上下文**。RelayAgent 把请求分解成 App 内子任务，**用一句自然语言把每个子任务委派给合适的内置助手**，把结果在多个 App 之间编排；没有助手覆盖的子任务则**回落到 GUI 控制**——所以覆盖面永远不差于纯 GUI 智能体。
+RelayAgent 是一个移动智能体：它把每个子任务**委派给 App 本就内置的 AI 助手**（复用用户已有的登录与上下文），只有在没有助手覆盖时才回落到 GUI 控制。
 
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent 架构：一条自然语言请求被分解为子任务，每个子任务委派给合适的 App 内置助手" width="820">
