@@ -71,10 +71,10 @@ RelayAgent 由两个部分组成：
   <img src="assets/paper/dele-agent.png" alt="RelayAgent 委派：能力卡片给出确定性入口脚本，App 内置助手执行任务" width="820">
   <br>
   <em>RelayAgent：将任务委派给 App 内置助手</em>
-  <br><br>
+  <!-- <br><br>
   <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare.gif" alt="左：RelayAgent；右：纯 GUI Agent" width="820">
   <br>
-  <em>左：RelayAgent；右：纯 GUI Agent</em>
+  <em>左：RelayAgent；右：纯 GUI Agent</em> -->
 </p>
 
 ## 🚀 快速开始
