@@ -1,7 +1,7 @@
 <h1 align="center">RelayAgent</h1>
 
 <p align="center">
-  <b>Mobile Task Automation by Delegating Subtasks to In-App AI Assistants</b>
+  <b>RelayAgent is a mobile agent that decomposes a user request into subtasks, then **delegates them to in-app AI assistants** (e.g. Qwen's assistant, Xiaohongshu's Dot, WeChat's AI assistant, Google Gemini) to complete the full request.</b>
 </p>
 
 <p align="center">
@@ -21,8 +21,6 @@
   <img src="https://img.shields.io/badge/SPEC-v0.1-green.svg" alt="SPEC v0.1">
   <img src="https://img.shields.io/badge/PRs-welcome-red.svg" alt="PRs welcome">
 </p>
-
-RelayAgent is a mobile agent that completes tasks end-to-end by **delegating subtasks to in-app assistants** (e.g. Qwen's assistant, Xiaohongshu's Dot, WeChat's AI assistant).
 
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent architecture: a natural-language request is decomposed into subtasks, each delegated to a suitable in-app assistant" width="820">

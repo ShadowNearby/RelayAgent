@@ -1,7 +1,7 @@
 <h1 align="center">RelayAgent</h1>
 
 <p align="center">
-  <b>通过将子任务委派给 App 内置助手，实现移动端的任务自动化</b>
+  <b>RelayAgent 是一个移动端 Agent：它将用户请求分解为子任务，然后**委派给 App 内置助手**（In-App AI Assistant，例如千问助手、小红书点点、微信 AI 助手、Google Gemini）来完成整个用户请求。</b>
 </p>
 
 <p align="center">
@@ -22,8 +22,6 @@
   <img src="https://img.shields.io/badge/PRs-welcome-red.svg" alt="PRs welcome">
 </p>
 
-RelayAgent 是一个移动端 Agent：它通过把子任务**委派给 App 内置助手**（In-App AI Assistant，例如千问助手、小红书点点、微信 AI 助手）来完成整个任务。
-
 <p align="center">
   <img src="assets/paper/arch.png" alt="RelayAgent 架构：一条自然语言请求被分解为子任务，每个子任务委派给合适的 App 内置助手" width="820">
   <br>
@@ -42,7 +40,7 @@ RelayAgent 是一个移动端 Agent：它通过把子任务**委派给 App 内�
 RelayAgent 由两个部分组成：
 
 - **🧭 基于委派的核心执行流**： 将主任务分解为 App 内可完成的子任务，每个子任务路由给相应 App 内置助手执行；若无助手可完成，则由 GUI Agent 通过逐步截图/执行的方式来兜底。
-- **📚 动态能力卡（Capability Card）**： 将 App 内置助手建模为能力卡（YAML manifest），描述调用方式与能力边界，并据此进行子任务的路由。
+- **📚 动态能力卡片（Capability Card）**： 将 App 内置助手建模为能力卡片（YAML manifest），描述调用方式与能力边界，并据此进行子任务的路由。
 
 ### 与 API 方案和纯 GUI Agent 方案的对比
 
@@ -59,7 +57,7 @@ RelayAgent 由两个部分组成：
   <br>
   <em>纯 GUI Agent：每步一次截图 + VLM 往返</em>
   <br><br>
-  <img src="assets/paper/dele-agent.png" alt="RelayAgent 委派：能力卡给出确定性入口脚本，App 内置助手执行任务" width="820">
+  <img src="assets/paper/dele-agent.png" alt="RelayAgent 委派：能力卡片给出确定性入口脚本，App 内置助手执行任务" width="820">
   <br>
   <em>RelayAgent：将任务委派给 App 内置助手</em>
   <br><br>
@@ -70,7 +68,7 @@ RelayAgent 由两个部分组成：
 
 ## 🚀 快速开始
 
-开启 USB 调试的安卓手机（当前能力卡仅支持 Google Pixel 9）或模拟器，需安装并启用 ADB Keyboard 输入法（`com.android.adbkeyboard/.AdbIME`）。详见 [真机配置](docs/device_setup.zh.md) 和 [模拟器测试](docs/emulator_testing.zh.md)。
+开启 USB 调试的安卓手机（当前能力卡片仅支持 Google Pixel 9）或模拟器，需安装并启用 ADB Keyboard 输入法（`com.android.adbkeyboard/.AdbIME`）。详见 [真机配置](docs/device_setup.zh.md) 和 [模拟器测试](docs/emulator_testing.zh.md)。
 
 ```bash
 git clone https://github.com/ShadowNearby/RelayAgent.git && cd RelayAgent
