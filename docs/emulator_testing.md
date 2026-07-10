@@ -26,7 +26,7 @@ uv run python -m unittest discover -s tests -v                                  
 | --- | --- |
 | Runtime smoke (screenshots, uiautomator, AdbKeyboard input, gestures, cold-launch) | ✅ fully — a green `check_device_env.py` is the gate |
 | International app cards (Gemini / Copilot / Reddit / Booking) | ✅ needs a **Play Store image** + signed-in accounts; Gemini also needs a device-side Google account |
-| Chinese vertical apps (Qwen / Amap / Ctrip / WeChat / Xiaohongshu / WPS) | ❌ **unusable on x86_64**: ARM-only, crash at launch under translation (WeChat measured SIGSEGV, see §8.1). **Covered-tier evaluation requires a real device** (or an ARM64 host + arm64 image) |
+| Chinese vertical apps (Qwen / Amap / Ctrip / WeChat / RedNote / WPS) | ❌ **unusable on x86_64**: ARM-only, crash at launch under translation (WeChat measured SIGSEGV, see §8.1). **Covered-tier evaluation requires a real device** (or an ARM64 host + arm64 image) |
 | MobileWorld benchmark | ✅ upstream MobileWorld is an emulator environment in the first place (ships its own Mail/Mastodon/Files apps + seeded data); the real-device setup is our extension (see [`mobileworld_real_device.md`](mobileworld_real_device.md)) |
 
 Installing ARM-only Chinese apps on an x86_64 image relies on ARM translation (built-in from API 30+), but native-heavy apps (WeChat etc.) crash under it — see §8.1 for measurements. arm64-v8a images on Apple Silicon / ARM hosts avoid this.
@@ -126,7 +126,7 @@ Fill the LLM gateway in the app's Settings page (same three values as `.env`); t
 
 The manifest has 10 apps in two source classes. **Bottom line: the x86_64 emulator is only good for installing international apps; ARM-only Chinese apps install but cannot run.**
 
-### 8.1 The 6 Chinese apps (WeChat/Tongyi/Amap/Ctrip/WPS/Xiaohongshu) — unusable on x86_64 ❌
+### 8.1 The 6 Chinese apps (WeChat/Tongyi/Amap/Ctrip/WPS/RedNote) — unusable on x86_64 ❌
 
 These are **ARM-only** (vendors ship no x86 build). Even with `libndk_translation.so` (ARM→x86 translation) present, **native-heavy apps crash at launch**:
 

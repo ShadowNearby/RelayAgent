@@ -8,7 +8,7 @@ locale: ["zh-CN"]
 embedded_agent:
   name: "点点"
   description: >
-    点点 — Xiaohongshu's in-app AI assistant. RAG-over-UGC conversational
+    点点 — RedNote's in-app AI assistant. RAG-over-UGC conversational
     helper for lifestyle discovery: trip planning, "种草" summarization,
     local-life recommendations. Replies are structured chat messages with
     embedded note/POI cards (title, address, hours, photos, map).
@@ -57,7 +57,7 @@ embedded_agent:
 
     - id: poi_nearby_search
       description: >
-        Nearby POI and local-life discovery through Xiaohongshu 点点. Use for
+        Nearby POI and local-life discovery through RedNote 点点. Use for
         cafes, restaurants, attractions, stores, photo spots, parent-child
         venues, and other lifestyle places represented by UGC note or POI
         cards. It does not book, order, or start navigation.
@@ -81,7 +81,7 @@ embedded_agent:
 
     - id: search_vertical_content
       description: >
-        App-specific vertical content search over Xiaohongshu UGC notes.
+        App-specific vertical content search over RedNote UGC notes.
         Use for lifestyle discovery across travel, parenting, fashion, food,
         learning, fitness, beauty, and local探店: tips, recommendations,
         guides, 种草 summaries, and light itinerary ideas. Reply renders as

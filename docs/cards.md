@@ -16,7 +16,7 @@ Ten verified Android reference cards, **50 declared capabilities** total. *Card 
 | Tongyi Qwen (通义千问) | com.aliyun.tongyi | foundation_llm, train/ride/food/hotel/movie booking, product search/purchase/order tracking | mixed |
 | Ctrip (携程旅行) | ctrip.android.view | flights, hotels, trains, attractions, package tours | mixed |
 | Gemini | com.google.android.apps.bard | foundation_llm, public-web retrieval, Google-service read/write when authorized | mixed |
-| Xiaohongshu (小红书) | com.xingin.xhs | community UGC Q&A via AI search | multi-node |
+| RedNote (小红书) | com.xingin.xhs | community UGC Q&A via AI search | multi-node |
 | WeChat (微信) | com.tencent.mm | Yuanbao chat surface, AI search | mixed |
 | WPS Office | cn.wps.moffice_eng | AI doc / PPT / writing assist | single-bubble |
 | Reddit | com.reddit.frontpage | Reddit Ask vertical community search and summarization | multi-node |

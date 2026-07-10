@@ -45,7 +45,7 @@ Instead of ranking benchmarks, **stratify within each benchmark** (criterion: th
 - **mixed**: MW legs mixed with non-MW legs. `plan_summary.json["mw_fallback"]` reports MW share for this tier (and globally): task-level `task_touch_rate`, leg-level `mw_leg_rate`, per-mixed-task `mixed_task_mw_ratios`.
 - **invalid / error**: illegal plan / network etc. (with MW fallback enabled, unsatisfiable / repair-exhausted plans convert to MW, so invalid is now nearly empty).
 
-RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, Xiaohongshu, WPS, Booking, Reddit, Gemini, Copilot. **The gains concentrate in these apps** — the covered stratification deliberately exposes where the gains come from, closing the cherry-pick objection.
+RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, RedNote, WPS, Booking, Reddit, Gemini, Copilot. **The gains concentrate in these apps** — the covered stratification deliberately exposes where the gains come from, closing the cherry-pick objection.
 
 ## 📐 5. Metrics
 

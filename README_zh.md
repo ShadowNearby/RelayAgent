@@ -31,12 +31,12 @@
 <table width="100%">
 <tr>
 <td align="center" valign="top" width="50%">
-  <video src="https://github.com/user-attachments/assets/8975678a-be1b-477e-bbf9-cfa73b196af0" width="100%" autoplay loop muted playsinline></video>
+  <video src="https://github.com/user-attachments/assets/8975678a-be1b-477e-bbf9-cfa73b196af0" width="410" autoplay loop muted playsinline></video>
   <br>
   <em><b>搜索附近高分餐厅并打车前往</b><br>小红书 → 高德地图</em>
 </td>
 <td align="center" valign="top" width="50%">
-  <video src="https://github.com/user-attachments/assets/c8d74345-b090-4eaf-9bb5-e750069641cb" width="100%" autoplay loop muted playsinline></video>
+  <video src="https://github.com/user-attachments/assets/c8d74345-b090-4eaf-9bb5-e750069641cb" width="410" autoplay loop muted playsinline></video>
   <br>
   <em><b>点三杯蜜雪冰城蜜桃四季春</b><br>→ 千问助手下单，停在支付页</em>
 </td>

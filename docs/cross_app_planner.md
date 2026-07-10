@@ -213,7 +213,7 @@ Input: `"在上海找三家评价好的小众书店，挑一家打车过去"` (P
 The synthesized plan:
 
 ```
-1. [agent]    Xiaohongshu / qa_community_knowledge  →  extract → bind bookstore_list
+1. [agent]    RedNote / qa_community_knowledge  →  extract → bind bookstore_list
 2. [ask_user] pick 1 from bookstore_list            →  bind selected_bookstore
 3. [agent]    Amap / hail_ride (terminal handoff)
 ```

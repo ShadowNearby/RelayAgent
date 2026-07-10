@@ -10,7 +10,7 @@
 
 OS-level agents (HarmonyOS Xiaoyi, Apple Intelligence, …) increasingly need to delegate user intents into third-party apps. The two existing paths both fall short: **A2A / App Intents / HMAF** require vendor cooperation that super-apps largely opt out of; **pure GUI agents** drive the full UI surface and are brittle, slow, and legally gray.
 
-This spec defines a third path: a **machine-readable card** describing how an OS agent hands a natural-language task to an explicitly selected app's **own embedded agent** (Amap's AI tab, Yuanbao in WeChat, Xiaohongshu's AI search, …) via a minimal GUI-mediated entry — a short tap sequence to the in-app agent's input field.
+This spec defines a third path: a **machine-readable card** describing how an OS agent hands a natural-language task to an explicitly selected app's **own embedded agent** (Amap's AI tab, Yuanbao in WeChat, RedNote's AI search, …) via a minimal GUI-mediated entry — a short tap sequence to the in-app agent's input field.
 
 The card is **agent-to-agent**, not agent-to-app. The OS agent does not infer the target app from the prompt; the app is selected explicitly by `app_id`. Once a card is selected, the OS agent picks a capability within it, and the in-app agent — which already holds the user's login, preferences, and context — does the work.
 

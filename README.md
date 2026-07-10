@@ -1,7 +1,7 @@
 <h1 align="center">RelayAgent</h1>
 
 <p align="center">
-  <b>RelayAgent is a mobile agent that decomposes a user request into subtasks, then **delegates them to in-app AI assistants** (e.g. Qwen's assistant, Xiaohongshu's Dot, WeChat's AI assistant, Google Gemini) to complete the full request.</b>
+  <b>RelayAgent is a mobile agent that decomposes a user request into subtasks, then **delegates them to in-app AI assistants** (e.g. Qwen's assistant, RedNote's Dot, WeChat's AI assistant, Google Gemini) to complete the full request.</b>
 </p>
 
 <p align="center">
@@ -31,14 +31,14 @@
 <table width="100%">
 <tr>
 <td align="center" valign="top" width="50%">
-  <video src="https://github.com/user-attachments/assets/a1d22ac5-675f-4738-b5d7-090dd3dfef29" width="100%" autoplay loop muted playsinline></video>
+  <video src="https://github.com/user-attachments/assets/a1d22ac5-675f-4738-b5d7-090dd3dfef29" width="410" autoplay loop muted playsinline></video>
   <br>
-  <em><b>Search a nearby restaurant &amp; hail a ride</b><br>Xiaohongshu → Amap</em>
+  <em><b>Search a nearby restaurant &amp; hail a ride</b><br>RedNote → Amap</em>
 </td>
 <td align="center" valign="top" width="50%">
-  <video src="https://github.com/user-attachments/assets/bd0cb278-255b-4f6c-b1eb-1e42c143263f" width="100%" autoplay loop muted playsinline></video>
+  <video src="https://github.com/user-attachments/assets/bd0cb278-255b-4f6c-b1eb-1e42c143263f" width="410" autoplay loop muted playsinline></video>
   <br>
-  <em><b>Order three cups of Mixue</b><br>→ Qwen's in-app assistant, stops at payment</em>
+  <em><b>Order three cups of Mixue</b><br>→ Qwen's in-app assistant</em>
 </td>
 </tr>
 </table>
@@ -137,7 +137,7 @@ The full pipeline — planning, routing, execution, logging — also runs inside
 
 ### 📇 Supported reference capability cards
 
-10 apps · 50 in-app assistant capabilities (Amap, Tongyi Qwen, Ctrip, Gemini, Xiaohongshu, WeChat, WPS, Reddit, Booking.com, Microsoft Copilot). See [docs/cards.md](docs/cards.md) for details.
+10 apps · 50 in-app assistant capabilities (Amap, Tongyi Qwen, Ctrip, Gemini, RedNote, WeChat, WPS, Reddit, Booking.com, Microsoft Copilot). See [docs/cards.md](docs/cards.md) for details.
 
 ## 📚 Citation
 

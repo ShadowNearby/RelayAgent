@@ -44,7 +44,7 @@ Every benchmark's covered tier routes into the embedded agents of these 10 apps 
 | Amap | com.autonavi.minimap | signed in + location permission (ride hailing needs real-name / payment binding) |
 | Ctrip | ctrip.android.view | signed in |
 | WeChat | com.tencent.mm | signed in (Yuanbao / AI-search entry) |
-| Xiaohongshu | com.xingin.xhs | signed in (Diandian AI search) |
+| RedNote | com.xingin.xhs | signed in (Diandian AI search) |
 | WPS Office | cn.wps.moffice_eng | signed in (AI doc/PPT) |
 | Gemini | com.google.android.apps.bard | Google account + GMS + international network |
 | Microsoft Copilot | com.microsoft.copilot | Microsoft account + international network |
@@ -60,7 +60,7 @@ Only the 10 apps from §3.1 (the suite is designed around them, balanced at 4–
 ### 3.3 AndroidDaily (235 tasks; the real-device A/B runs only the 71 covered)
 
 - **Covered subset (71 tasks)**: instructions name Taobao/Eleme etc., but RA routes them into manifest apps (e.g. Taobao shopping → Qwen, same fulfillment backend) → still only §3.1.
-- **MW-fallback tier (143 tasks, if run end-to-end on device)**: needs the native apps the tasks name. Top by frequency: Taobao (15), Ctrip (14), WeChat (14), Meituan (12), Amap (11), Railway 12306 (10), Xiaohongshu (9), Weibo (9), Qunar (9), Fliggy (8), JD (8), Pinduoduo (7), Bilibili, Douyin, Didi, Eleme, Dianping, NetEase Music, QQ Music, Zhihu… (70+ apps total — see the「APP名称」column of `benchmark/androiddaily_task_info.csv`). All need signed-in state.
+- **MW-fallback tier (143 tasks, if run end-to-end on device)**: needs the native apps the tasks name. Top by frequency: Taobao (15), Ctrip (14), WeChat (14), Meituan (12), Amap (11), Railway 12306 (10), RedNote (9), Weibo (9), Qunar (9), Fliggy (8), JD (8), Pinduoduo (7), Bilibili, Douyin, Didi, Eleme, Dianping, NetEase Music, QQ Music, Zhihu… (70+ apps total — see the「APP名称」column of `benchmark/androiddaily_task_info.csv`). All need signed-in state.
 
 ### 3.4 MobileWorld (201 → 161 after `--skip-mcp`)
 
