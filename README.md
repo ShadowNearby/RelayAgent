@@ -30,13 +30,13 @@
 <p align="center">
 <table width="100%">
 <tr>
-<td align="left" valign="top" width="50%">
-  <video src="https://github.com/user-attachments/assets/a1d22ac5-675f-4738-b5d7-090dd3dfef29" width="280" autoplay loop muted playsinline></video>
+<td align="center" valign="top" width="50%">
+  <video src="https://github.com/user-attachments/assets/a1d22ac5-675f-4738-b5d7-090dd3dfef29" width="100%" autoplay loop muted playsinline></video>
   <br>
   <em><b>Search a nearby restaurant &amp; hail a ride</b><br>Xiaohongshu → Amap</em>
 </td>
-<td align="right" valign="top" width="50%">
-  <video src="https://github.com/user-attachments/assets/bd0cb278-255b-4f6c-b1eb-1e42c143263f" width="280" autoplay loop muted playsinline></video>
+<td align="center" valign="top" width="50%">
+  <video src="https://github.com/user-attachments/assets/bd0cb278-255b-4f6c-b1eb-1e42c143263f" width="100%" autoplay loop muted playsinline></video>
   <br>
   <em><b>Order three cups of Mixue</b><br>→ Qwen's in-app assistant, stops at payment</em>
 </td>
