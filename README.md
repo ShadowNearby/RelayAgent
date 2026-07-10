@@ -38,7 +38,7 @@
 <td align="center" valign="top" width="50%">
   <video src="https://github.com/user-attachments/assets/6934bcda-2de9-4167-9fd2-4a87e673151d" width="410" autoplay loop muted playsinline></video>
   <br>
-  <em><b>Order three cups of Mixue</b><br>→ Qwen's in-app assistant</em>
+  <em><b>Order three cups of Mixue</b><br>→ Qwen</em>
 </td>
 </tr>
 </table>

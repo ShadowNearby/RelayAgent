@@ -38,7 +38,7 @@
 <td align="center" valign="top" width="50%">
   <video src="https://github.com/user-attachments/assets/bd3a50fc-7d0c-40ee-b38d-0f7cb23469a7" width="410" autoplay loop muted playsinline></video>
   <br>
-  <em><b>点三杯蜜雪冰城蜜桃四季春</b><br>→ 千问助手下单</em>
+  <em><b>点三杯蜜雪冰城蜜桃四季春</b><br>→ 千问助手</em>
 </td>
 </tr>
 </table>
