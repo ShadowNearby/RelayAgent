@@ -156,7 +156,7 @@ If you find RelayAgent useful, please cite the paper and this repository:
 ## 🙏 Acknowledgements
 
 - [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld) (Tongyi MAI) — one of the test suites used, and the source of the GUI agent baseline.
-- **AndroidDaily** — one of the test suites used.
+- [**AndroidDaily**](https://huggingface.co/datasets/stepfun-ai/AndroidDaily) (stepfun-ai) — one of the test suites used.
 
 ## 📄 License
 

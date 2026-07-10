@@ -156,7 +156,7 @@ RelayAgent 在三个测试集（AndroidDaily、MobileWorld、RelayBench）上均
 ## 🙏 致谢
 
 - [**MobileWorld**](https://github.com/Tongyi-MAI/MobileWorld)（Tongyi MAI）—— 所用测试集之一，也是 GUI Agent Baseline 的来源。
-- **AndroidDaily** —— 所采用的测试集之一。
+- [**AndroidDaily**](https://huggingface.co/datasets/stepfun-ai/AndroidDaily)（stepfun-ai）—— 所采用的测试集之一。
 
 ## 📄 License
 
