@@ -1,7 +1,7 @@
 <h1 align="center">RelayAgent</h1>
 
 <p align="center">
-  <b>RelayAgent 是一个移动端 Agent：它将用户请求分解为子任务，然后**委派给 App 内置助手**（In-App AI Assistant，例如千问助手、小红书点点、微信 AI 助手、Google Gemini）来完成整个用户请求。</b>
+  <b>RelayAgent 是一个移动端 Agent：它将用户请求分解为子任务，然后委派给 App 内置助手（In-App AI Assistant，例如千问助手、小红书点点、微信 AI 助手、Google Gemini）来完成整个用户请求。</b>
 </p>
 
 <p align="center">

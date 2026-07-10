@@ -1,7 +1,7 @@
 <h1 align="center">RelayAgent</h1>
 
 <p align="center">
-  <b>RelayAgent is a mobile agent that decomposes a user request into subtasks, then **delegates them to in-app AI assistants** (e.g. Qwen's assistant, RedNote's Dot, WeChat's AI assistant, Google Gemini) to complete the full request.</b>
+  <b>RelayAgent is a mobile agent that decomposes a user request into subtasks, then delegates them to in-app AI assistants (e.g. Qwen's assistant, RedNote's Dot, WeChat's AI assistant, Google Gemini) to complete the full request.</b>
 </p>
 
 <p align="center">
