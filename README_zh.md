@@ -28,9 +28,20 @@
   <em>RelayAgent 架构：先将任务拆解，再把每个子任务委派给对应的 App 内置助手</em>
 </p>
 <p align="center">
-  <img src="assets/RelayAgentDemoFlow/RelayAgentDemoFlow.gif" alt="跨 App 委派：小红书「点点」助手推荐餐厅，用户选定后由高德地图助手规划路线并打车前往" width="320">
+<table>
+<tr>
+<td align="center" valign="top" width="50%">
+  <video src="https://github.com/user-attachments/assets/8975678a-be1b-477e-bbf9-cfa73b196af0" width="280" autoplay loop muted playsinline></video>
   <br>
-  <em><b>例如：搜索附近高分餐厅并打车前往</b><br><b>1. 找一家高分的附近餐厅</b> → 小红书「点点」助手搜索并推荐附近餐厅<br><b>2. 打车前往</b> → 高德地图助手规划路线并打车</em>
+  <em><b>搜索附近高分餐厅并打车前往</b><br>小红书 → 高德地图</em>
+</td>
+<td align="center" valign="top" width="50%">
+  <video src="https://github.com/user-attachments/assets/c8d74345-b090-4eaf-9bb5-e750069641cb" width="280" autoplay loop muted playsinline></video>
+  <br>
+  <em><b>点三杯蜜雪冰城蜜桃四季春</b><br>→ 千问助手下单，停在支付页</em>
+</td>
+</tr>
+</table>
 </p>
 
 ---

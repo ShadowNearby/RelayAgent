@@ -28,9 +28,20 @@
   <em>RelayAgent architecture: the task is first decomposed, then each subtask is delegated to the corresponding in-app assistant.</em>
 </p>
 <p align="center">
-  <img src="assets/RelayAgentDemoFlow/RelayAgentDemoFlow.gif" alt="Cross-app delegation: Xiaohongshu's Dot assistant recommends restaurants, then Amap's assistant plans a route and hails a ride once the user picks one" width="320">
+<table>
+<tr>
+<td align="center" valign="top" width="50%">
+  <video src="https://github.com/user-attachments/assets/a1d22ac5-675f-4738-b5d7-090dd3dfef29" width="280" autoplay loop muted playsinline></video>
   <br>
-  <em><b>e.g. Search a nearby top-rated restaurant and hail a ride there</b><br><b>1. Find a top-rated nearby restaurant</b> → Xiaohongshu's Dot assistant searches and recommends nearby restaurants<br><b>2. Hail a ride there</b> → Amap's assistant plans the route and hails a ride</em>
+  <em><b>Search a nearby restaurant &amp; hail a ride</b><br>Xiaohongshu → Amap</em>
+</td>
+<td align="center" valign="top" width="50%">
+  <video src="https://github.com/user-attachments/assets/bd0cb278-255b-4f6c-b1eb-1e42c143263f" width="280" autoplay loop muted playsinline></video>
+  <br>
+  <em><b>Order three cups of Mixue</b><br>→ Qwen's in-app assistant, stops at payment</em>
+</td>
+</tr>
+</table>
 </p>
 
 ---
@@ -60,10 +71,10 @@ RelayAgent is built from two pieces:
   <img src="assets/paper/dele-agent.png" alt="RelayAgent delegation: a capability card supplies a deterministic entry script, the in-app assistant executes the task" width="820">
   <br>
   <em>RelayAgent: delegates the task to the in-app assistant</em>
-  <br><br>
-  <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare.gif" alt="Left: RelayAgent; right: a pure GUI agent" width="820">
+  <!-- <br><br>
+  <img src="assets/RelayAgentDemoCompare/RelayAgentDemoCompare_EN.gif" alt="Left: RelayAgent; right: a pure GUI agent" width="820">
   <br>
-  <em>Left: RelayAgent; right: a pure GUI agent</em>
+  <em>Left: RelayAgent; right: a pure GUI agent</em> -->
 </p>
 
 ## 🚀 Quick Start
