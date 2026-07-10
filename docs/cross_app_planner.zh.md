@@ -228,29 +228,7 @@ uv run python scripts/run_plan.py "..." -- --step_wait_time 0.3
 
 ---
 
-## 📝 11. 改动说明（本次引入）
-
-新增"自动合成跨 App plan"这一层，全部改动如下。
-
-**新增**
-
-| 文件 | 内容 |
-| --- | --- |
-| `agents/flow/flow_planner.py` | `FlowPlanner`：catalog → system prompt → LLM → fenced JSON → 路由 + 校验（`_validate`）+ LLM repair（`_repair`，≤3 轮）。`PlanValidationError` 携带错误清单。 |
-| `scripts/run_plan.py` | CLI 入口：精确串缓存 / 合成 / 落盘 / 预览 / 确认 / 录屏 / 派发 `FlowRunner`。flag：`--dry-run` `--yes` `--no-cache` `--record` `-- <透传>`。 |
-| `manifests/_generated/.gitignore` | 把生成的 plan / 缓存排除出版本库，只保留 `.gitignore` 自身。 |
-| `docs/cross_app_planner.zh.md` | 本文档。 |
-
-**修改**
-
-| 文件 | 改动 |
-| --- | --- |
-| `agents/flow/flow_runner.py` | ① `# TODO(phase-B):` 缝注释（`stdin=DEVNULL` 处）。② `_traj_stem()`：traj 目录名时间在前、再接 plan 涉及的 app——`<ts>_plan_<app1>_<app2>…`——而非冗长的 NL-slug 文件名。 |
-| `agents/agent/relay_agent.py` | handoff 分支加 `# TODO(phase-B):` 缝注释（不改逻辑）。 |
-| `CLAUDE.md` | `跑测试` 加 run_plan 入口；新增"自动跨 App 规划"速览节并指向本文档；"三个→四个入口脚本"。 |
-| `README_zh.md` | scripts 目录清单加 run_plan；`自然语言入口` 后加"自动合成跨 App plan"小节。 |
-
-**设计决策记录（为什么这么做）**
+## 📝 11. 设计决策
 
 - **静态一次性规划**而非逐步/ReAct：复用现有 `FlowRunner`，改动最小、可立即落地；代价是 leg 输出异常不自适应。
 - **独立 `run_plan.py`** 作为 NL flow 入口：单 App 请求变成 1-step plan，多 App 请求也走同一条执行路径。

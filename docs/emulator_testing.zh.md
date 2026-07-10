@@ -33,7 +33,7 @@ x86_64 镜像装 ARM-only 的国内 App 依赖 ARM 转译（API 30+ 自带），
 
 ## 🛠️ 3. 搭一台 AVD
 
-> **本仓库开发期使用的参考配置**：AVD `relay-test`（**android-36.0-Baklava（Android 16）/ google_apis_playstore / x86_64，pixel_9 档位 1080x2424**），KVM 加速，冷启动 ~15s，serial `emulator-5554`。选 **playstore 镜像**是为了能从 Play 商店官方装国际 App（见 §7）。`sdkmanager`/`avdmanager`/`emulator` 都需要 `JAVA_HOME`（snap Android Studio 的 JBR 即可：`export JAVA_HOME=/snap/android-studio/current/jbr`）。
+> **本仓库开发期使用的参考配置**：AVD `relay-test`（**android-36.0-Baklava（Android 16）/ google_apis_playstore / x86_64，pixel_9 档位 1080x2424**），KVM 加速，冷启动 ~15s，serial `emulator-5554`。选 **playstore 镜像**是为了能从 Play 商店官方装国际 App（见 §8）。`sdkmanager`/`avdmanager`/`emulator` 都需要 `JAVA_HOME`（snap Android Studio 的 JBR 即可：`export JAVA_HOME=/snap/android-studio/current/jbr`）。
 
 ```bash
 # 1) 装 SDK 命令行工具后（JAVA_HOME 见上）：
@@ -50,7 +50,7 @@ adb wait-for-device
 # 停止：adb -s emulator-5554 emu kill
 ```
 
-> 镜像选型：**playstore** 镜像能官方装国际 App，但 system 分区只读、拿不到 `adb root`；要 `adb root`（侧载、改 system）就换 `google_apis`（非 playstore）镜像。两种都自带 `libndk_translation.so`（ARM 转译），但见 §7 的硬限制。
+> 镜像选型：**playstore** 镜像能官方装国际 App，但 system 分区只读、拿不到 `adb root`；要 `adb root`（侧载、改 system）就换 `google_apis`（非 playstore）镜像。两种都自带 `libndk_translation.so`（ARM 转译），但见 §8 的硬限制。
 
 ## 📱 4. 设备侧准备（与真机一致）
 
@@ -91,7 +91,7 @@ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 SDL_VIDEODRIVER=wayland
   scrcpy -s emulator-5554 --window-title "relay-test AVD"
 ```
 
-**远程机器（默认走这条；本仓库约定的观察方式）**——scrcpy 装在本地有屏幕的机器上，视频流经 SSH 隧道连到跑模拟器的服务器（下面记作 `user@emulator-host`）。
+**远程机器**（模拟器跑在服务器上时）——scrcpy 装在本地有屏幕的机器上，视频流经 SSH 隧道连到跑模拟器的服务器（下面记作 `user@emulator-host`）。
 
 ```bash
 # 方案 B（首选，scrcpy 官方做法，单 adb server）：隧道服务器的 adb server + 视频端口
@@ -104,7 +104,7 @@ ssh -CN -L 15555:localhost:5555 user@emulator-host  # 终端 1
 adb connect localhost:15555 && scrcpy -s localhost:15555               # 终端 2
 ```
 
-> **首选方案 B。** 方案 A 常见报 `Device is unauthorized`——本地 adb 的密钥没被模拟器 adbd 信任，而 headless 模拟器没有授权弹窗可点，于是卡死。方案 B 让本地 scrcpy 复用**服务器侧那个已与模拟器握手过的 adb server**，根本不经过本地 adb 密钥认证，绕过此坑。真要用 A，得在服务器侧把本地公钥灌进模拟器（`adb root` 镜像才行）或关 `ro.adb.secure`，不值当。
+> **首选方案 B。** 方案 A 常见报 `Device is unauthorized`——本地 adb 的密钥没被模拟器 adbd 信任，而 headless 模拟器没有授权弹窗可点，于是卡死。方案 B 让本地 scrcpy 复用**服务器侧那个已与模拟器握手过的 adb server**，根本不经过本地 adb 密钥认证，绕过此坑。真要用 A，得在服务器侧把本地公钥灌进模拟器（仅 `adb root` 镜像可行）或关 `ro.adb.secure`，不建议。
 
 ## 📦 7. 在模拟器上跑端侧 APK（android/ App）
 
@@ -138,7 +138,7 @@ manifest 共 10 个 App，按来源分两类，**结论：x86_64 模拟器只适
 
 playstore 镜像 + **用户自己登录 Google 账号**后从 Play 商店装（x86 split 由商店下发，原生跑，不依赖转译）。
 
-- 登录是人工步骤：`adb` 打不开凭据输入，须经 scrcpy（§6）人工点 **Sign in** 输账号密码、接受 Play 条款。**Claude 不代输凭据、不代接受协议。**
+- 登录是人工步骤：`adb` 无法输入凭据，须经 scrcpy（§6）人工点 **Sign in**、输入账号密码并接受 Play 条款。
 - 落地登录页：`adb shell monkey -p com.android.vending -c android.intent.category.LAUNCHER 1`，停在 `UnauthenticatedMainActivity` 的 Sign in。
 - 登录后再装 App：可 `adb shell am start -a android.intent.action.VIEW -d 'market://details?id=<pkg>'` 跳详情页人工点 Install，或在商店内搜。
 

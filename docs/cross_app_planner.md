@@ -228,29 +228,7 @@ The whole cross-app task ≈ **2.5 minutes**, exit 0 throughout with no errors.
 
 ---
 
-## 📝 11. Change notes (introduced here)
-
-This adds the "auto-synthesize a cross-app plan" layer; the full set of changes:
-
-**Added**
-
-| File | Content |
-| --- | --- |
-| `agents/flow/flow_planner.py` | `FlowPlanner`: catalog → system prompt → LLM → fenced JSON → route + validate (`_validate`) + LLM repair (`_repair`, ≤3 rounds). `PlanValidationError` carries the error list. |
-| `scripts/run_plan.py` | CLI entry: exact-string cache / synthesize / persist / preview / confirm / recording / dispatch to `FlowRunner`. Flags: `--dry-run` `--yes` `--no-cache` `--record` `-- <forward>`. |
-| `manifests/_generated/.gitignore` | keeps generated plans / cache out of version control, retaining only `.gitignore` itself. |
-| `docs/cross_app_planner.md` / `docs/cross_app_planner.zh.md` | this document (English / Chinese). |
-
-**Modified**
-
-| File | Change |
-| --- | --- |
-| `agents/flow/flow_runner.py` | ① `# TODO(phase-B):` seam comment (at `stdin=DEVNULL`). ② `_traj_stem()`: names the traj dir with the timestamp first, then the apps a plan touches — `<ts>_plan_<app1>_<app2>…` — instead of the verbose NL-slug filename. |
-| `agents/agent/relay_agent.py` | `# TODO(phase-B):` seam comment on the handoff branch (no logic change). |
-| `CLAUDE.md` | added the run_plan entry under `跑测试`; added an "auto cross-app planning" overview section pointing here; "three → four entry scripts". |
-| `README.md` / `README_zh.md` | added run_plan to the scripts listing; added an "auto-synthesize a cross-app plan" subsection after the NL entry point. |
-
-**Design decisions (why)**
+## 📝 11. Design decisions
 
 - **Static one-shot planning** rather than step-by-step / ReAct: reuses the existing `FlowRunner`, minimal change, immediately shippable; the cost is no adaptation to surprising leg output.
 - **A dedicated `run_plan.py`** as the NL flow entry: single-app requests become 1-step plans, while multi-app requests share the same execution path.

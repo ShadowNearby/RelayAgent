@@ -1,7 +1,7 @@
 <h1 align="center">RelayAgent Evaluation Design</h1>
 
 <p align="center">
-  <b>Design and implementation record for the paper's Evaluation chapter (decisions dated 2026-06-09)</b>
+  <b>How RelayAgent is evaluated: benchmarks, baseline, metrics, and the fairness protocol</b>
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@ On the **same physical device, with the same unified VLM judge**, run the same t
   - **mw_fallback tier**: RA converts unsatisfiable legs to `type: mobileworld` and hands them to the **same** general_e2e → in this tier the baseline is a subset of RA.
   - **covered tier**: the executor is swapped for a specialized in-app agent (Qwen / Amap / Ctrip / …) — a **different path (replacement, not containment)** from general_e2e.
   - Corollary: "RA ≥ MW" on success is an **empirical expectation, not a logical guarantee** — the covered tier uses a different executor and may be worse per task; the fallback tier additionally loses to **routing / handoff errors**.
-- Planned extra comparisons: RA ablations (`RELAY_SCRAPE=0` / a11y agent — show the gains come from routing + scrape); related-work alignment with MobiAgent / Step-GUI.
+- Planned ablations: `RELAY_SCRAPE=0` / a11y-only agent, isolating how much of the gain comes from routing vs. reply scraping.
 
 ## 🧪 3. Three benchmarks (co-equal, no primary/secondary)
 
@@ -59,13 +59,13 @@ RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, Xiaohongshu, WPS, Boo
 ## 💰 6. Per-tier expectations for time/tokens (present honestly)
 
 - **covered tier**: planning tax + one cheap in-app submit ≪ MW's dozens of frame-by-frame steps → **RA wins big**.
-- **mw_fallback tier**: RA = planning overhead (+ coverage-gap repair rounds) + **the same execution as MW** → **RA slightly slower, slightly more tokens, success ≈ MW**. This tier is RA paying a net planning tax — **plotting it honestly is the most convincing** (see fig5 TODO).
+- **mw_fallback tier**: RA = planning overhead (+ coverage-gap repair rounds) + **the same execution as MW** → **RA slightly slower, slightly more tokens, success ≈ MW**. This tier is RA paying a net planning tax — **plotting it honestly is the most convincing** (see §9 Fig.5).
 
 ## 🔍 7. Protocol / honesty items (must be disclosed in the paper)
 
 1. **Self-judging**: the judge is RA's own leg_judge → manually verify a 30–50 task subsample and report agreement.
-2. **Relay token accounting (fixed, task #8 ✓)**: relay total tokens now read the authoritative `<flow_root>/token_usage.json` written by `run_plan.py`; `total` **includes the plan-synthesis phase** (+ repair rounds), `by_phase` splits plan/flow/agent → the planning tax is directly quantifiable (measured on one Amap POI covered task: plan 16975 / flow 698 / agent 0 tokens — the planning phase dominates). **Per-call logs aligned on both sides**: each results.jsonl row's `llm_calls` holds per-call metrics (tokens+latency+model+purpose); full bodies (messages/response) are persisted — relay in each leg's `traj.json`, mw via the non-invasive probe `agents.llm.mw_llm_probe` writing `<sys>/user_task/llm_calls.json`.
-3. **Completed-only bias**: `_aggregate` currently aggregates time/tokens over each system's own completed tasks → must be co-reported with all-tasks **+ the both-success paired intersection**. The three accountings are biased in opposite directions (completed-only: each system on its own set, unpaired; all-tasks: contains MW timeout ceilings → overestimates RA; intersection: conditions on baseline success → deletes RA's biggest wins → underestimates RA), so only all three together are honest. **Implementation TODO**: `_aggregate` aggregates per system; the paired intersection needs a per-`task_id` join of both-success tasks and per-task ratios (not a ratio of means).
+2. **Relay token accounting**: relay total tokens read the authoritative `<flow_root>/token_usage.json` written by `run_plan.py`; `total` **includes the plan-synthesis phase** (+ repair rounds), `by_phase` splits plan/flow/agent, so the planning tax is directly quantifiable. **Per-call logs aligned on both sides**: each results.jsonl row's `llm_calls` holds per-call metrics (tokens + latency + model + purpose); full bodies are persisted — relay in each leg's `traj.json`, mw via the non-invasive probe `agents.llm.mw_llm_probe` writing `<sys>/user_task/llm_calls.json`.
+3. **Completed-only bias**: `_aggregate` currently aggregates time/tokens over each system's own completed tasks → must be co-reported with all-tasks **+ the both-success paired intersection**. The three accountings are biased in opposite directions (completed-only: each system on its own set, unpaired; all-tasks: contains MW timeout ceilings → overestimates RA; intersection: conditions on baseline success → deletes RA's biggest wins → underestimates RA), so only all three together are honest. The paired intersection is computed as a per-`task_id` join of both-success tasks with per-task ratios (not a ratio of means).
 4. **Fairness switches at test time**: see §8.
 
 ## 🎚️ 8. Switches forced off during tests (fairness + clean wall-clock)
@@ -80,20 +80,18 @@ RA's 10 hand-written manifests: Qwen, Amap, Ctrip, WeChat, Xiaohongshu, WPS, Boo
 | plan/route cache | **off** (relay runs `--no-cache`) | otherwise a warm plan is reused, inflating time savings | — |
 | `--record` screen recording | unused | recorder backend overhead | — |
 
-> Note: the overlay is a **real RA efficiency feature**. It defaults off for fair per-task comparison; how many planning calls it saves should be measured in a separate **overlay on/off ablation** (task #6, warm up the overlay table first).
+> Note: the overlay is a **real RA efficiency feature**. It defaults off for fair per-task comparison; how many planning calls it saves should be measured in a separate **overlay on/off ablation** with a warmed-up overlay table.
 > Keep enabled (correctness-related, **do not disable**): `RELAY_FRESH_CONV`, the AdbKeyboard IME, cold-launch.
 
 ## 🖼️ 9. Figure set
 
-Code: `scripts/eval/plot_eval_figs.py`, output `docs/eval_figs/{png,pdf}`. **Data is currently MOCK**; the schema matches the real outputs — swapping in real values only touches the `MOCK` block at the top of the script. Fixed palette: relay blue `#0072B2` / baseline orange `#D55E00`, covered dark green, fallback light green/purple.
+Code: `scripts/eval/plot_eval_figs.py`, output `docs/eval_figs/{png,pdf}`. The data block at the top of the script is swapped for the benchmark outputs (`summary.json` / `plan_summary.json`) as runs complete. Fixed palette: relay blue `#0072B2` / baseline orange `#D55E00`, covered dark green, fallback light green/purple.
 
 - **Fig.1 coverage stratification**: one horizontal stacked bar per benchmark (covered/foundation/mixed/mw/invalid), N on the right. Data ← each `plan_summary.json["by_tier"]`.
 - **Fig.2 covered-tier efficiency**: relay vs baseline time/token/steps triptych on the covered tier, `n×` saving on top of each bar, success% gate at the bottom. Data ← `summary.json` (covered-subset aggregate).
 - **Fig.4 per-app dumbbell**: relay vs baseline success/time/token per app; covered apps green and bold on top, fallback apps gray below (two points coincide); log axis for time/token. Data ← `summary.json["by_app"]`.
 - **Fig.6 / Fig.7 paired scatter (both-success intersection)**: `fig6_paired_tokens` / `fig7_paired_time`, one subpanel per benchmark (ratio ordering only makes sense within one scale). Only both-success tasks; x is unlabeled, sorted by `baseline/RA` ratio descending (left = RA wins most); each task draws blue (RA) + orange (baseline) points on the same x joined by a thin vertical line (**gray = RA cheaper = covered win; red = RA dearer = fallback planning tax** — §6's two-tier expectation drawn directly into the scatter); log Y; median n× and RA-wins% in the top right. Covered share follows each benchmark's plan-only covered_rate (RelayBench high → almost all gray, almost all wins; MobileWorld low → mostly red, median ≈ 0.9×). This is the scatter substrate of §5.2's intersection accounting — more trustworthy than fig2's mean n× (distribution and counterexamples visible). Data ← per-task join (`ra_ok/base_ok/ra_t/base_t/ra_k/base_k`).
 - **Fig.5 (outcome matrix table) `fig5_outcome_table`**: 2×2 success outcome (RA × baseline), one row per benchmark + TOTAL; four cells both-succeed / `RA✓ base✗` / `base✓ RA✗` / both-fail (+ N), colored green/blue/orange/red. The two off-diagonal cells are discordant pairs → feeds a **McNemar significance test** directly. Data ← same per-task join as fig6/7.
-- **Fig.3 (CDF) / Table2 (ablation table) dropped.** **The old "Fig.5 fallback non-degradation panel" gave way to the outcome matrix table above; fallback non-degradation folds into §6, not a headline.**
-
 Layout rules: success and efficiency always share a panel; the three benchmarks reuse one isomorphic figure; report median + distribution, not just means; time/tokens always in both accountings; one palette across the paper.
 
 ## 🗺️ 10. Driver implementation map (`scripts/run_benchmark_test.py`)
@@ -104,9 +102,9 @@ Layout rules: success and efficiency always share a panel; the three benchmarks 
 - `_aggregate` (per system) + `_aggregate_by_app` (per app×system, feeds Fig.4) → `summary.json`'s `by_system` / `by_app`.
 - Unified judge: `_judge` calls `leg_judge.judge_leg`; `loading` triggers one re-capture.
 
-## 📊 11. Current data status
+## 📊 11. Coverage data
 
-**Plan-only classification (new four-tier logic, all real values, 2026-06-10)** — classified by leg kind (specialized/foundation/mw), see §4:
+**Plan-only tier classification** — by leg kind (specialized / foundation / mw), see §4:
 
 | Benchmark | n | covered | foundation_fallback | mw | mixed | covered_rate | MW task share | MW leg share |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -114,21 +112,13 @@ Layout rules: success and efficiency always share a panel; the three benchmarks 
 | MobileWorld (skip-mcp) | 161 | 61 | 10 | 90 | 0 | **0.379** | 55.9% | 39.8% |
 | AndroidDaily | 235 | 71 | 19 | 143 | 2 | **0.302** | 61.7% | 56.4% |
 
-- The new logic (stage-3 escape hatch) is in effect: MobileWorld's old foundation_fallback 102 → now **mw 90** (device/OS actions Gemini's foundation agent cannot do correctly degrade to the MW fallback); covered 61 includes legitimate Gemini mail/calendar/SMS (declared in the manifest, sole provider in the matrix) + 3 newly added by reruns. AndroidDaily has many apps without manifests (Didi/JD/Meituan/Pinduoduo/Bilibili…) → mw 143.
-- Final covered ids (Phase B real-device set): `traj_logs/reclassify/final/<bench>_covered_ids.txt` (27 / 71 / 61, total **159**).
+MobileWorld's large mw tier is dominated by device/OS actions a chat assistant cannot perform (the router's stage-3 escape hatch degrades them to the MW fallback); its covered 61 includes Gemini mail/calendar/SMS (declared in the manifest, sole provider in the matrix). AndroidDaily's mw tier comes from the many apps without manifests (Didi / JD / Meituan / Pinduoduo / Bilibili…). The real-device A/B runs on the covered union of the three benchmarks (27 + 71 + 61 = **159 tasks**).
 
-**Real-device A/B (Phase B, in progress)**: running relay + mw general_e2e on the 159 covered cases above (logging fixed: plan-synthesis tokens + per-call on both sides). relaybench 8/27 done, rest running (resume-aware: `scripts/eval/_phaseB_run.sh` resumes from results.jsonl). Real efficiency/success values will backfill Fig.2/4/6/7.
+## 🚧 12. Open items
 
-## 🚧 12. Open TODOs
-
-| # | Item | Nature |
-| --- | --- | --- |
-| #6 | overlay on/off ablation (how many planning calls route solidification saves; needs warm-up) | experiment |
-| #7 | fig5 fallback non-degradation panel (mock first) | presentation (low priority) |
-| #9 | model-sensitivity ablation: pick 3 baseline success cases, rerun with a weaker model, see if they flip to failure (quantifies dependence on base model quality) | experiment |
-| ~~#8~~ ✓ | ~~add `run_plan` plan-synthesis tokens/time to the relay side~~ **done**: driver reads `token_usage.json` (total includes plan, by_phase splits); mw probe adds per-call bodies | fixed |
-| — | RA-native cross-app suite real-device coverage confirmation (most apps installed and runnable) | data |
-| — | self-judge manual agreement on a subsample | honesty |
+- Overlay on/off ablation: how many planning calls route solidification saves (needs a warmed-up table, see §8).
+- Model-sensitivity ablation: rerun a few baseline-success cases with a weaker model to quantify dependence on base-model quality.
+- Self-judge agreement: manual verification on a 30–50 task subsample (§7.1).
 
 ## 🔗 Related docs
 

@@ -1,13 +1,10 @@
 <h1 align="center">用 MobileWorld 跑真机测试</h1>
 
 <p align="center">
-  <b>用 MobileWorld 经 ADB 直驱真机，以 .env 的 qwen 作为 agent 大脑跑任意自然语言目标</b>
+  <b>用 MobileWorld 的 real-device 模式经 ADB 直驱物理机，执行任意自然语言目标</b>
 </p>
 
-> MobileWorld 已从 RelayAgent 主仓库移除（见项目记忆「Dropped MobileWorld」），
-> 它是一个 Docker 模拟器上的 benchmark（201 个预定义任务 + 评测器）。
-> 但它的 **real-device 模式** 可以直接用 ADB 驱动物理机跑**任意自然语言目标**，
-> 不需要预先写 task 类——这正是录对比视频要用的入口。
+> MobileWorld 是本项目 A/B 评测的 baseline（`general_e2e`，见 [`evaluation.zh.md`](evaluation.zh.md)），也是 NL flow 的兜底执行器（见 [`nl_flow.zh.md`](nl_flow.zh.md) §10）。它本体是 Docker 模拟器上的 benchmark（201 个预定义任务 + 评测器），但其 **real-device 模式**可以直接用 ADB 驱动物理机执行任意自然语言目标，无需预先编写 task 类。本文记录这一入口的用法。
 
 ## ✅ 前置条件
 
@@ -19,17 +16,17 @@
 - AdbKeyboard 用于文本输入（MobileWorld 会自动装；手动：
   `adb install third_party/MobileWorld/ADBKeyboard.apk` 后
   `adb shell ime enable com.android.adbkeyboard/.AdbIME`）。
-- 目标 app 已装在机上（本机 Pixel 9 已装 `com.google.android.apps.maps`）。
+- 目标 App 已装在设备上。
 - 多设备时用 `RELAY_ANDROID_SERIAL` / `ANDROID_SERIAL` 选设备。
 
-## 🔑 凭证（`.env` 中的 LLM env，qwen）
+## 🔑 凭证（复用 `.env` 的 LLM 配置）
 
-复用 RelayAgent 的 `.env`（**别提交、别复述完整 key**）：
+复用 RelayAgent 的 `.env`（**不要提交、不要在命令行明文粘贴 key**）：
 
 | 参数 | 值 |
 | --- | --- |
 | `--llm_base_url` | `.env` 里的 `LLM_BASE_URL` |
-| `--model_name` | `qwen` |
+| `--model_name` | `.env` 里的 `LLM_MODEL`（如 `qwen`） |
 | `--api_key` | `.env` 里的 `LLM_API_KEY` |
 | `--agent-type` | `general_e2e`（qwen-3.5 适用，相对坐标 0–1000） |
 
@@ -67,70 +64,54 @@ uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Ma
   --timeout 600
 ```
 
-把 key 喂进去而不落进 shell history 的写法：
+把 key 传入而不落进 shell history 的写法：
 
 ```bash
 export LLM_API_KEY=$(grep '^LLM_API_KEY=' .env | cut -d= -f2-)
 uv run mw test "..." ... --api_key "$LLM_API_KEY"
 ```
 
-## ⚠️ 关键：先手动拉起目标 app，别让 agent 从桌面找
+## ⚠️ 关键：先预开目标 App，别让 agent 从桌面找
 
-从**桌面**起跑时，qwen 在 Pixel 9 上会反复 `scroll up` 想开应用抽屉，但这台机从桌面上滑会
-拉出**通知栏**，agent 看到通知栏又想"上滑关掉"，就此死循环（实测白烧到 step 9 仍没进 app）。
+从**桌面**起跑时，agent 可能反复 `scroll up` 试图打开应用抽屉，而部分机型从桌面上滑会拉出**通知栏**，agent 看到通知栏又尝试"上滑关掉"，形成死循环（实测到 step 9 仍未进入目标 App）。
 
-**解法：跑 `mw test` 前先 `monkey` 把目标 app 拉到前台**，agent 从 app 内开始就稳了
-（外滩那次预开 Maps 后 5 步搞定）：
+**解法：跑之前先把目标 App 拉到前台**（脚本的 `--app` 参数会用 `monkey` 预开），agent 从 App 内起步即可稳定执行（同一目标预开后 5 步完成）：
 
 ```bash
 uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Map" \
   --app com.google.android.apps.maps
 ```
 
-goal 仍写完整意图（"Live navigate to the Bund by Google Map"），agent 会在 app 内
-搜索 + 起导航，不受预开影响。
+goal 仍写完整意图（"Live navigate to the Bund by Google Map"），agent 会在 App 内搜索并发起导航，不受预开影响。
 
 ## 🎥 实时看屏 / 录屏
 
 - 看实时设备画面：`uv run mw device`。
-- 录屏默认不开启；给脚本加 `--record` 后会自动分段 `adb screenrecord`，任务结束时结束当前分段并用
-  `ffmpeg` 合并到 `recording.mp4`：
+- 录屏默认不开启；加 `--record` 后自动分段 `adb screenrecord`，任务结束时用 `ffmpeg` 合并到 `recording.mp4`：
 
 ```bash
 uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Map" --record
 ```
 
-默认输出到：
+默认输出到 `recordings/mobileworld_<timestamp>/recording.mp4`，也可用 `--record-dir <dir>` 指定目录。
 
-```bash
-recordings/mobileworld_<timestamp>/recording.mp4
-```
+> `adb screenrecord` 单段上限 180s，脚本会循环分段录制。若本机没有 `ffmpeg`，会保留 `chunk_*.mp4` 和 `concat.txt`，不做合并。
 
-也可以指定目录：
-
-```bash
-uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Map" \
-  --record-dir recordings/mw_bund_manual
-```
-
-> `adb screenrecord` 单段上限 180s；脚本会循环分段录制。若本机没有 `ffmpeg`，会保留
-> `chunk_*.mp4` 和 `concat.txt`，不做合并。
-
-## 📱 实测示例（2026-06-07 已跑通）
+## 📱 示例
 
 | 项 | 值 |
 | --- | --- |
 | goal | `Live navigate to the Bund by Google Map` |
-| 驱动 | `.env` 中 LLM env 的 qwen，`general_e2e` |
+| 驱动 | `.env` 配置的 qwen，`general_e2e`，Pixel 9 |
 | 起点 | 预开 Google Maps（见上「关键」） |
-| 结果 | **5 步**：点搜索框 → 输入 "The Bund" → 选中外滩(Zhongshan Rd E-1, Waitan, Huangpu) → Start → 进入实时逐向导航（35 km / 42 min / 蓝色路线）|
+| 结果 | **5 步**：点搜索框 → 输入 "The Bund" → 选中外滩 → Start → 进入实时逐向导航 |
 | 录屏 | `recordings/mw_bund_<ts>/recording.mp4`（1080×2424，约 86s）|
 
-对照：**不预开、从桌面起**那次，agent 卡在 `scroll up` 死循环烧到 step 9 没进 app —— 故必须预开。
+对照：同一目标**不预开、从桌面起跑**时，agent 卡在 `scroll up` 死循环，到 step 9 仍未进入 App——故必须预开。
 
 ## 🧭 模型 / 坐标系参考
 
-`docs/real-devices.md`（MobileWorld 仓库内）的对照表：
+MobileWorld 仓库 `docs/real-devices.md` 的对照表：
 
 | 模型 | agent-type | 坐标系 |
 | --- | --- | --- |
@@ -141,8 +122,6 @@ uv run python scripts/run_mobileworld.py "Live navigate to the Bund by Google Ma
 
 ## 📌 注意
 
-- 这是真机直驱，会真实改设备状态（起导航、定位等）。导航类目标依赖设备真实 GPS / 网络；
-  在国内需保证 Google 服务可达。
-- 模拟器模式（`uv run mobile-world ...` 跑 Docker 快照）可能没有真实 GPS / 实时导航，
-  录导航演示请用 real-device 模式。
-- 命令里 **绝不** 硬编码 API key；用 `$LLM_API_KEY` 从 `.env` 注入。
+- 这是真机直驱，会真实改变设备状态（发起导航、定位等）。导航类目标依赖设备真实 GPS / 网络；在国内需保证 Google 服务可达。
+- 模拟器模式（`uv run mobile-world ...` 跑 Docker 快照）可能没有真实 GPS / 实时导航，导航类演示请用 real-device 模式。
+- 命令里**不要**硬编码 API key，用 `$LLM_API_KEY` 从 `.env` 注入。

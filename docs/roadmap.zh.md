@@ -12,7 +12,7 @@
 
 ## 📊 现状基线(为什么是这个优先级)
 
-内部 phase-B 真机 A/B(186 任务,初步数据,人工判读混合)给出的端到端成功率:**RelayBench ~67% / AndroidDaily ~51% / MobileWorld ~42%**;任务中位墙钟 75–128s。结论:
+内部真机 A/B(186 任务,初步数据,人工判读混合)给出的端到端成功率:**RelayBench ~67% / AndroidDaily ~51% / MobileWorld ~42%**;任务中位墙钟 75–128s。结论:
 
 1. **可靠性是最大短板**——失败即 raise、无任何执行期恢复,而恢复所需的原材料(leg 判决、blackboard、MW 转换、路由固化)全部已存在;
 2. **延迟瓶颈在 ~1.2s/帧的 screencap 与围绕它的固定 sleep**,不在框架;
@@ -30,7 +30,7 @@
 
 ## ♻️ P1 执行期失败恢复闭环(~3 周)
 
-> **状态(2026-07-08)**:R0–R3 已实现(`agents/flow/leg_recovery.py`,nl_flow §6.1),mini-eval 中四档梯子真机完整行使一遍并翻盘一条历史失败任务。R4 **遥测侧已收口**:`recovery.json` 每条尝试带 token 成本;`run_benchmark_test.py --recovery` 每行落 `recovery` 块,`summary.json`/`summary.md` 出首试 vs 最终成功、逐档命中率与恢复 token 通胀表(`tests/test_benchmark_recovery.py` 钉住)。R4 正式评测(三基准各 ~30 条开/关对照)待跑。
+> **状态**:R0–R3 与 R4 遥测已实现(`agents/flow/leg_recovery.py`,nl_flow §6.1,行为由 `tests/test_benchmark_recovery.py` 锁定),四档梯子已在真机端到端验证。R4 正式评测(三基准各 ~30 条失败任务、恢复开/关对照)待跑。
 
 **P1 之前的现状**:`flow_runner._run_app_step` 中 leg 失败(rc≠0 / 需 bind 却无 reply / 输出无关断言失败 / leg judge 判 fail)一律 raise,整条 flow 终止。
 
@@ -66,14 +66,14 @@
 ### R4 遥测 + 评测(第 14–18 天)
 
 - 每次恢复尝试落 `recovery.json`(档位/原因/成本/结果);`plan_summary` 增加 first-try success 与 final success 两列;
-- phaseB 三基准各抽 ~30 条失败任务重跑(`--ids-file`),报告成功率提升、各档命中率与 token 通胀;**命中率 <10% 的档位砍掉**;
+- 三基准各抽 ~30 条失败任务重跑(`--ids-file`),报告成功率提升、各档命中率与 token 通胀;**命中率 <10% 的档位砍掉**;
 - 无设备单测:给 `InProcessLegExecutor` 加故障注入包装(第 n 次调用返回指定 `failure_kind`),锁升级逻辑与预算护栏。
 
 ---
 
 ## ⚡ P2 流式抓帧 + 延迟工程(~2 周,与 P1 并行;P1 在 flow 层、P2 在 device 层,互不重叠)
 
-> **状态(2026-07-08)**:S1 已落地(`agents/device/android_stream.py`,`RELAY_CAPTURE_BACKEND=scrcpy`,默认 screencap 不变;PyAV 走 optional extra `stream`)。Pixel 9 实测:exec-out ~2.0s/帧 → 流式稳态 **~8ms/帧**(首帧含启动 ~1.3s),分辨率一致、内容差 0.8/255;千问 QA 端到端全流程在流式帧源下跑通、零回退。**S2 已落地**:`DeviceBackend.wait_settled` seam(默认 False=固定 sleep 不变),scrcpy 流上用"quiet 窗口内无新帧即安定"(scrcpy 只在画面变化出帧,无需像素 diff)替换全部四类固定 sleep(step_wait / wait action / blind-step / poll-skip),最坏花满原预算;`RELAY_SETTLE_DETECT`(1)/`RELAY_SETTLE_QUIET`(0.2s)。实测静止屏 0.5s→0.2s、滑动动画正确等到安定。S3(等价性 n=3 对照 + 30 任务墙钟)待跑。
+> **状态**:S1、S2 已落地——scrcpy 流式后端(`agents/device/android_stream.py`,`RELAY_CAPTURE_BACKEND=scrcpy`,Pixel 9 实测 ~2.0s/帧 → 稳态 ~8ms/帧)与帧到达安定检测(`DeviceBackend.wait_settled`,替换全部四类固定 sleep,静止屏 settle 0.5s→0.2s)。S3(等价性对照 + 墙钟评测)待跑。
 
 **现状**:实测 screencap ~1.2s/帧是单步最大成本;step_wait 0.5s / blind-step 0.15s / poll-skip 0.3s 等固定 sleep 的存在原因正是"帧太贵,只能猜动画时长"。
 
@@ -89,13 +89,13 @@
 
 ### S3 等价性验证 + 评测(第 9–12 天)
 
-关键风险是**行为漂移**:解码帧与 screencap 帧的色彩/压缩差异可能影响 VLM grounding 与区域 hash。同任务两后端各 n=3 对比 action 序列与成功率,必要时重标定 hash 阈值。之后 phaseB 抽 30 任务测墙钟。**诚实预期**:in-app agent 自身的回复延迟(单次 ~18s 量级)不归我们管,任务级目标是降 ~30%,不是数量级。
+关键风险是**行为漂移**:解码帧与 screencap 帧的色彩/压缩差异可能影响 VLM grounding 与区域 hash。同任务两后端各 n=3 对比 action 序列与成功率,必要时重标定 hash 阈值。之后从真机 A/B 任务集抽 30 条测墙钟。**诚实预期**:in-app agent 自身的回复延迟(单次 ~18s 量级)不归我们管,任务级目标是降 ~30%,不是数量级。
 
 ---
 
 ## 🧠 P3 用户记忆层(~2 周)
 
-> **状态(2026-07-08)**:M1–M4 已落地(`agents/flow/user_profile.py`,schema `spec/profile.schema.json`,单测 `tests/test_user_profile.py`)。M1:`${RELAY_PROFILE_ROOT:-~/.relayagent}/profile.yaml`(`RELAY_PROFILE=0` 整层关;损坏文件降级为无 profile + warning)。M2:①合成 prompt 带 profile 摘要(真机验证:"帮我导航回家"直接出 `导航去<家庭地址>`,零 ask_user)②模板槽位抽取带 profile 候选 ③ask_user select_from 预选上次选择(`last_choices` 自动记录用户自己的显式选择)。M3:flow 成功后一次廉价 LLM 提议偏好 → **询问 y/n 才写**(EOF/批量=拒绝);benchmark 强制 `RELAY_PROFILE=0`(token 公平 + 可复现)。M4:`RELAY_TRAJ_REDACT=1` 在全部日志落盘点(agent/flow llm_calls、steps.json、summary.json、flow_report.json、agent_reply.json 日志副本)把 profile 值换成 `<profile:section.key>`;真机泄漏扫描零明文。验收的 10 条隐式偏好任务对照待跑。注意:profile 解析后的值会固化进 plan 缓存(`manifests/_generated/`,已 gitignore),改 profile 后旧缓存需 `--no-cache` 绕过。
+> **状态**:M1–M4 已落地(`agents/flow/user_profile.py`,schema `spec/profile.schema.json`,单测 `tests/test_user_profile.py`);10 条隐式偏好任务的验收对照待跑。注意:profile 解析后的值会固化进 plan 缓存,改 profile 后用 `--no-cache` 绕过旧缓存。
 
 **原则**:本地、明示、可查删。项目卖点是"上下文已在 App 里",记忆层只补用户没说全的偏好,不做爬取。
 
@@ -128,7 +128,7 @@
 ```
 周 1-3   P1 恢复闭环(R0→R4)
 周 1-2   P2 流式抓帧(并行,S1→S3)
-周 4     P1+P2 合并后 phaseB 全量重跑一轮(数字同时是 OEM/论文弹药)
+周 4     P1+P2 合并后真机 A/B 全量重跑一轮(数字同时是 OEM/论文弹药)
 周 5-6   P3 记忆层
 周 5     P4-C1 卡片 CI(小,插空)
 周 7-9   P4-C2 录制器
@@ -137,5 +137,5 @@
 
 两条全局纪律:
 
-1. **每阶段收尾重跑 phaseB 子集**,数字进 `report/`——项目信誉建立在"每个 claim 有 n=3 数据"上,产品化阶段不丢;
+1. **每阶段收尾重跑真机 A/B 子集**,数字进 `report/`——项目信誉建立在"每个 claim 有 n=3 数据"上,产品化阶段不丢;
 2. **所有新行为都有 env 开关且默认与今天一致**(`RELAY_RECOVERY` / `RELAY_CAPTURE_BACKEND` / `RELAY_PROFILE` / `RELAY_TRAJ_REDACT`),任何时候都能退回可比基线。

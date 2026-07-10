@@ -91,7 +91,7 @@ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 SDL_VIDEODRIVER=wayland
   scrcpy -s emulator-5554 --window-title "relay-test AVD"
 ```
 
-**From a remote machine (the default — this repo's convention for watching the AVD)** — install scrcpy on the local machine with the display; the video stream rides the SSH tunnel to the server running the emulator (`user@emulator-host` below).
+**From a remote machine** (when the emulator runs on a server) — install scrcpy on the local machine with the display; the video stream rides the SSH tunnel to the server running the emulator (`user@emulator-host` below).
 
 ```bash
 # Option B (preferred, scrcpy's official recipe, single adb server): tunnel the server-side adb server + video port
@@ -104,7 +104,7 @@ ssh -CN -L 15555:localhost:5555 user@emulator-host   # terminal 1
 adb connect localhost:15555 && scrcpy -s localhost:15555                 # terminal 2
 ```
 
-> **Prefer Option B.** Option A commonly fails with `Device is unauthorized` — the local adb's key isn't trusted by the emulator's adbd, and a headless emulator has no authorization popup to tap, so it hangs. Option B has the local scrcpy reuse the **server-side adb server that already handshook with the emulator**, bypassing local adb key auth entirely. Making A work would mean injecting the local public key into the emulator (`adb root` image only) or disabling `ro.adb.secure` — not worth it.
+> **Prefer Option B.** Option A commonly fails with `Device is unauthorized` — the local adb's key isn't trusted by the emulator's adbd, and a headless emulator has no authorization popup to tap, so it hangs. Option B has the local scrcpy reuse the **server-side adb server that already handshook with the emulator**, bypassing local adb key auth entirely. Making A work would mean injecting the local public key into the emulator (`adb root` image only) or disabling `ro.adb.secure` — not recommended.
 
 ## 📦 7. Running the on-device APK (android/ app) on the emulator
 
@@ -138,7 +138,7 @@ These are **ARM-only** (vendors ship no x86 build). Even with `libndk_translatio
 
 playstore image + a **Google sign-in the user performs**, then install from the Play Store (the store delivers the x86 split, runs natively, no translation).
 
-- Sign-in is a manual step: `adb` cannot type credentials, so the user must use scrcpy (§6) to tap **Sign in**, enter the account/password, and accept the Play terms. **Claude does not enter credentials or accept agreements.**
+- Sign-in is a manual step: `adb` cannot type credentials, so use scrcpy (§6) to tap **Sign in**, enter the account/password, and accept the Play terms by hand.
 - Land on the sign-in screen: `adb shell monkey -p com.android.vending -c android.intent.category.LAUNCHER 1` stops at `UnauthenticatedMainActivity`'s Sign in.
 - After sign-in: `adb shell am start -a android.intent.action.VIEW -d 'market://details?id=<pkg>'` jumps to the app's detail page for a manual Install tap, or search in the store.
 

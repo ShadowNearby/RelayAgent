@@ -18,13 +18,13 @@
 | adb | Android platform-tools，`adb` 在 PATH 上 |
 | Python | 3.12（`uv venv --python 3.12 && uv sync --no-install-project`）|
 | LLM 端点 | `.env` 填好 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` |
-| MobileWorld（仅 A/B baseline / MW 兜底需要）| `third_party/MobileWorld` 符号链接到 sibling checkout（机器本地，见 [`mobileworld_real_device.md`](mobileworld_real_device.md)），否则用 pyproject 钉死的 git 快照 |
+| MobileWorld（仅 A/B baseline / MW 兜底需要）| `third_party/MobileWorld` 符号链接到 sibling checkout（机器本地，见 [`mobileworld_real_device.md`](mobileworld_real_device.md)），否则用 pyproject 固定的 git 快照 |
 
 ## 📱 2. 设备通用要求（真机或模拟器都一样）
 
 | 项 | 要求 | 说明 |
 | --- | --- | --- |
-| 连接 | USB 调试或 Wi-Fi adb（`adb tcpip 5555` + `adb connect`）| Phase B 实测用 Wi-Fi adb；**涉及飞行模式的任务会杀掉 Wi-Fi adb 传输，已从任务集剔除** |
+| 连接 | USB 调试或 Wi-Fi adb（`adb tcpip 5555` + `adb connect`）| 真机 A/B 实测用 Wi-Fi adb；**涉及飞行模式的任务会杀掉 Wi-Fi adb 传输，已从任务集剔除** |
 | 多设备 | `RELAY_ANDROID_SERIAL=<serial>` | 所有 adb 调用都遵守（`agents/runtime/_adb.py`）|
 | 输入法 | **ADBKeyBoard**（`com.android.adbkeyboard`，[senzhk/ADBKeyBoard](https://github.com/senzhk/ADBKeyBoard)）已安装 | runner 启动时自己 `ime enable/set`，退出 `ime reset` 复位；只要求"已安装" |
 | a11y dump | `uiautomator dump` 可用 | tap_text 定位与回复 scrape 的主路径；不可用时全部回落 VLM（慢、贵）|
@@ -40,7 +40,7 @@
 
 | App | 包名 | 账号/前置 |
 | --- | --- | --- |
-| 通义千问 | com.aliyun.tongyi | 阿里账号登录（购物/外卖能力走淘宝后端，账号需正常购买历史，见 README「已知阻塞点」风控）|
+| 通义千问 | com.aliyun.tongyi | 阿里账号登录（购物/外卖能力走淘宝后端；新账号易触发风控，最好有正常购买历史）|
 | 高德地图 | com.autonavi.minimap | 登录 + 定位权限（打车需实名/支付绑定）|
 | 携程旅行 | ctrip.android.view | 登录 |
 | 微信 | com.tencent.mm | 登录（元宝 / AI 搜索入口）|
@@ -57,7 +57,7 @@
 
 只需 §3.1 的 10 个 App（套件就是围绕它们设计的，出现均衡，单任务 4–5 次/App）。
 
-### 3.3 AndroidDaily（235 条；Phase B 只跑 71 条 covered）
+### 3.3 AndroidDaily（235 条；真机 A/B 只跑 71 条 covered）
 
 - **covered 子集（71 条）**：任务指令虽点名 淘宝/饿了么 等，但 RA 把它们路由进 manifest App（如淘宝购物 → 千问，同一下单后端）→ 仍只需 §3.1。
 - **MW 兜底层（143 条，若在真机全量跑）**：需要任务点名的原生 App。出现频次 Top：淘宝(15)、携程(14)、微信(14)、美团(12)、高德(11)、铁路12306(10)、小红书(9)、微博(9)、去哪儿(9)、飞猪(8)、京东(8)、拼多多(7)、哔哩哔哩、抖音、滴滴出行、饿了么、大众点评、网易云音乐、QQ音乐、知乎 …（全集 70+ App，见 `benchmark/androiddaily_task_info.csv` 的「APP名称」列）。全部需要登录态。
@@ -67,7 +67,7 @@
 MW 的任务跑在 **MobileWorld 自带的应用环境**（Mail、Messages、Mastodon、Files、Calendar、Mattermost、Chrome、Contacts、Gallery、Maps、Docreader、Clock、Settings、Camera、Taodian），由 MW 的任务初始化逻辑预置数据——**不是装国内 App**，环境搭建见 [`mobileworld_real_device.md`](mobileworld_real_device.md)。注意：
 
 - `MCP-*` 任务（40 条）是 tool-call 非真 GUI，`--skip-mcp` 剔除。
-- Taodian（淘typed电商示例 App）在真机上两系统都失败（风控），Phase B 记 both-fail。
+- Taodian（MW 预置的示例电商 App）在真机上两系统都失败（风控），记 both-fail。
 
 ## 🧹 4. 跑 benchmark 前的状态卫生
 

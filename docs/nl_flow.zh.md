@@ -142,7 +142,7 @@ app leg 失败不再直接杀掉整条 flow：`FlowRunner` 先给失败定类，
 
 ## ⚖️ 7. Leg Judge（`leg_judge.py`，语义结果判定）
 
-**leg** = 一个 native-runner 子运行，钉死一 app + 一 capability。`flow_runner` 的硬信号（崩溃 / 空回复 / 非终态）只抓**显性**失败，区分不了「自信地答错」和「答对」。
+**leg** = 一个 native-runner 子运行，固定到一个 app + 一个 capability。`flow_runner` 的硬信号（崩溃 / 空回复 / 非终态）只抓**显性**失败，区分不了「自信地答错」和「答对」。
 
 - 镜像 MobileWorld `BaseTask.is_successful` 契约（`-> (score, reason)`，1.0 成功 / 0.0 失败），但开放世界无 per-task ground-truth oracle，**改为让 VLM 读** leg 的 goal + 抓到的回复 + 最后屏幕，三态分类：**`loading`**（仍在进行，结果未定，**不算失败**）/ **`success`** / **`failure`**。
 - **取最后 n 帧**（`final_frames`，默认 2 帧，StepLogger 落的 pre-action PNG）：发最后两帧而非一帧，让 judge 能区分卡死/loading vs 已 settle 的终态。

@@ -1,7 +1,7 @@
 <h1 align="center">RelayAgent 评测设计</h1>
 
 <p align="center">
-  <b>论文 Evaluation 章的设计与实现记录（决策日期 2026-06-09，本文为权威版本）</b>
+  <b>RelayAgent 的评测方法：基准、baseline、指标与公平性协议（本文为权威版本）</b>
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
   - **mw_fallback 层**：RA 把 unsatisfiable 的 leg 转 `type: mobileworld`，交给**同一个** general_e2e 执行 → 这层 baseline 是 RA 的子集。
   - **covered 层**：执行器换成专用 in-app agent（千问/高德/携程/…），与 general_e2e 是**两条不同路径（替换，非包含）**。
   - 推论：success 上 "RA ≥ MW" 是**经验期望、不是逻辑保证**——covered 层是不同执行器、可能逐任务更差；fallback 层还要减去**路由/handoff 误差**损耗。
-- 计划中的额外对照：RA 消融（`RELAY_SCRAPE=0` / a11y agent，证明收益来自路由+scrape）；related-work 口径对齐 MobiAgent / Step-GUI。
+- 计划中的消融：`RELAY_SCRAPE=0` / 纯 a11y agent，用于区分收益中路由与回复 scrape 各自的贡献。
 
 ## 🧪 3. 三个 benchmark（并列，不分主副）
 
@@ -58,13 +58,13 @@ RA 的 10 个手写 manifest：千问、高德、携程、微信、小红书、W
 ## 💰 6. 时间/token 的分层预期（务必如实呈现）
 
 - **covered 层**：规划税 + 一次廉价 in-app submit ≪ MW 几十步逐帧 → **RA 大幅赢**。
-- **mw_fallback 层**：RA = 规划开销（+ coverage-gap 修复轮）+ **和 MW 一样**的执行 → **RA 略慢、token 略多、success ≈ MW**。这层是 RA 净交规划税，**如实画出来反而最显诚实**（见 fig5 TODO）。
+- **mw_fallback 层**：RA = 规划开销（+ coverage-gap 修复轮）+ **和 MW 一样**的执行 → **RA 略慢、token 略多、success ≈ MW**。这层是 RA 净交规划税，**如实画出来反而最显诚实**（见 §9 Fig.5）。
 
 ## 🔍 7. Protocol / 诚实点（论文必须交代）
 
 1. **self-judge**：judge 是 RA 自家 leg_judge → 抽 30–50 题人工核对，报一致率。
-2. **relay token 口径（已修，task #8 ✓）**：relay 总 token 现读 `run_plan.py` 写的权威 `<flow_root>/token_usage.json`，`total` **已含 plan-synthesis 相**（+ 修复轮），`by_phase` 拆 plan/flow/agent → 规划税可直接量化（实测一条高德 POI covered 任务：plan 16975 / flow 698 / agent 0 token，规划相占绝大头）。**两侧 per-call 日志对齐**：results.jsonl 每行 `llm_calls` 放 per-call 指标（tokens+latency+model+purpose），完整正文（messages/response）落盘——relay 在各 leg `traj.json`、mw 经非侵入探针 `agents.llm.mw_llm_probe` 写 `<sys>/user_task/llm_calls.json`。
-3. **completed-only 偏差**：现 `_aggregate` 时间/token 仅统计各系统自己完成的任务 → 必须并报全量 **+ 两系统都成功的交集配对**。三套口径方向相反地有偏（completed-only 各算各的、不可配对；全量含 MW 超时天花板→高估 RA；交集 conditioning on baseline-success→删掉 RA 最大赢点、低估 RA），故三者同列才诚实。**实现待办**：`_aggregate` 现按系统各自聚合，交集配对需按 `task_id` 求两系统成功交集再算 per-task ratio（不是均值相除）。
+2. **relay token 口径**：relay 总 token 读 `run_plan.py` 写的权威 `<flow_root>/token_usage.json`，`total` **含 plan-synthesis 阶段**（+ 修复轮），`by_phase` 拆 plan/flow/agent，规划税可直接量化。**两侧 per-call 日志对齐**：results.jsonl 每行 `llm_calls` 放 per-call 指标（tokens + latency + model + purpose），完整正文落盘——relay 在各 leg 的 `traj.json`，mw 经非侵入探针 `agents.llm.mw_llm_probe` 写 `<sys>/user_task/llm_calls.json`。
+3. **completed-only 偏差**：现 `_aggregate` 时间/token 仅统计各系统自己完成的任务 → 必须并报全量 **+ 两系统都成功的交集配对**。三套口径方向相反地有偏（completed-only 各算各的、不可配对；全量含 MW 超时天花板→高估 RA；交集 conditioning on baseline-success→删掉 RA 最大赢点、低估 RA），故三者同列才诚实。交集配对按 `task_id` 求两系统成功交集，再算 per-task ratio（不是均值相除）。
 4. **测试公平性开关**：见 §8。
 
 ## 🎚️ 8. 测试时强制关闭的开关（公平 + 干净墙钟）
@@ -79,20 +79,18 @@ RA 的 10 个手写 manifest：千问、高德、携程、微信、小红书、W
 | plan/route cache | **关**（relay 走 `--no-cache`） | 否则复用热 plan，省时虚高 | — |
 | `--record` 录屏 | 不用 | 录屏后端额外开销 | — |
 
-> 注：overlay 是 RA **真实提效特性**。默认关是为了公平逐任务对照；其"省了多少规划调用"应单独做 **overlay on/off 消融**（任务 #6，需 warm-up 预热 overlay 表后再测）。
+> 注：overlay 是 RA **真实提效特性**。默认关是为了公平逐任务对照；其"省了多少规划调用"应单独做 **overlay on/off 消融**（需先预热 overlay 表）。
 > 保持开启（正确性相关，**别关**）：`RELAY_FRESH_CONV`、AdbKeyboard IME、cold-launch。
 
 ## 🖼️ 9. 图表集
 
-代码：`scripts/eval/plot_eval_figs.py`，输出 `docs/eval_figs/{png,pdf}`。**数据当前为 MOCK**，schema 已对齐产出，换真值只动脚本顶部 `MOCK` 块。配色固定：relay 蓝 `#0072B2` / baseline 橙 `#D55E00`，covered 深绿、fallback 浅绿/紫。
+代码：`scripts/eval/plot_eval_figs.py`，输出 `docs/eval_figs/{png,pdf}`。脚本顶部的数据块随评测产出（`summary.json` / `plan_summary.json`）替换为真值。配色固定：relay 蓝 `#0072B2` / baseline 橙 `#D55E00`，covered 深绿、fallback 浅绿/紫。
 
 - **Fig.1 覆盖分层**：每 benchmark 一条横向堆叠条（covered/foundation/mixed/mw/invalid），右标 N。数据 ← 各 `plan_summary.json["by_tier"]`。
 - **Fig.2 covered 层效率**：covered 层 relay vs baseline 的 time/token/steps 三联屏，柱顶 `n×` 省幅，底部 success% 守门。数据 ← `summary.json`（covered 子集聚合）。
 - **Fig.4 per-app dumbbell**：按 App 分类比 relay vs baseline 的 success/time/token；covered App 绿色加粗在上、fallback App 灰色在下（两点重合）；time/token 用 log 轴。数据 ← `summary.json["by_app"]`。
 - **Fig.6 / Fig.7 配对散点（both-success 交集）**：`fig6_paired_tokens` / `fig7_paired_time`，每 benchmark 一个子面板（比值排序须在各自标尺内才有意义）。只画两系统都成功的题；横坐标无序号、按 `baseline/RA` 比值从大到小排（左=RA 赢最多），同题在同一 x 画蓝(RA)+橙(baseline)两点 + 细竖线连配对（**灰=RA 更省=covered 赢；红=RA 更贵=fallback 规划税**，直接把 §6 两层预期画进散点）；Y 轴 log；右上角标 median n× 与 RA wins%。covered 占比按各 benchmark plan-only covered_rate 设（RelayBench 高→几乎全灰几乎全赢；MobileWorld 低→几乎全红、median≈0.9×）。这是 §5.2 交集口径的散点底，比 fig2 柱状的均值 n× 更可信（看得到分布与反例）。数据 ← per-task join（`ra_ok/base_ok/ra_t/base_t/ra_k/base_k`）。
 - **Fig.5（结果矩阵表）`fig5_outcome_table`**：2×2 success-outcome（RA × baseline），每 benchmark 一行 + TOTAL，四格 both succeed / `RA✓ base✗` / `base✓ RA✗` / both fail（+ N），配色绿/蓝/橙/红。两个 off-diagonal 是 discordant pairs → 可直接接 **McNemar 显著性检验**。数据 ← 同 fig6/7 的 per-task join。
-- **Fig.3（CDF）/ Table2（消融表）已弃用。** **旧的"Fig.5 fallback 非退化 panel"已让位给上面的结果矩阵表；fallback 非退化展示并入 §6 口径，非重点。**
-
 排版铁律：success 与效率永远同屏；三个 bench 同构复用一张图；报 median + 分布而非只均值；时间/token 给两套口径；颜色全篇统一。
 
 ## 🗺️ 10. 驱动实现地图（`scripts/run_benchmark_test.py`）
@@ -103,9 +101,9 @@ RA 的 10 个手写 manifest：千问、高德、携程、微信、小红书、W
 - `_aggregate`（按系统）+ `_aggregate_by_app`（按 App×系统，喂 Fig.4）→ `summary.json` 的 `by_system` / `by_app`。
 - 统一 judge：`_judge` 调 `leg_judge.judge_leg`，`loading` 重拍一次。
 
-## 📊 11. 当前数据状态
+## 📊 11. 覆盖数据
 
-**plan-only 分类（新逻辑四档，全真值，2026-06-10）**——判定用 leg-kind（specialized/foundation/mw），见 §4：
+**plan-only 分层分类**——按 leg kind（specialized / foundation / mw）判定，见 §4：
 
 | Benchmark | n | covered | foundation_fallback | mw | mixed | covered_rate | MW task占比 | MW leg占比 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -113,23 +111,15 @@ RA 的 10 个手写 manifest：千问、高德、携程、微信、小红书、W
 | MobileWorld（skip-mcp） | 161 | 61 | 10 | 90 | 0 | **0.379** | 55.9% | 39.8% |
 | AndroidDaily | 235 | 71 | 19 | 143 | 2 | **0.302** | 61.7% | 56.4% |
 
-- 新逻辑（stage-3 逃生口）生效：MobileWorld 旧 foundation_fallback 102 → 现 **mw 90**（Gemini foundation 做不了的设备/OS 动作正确降级到 MW 兜底）；covered 61 含合法的 Gemini 邮件/日程/短信（manifest 真声明、matrix 唯一提供方）+ 3 条重跑新增。AndroidDaily 大量无 manifest 的 app（滴滴/京东/美团/拼多多/B站…）→ mw 143。
-- 最终 covered ids（Phase B 真机集）：`traj_logs/reclassify/final/<bench>_covered_ids.txt`（27 / 71 / 61，合计 **159**）。
+MobileWorld 的 mw 层主要来自聊天助手做不了的设备/OS 动作（router 的 stage-3 逃生口把它们降级到 MW 兜底）；其 covered 61 含 Gemini 邮件/日程/短信（manifest 已声明、matrix 唯一提供方）。AndroidDaily 的 mw 层来自大量无 manifest 的 App（滴滴 / 京东 / 美团 / 拼多多 / B站…）。真机 A/B 跑三个 benchmark 的 covered 并集（27 + 71 + 61 = **159 条**）。
 
-**真机 A/B（Phase B，进行中）**：对上面 159 个 covered case 跑 relay + mw general_e2e（日志已修，含 plan-synthesis token + 两侧 per-call）。relaybench 已完成 8/27，其余跑中（resume-aware：`scripts/eval/_phaseB_run.sh` 按 results.jsonl 断点续跑）。效率/成功率真值待跑完回填 Fig.2/4/6/7。
+## 🚧 12. 待做事项
 
-## 🚧 12. 未决 TODO
+- overlay on/off 消融：路由固化省多少规划调用（需先预热固化表，见 §8）。
+- 模型敏感性消融：把若干 baseline 成功 case 换更弱模型重跑，量化对底座模型质量的依赖。
+- self-judge 一致率：抽 30–50 题人工核对（见 §7.1）。
 
-| # | 内容 | 性质 |
-| --- | --- | --- |
-| #6 | overlay on/off 消融（路由固化省多少规划调用；需 warm-up） | 实验 |
-| #7 | fig5 fallback 非退化 panel（mock 先） | 展示（低优先） |
-| #9 | 模型敏感性消融：从 baseline 的 success case 里挑 3 个，换更弱的模型重跑，看弱模型下是否转为失败（量化对底座模型质量的依赖） | 实验 |
-| ~~#8~~ ✓ | ~~补采 `run_plan` plan-synthesis 的 token/耗时进 relay 侧~~ **已完成**：driver 读 `token_usage.json`（total 含 plan，by_phase 分相）；mw 探针补 per-call 正文 | 已修 |
-| — | RA-native cross-app suite 真机覆盖确认（大部分 App 已装可跑） | 数据 |
-| — | self-judge 人工核对子样本一致率 | 诚实性 |
-
-## 🔗 相关记忆 / 文档
+## 🔗 相关文档
 
 - 跨 App flow 架构：[`docs/nl_flow.zh.md`](nl_flow.zh.md)；capability 矩阵（真理来源）：`docs/app_capability_matrix.csv`。
 - 路由固化 overlay：见 `nl_flow.zh.md` §9。

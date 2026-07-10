@@ -12,7 +12,7 @@
 
 ## 📊 Baseline (why this ordering)
 
-Internal phase-B real-device A/B runs (186 tasks, preliminary, mixed manual judging) put end-to-end success at **RelayBench ~67% / AndroidDaily ~51% / MobileWorld ~42%**, with median task wall-clock of 75–128 s. Conclusions:
+Internal real-device A/B runs (186 tasks, preliminary, mixed manual judging) put end-to-end success at **RelayBench ~67% / AndroidDaily ~51% / MobileWorld ~42%**, with median task wall-clock of 75–128 s. Conclusions:
 
 1. **Reliability is the biggest gap** — a failed leg raises and kills the whole flow, yet every ingredient recovery needs (leg verdicts, the blackboard, the MW conversion, route solidification) already exists;
 2. **Latency is bottlenecked by the ~1.2 s/frame screencap and the fixed sleeps built around it**, not by the framework;
@@ -30,13 +30,10 @@ Internal phase-B real-device A/B runs (186 tasks, preliminary, mixed manual judg
 
 ## ♻️ P1 Runtime failure-recovery loop (~3 weeks)
 
-> **Status (2026-07-08)**: R0–R3 shipped (`agents/flow/leg_recovery.py`, nl_flow §6.1);
-> a mini-eval exercised the full four-tier ladder end-to-end on device, flipping one
-> historical failure. R4 telemetry shipped: `recovery.json` carries per-attempt token cost;
-> `run_benchmark_test.py --recovery` lands a per-row `recovery` block and
-> `summary.json`/`summary.md` report first-try vs final success, per-tier hit rate
-> and recovery-token inflation (pinned by `tests/test_benchmark_recovery.py`).
-> The formal R4 evaluation (~30 previously-failed tasks per benchmark, on/off) is still pending.
+> **Status**: R0–R3 and the R4 telemetry are shipped (`agents/flow/leg_recovery.py`, nl_flow §6.1;
+> behavior pinned by `tests/test_benchmark_recovery.py`), and the four-tier ladder has been
+> exercised end-to-end on a device. The formal R4 evaluation (~30 previously-failed tasks per
+> benchmark, recovery on/off) is pending.
 
 **Before P1**: in `flow_runner._run_app_step`, any leg failure (rc≠0 / a bind with no captured reply / the output-free completion assert / a failed leg-judge verdict) raised and terminated the flow.
 
@@ -79,19 +76,11 @@ Add `exclude: [(app_id, capability_id)]` to the three-stage router (enforced in 
 
 ## ⚡ P2 Streaming capture + latency engineering (~2 weeks, parallel with P1 — P1 lives in the flow layer, P2 in the device layer)
 
-> **Status (2026-07-08)**: S1 shipped (`agents/device/android_stream.py`,
-> `RELAY_CAPTURE_BACKEND=scrcpy`; default screencap unchanged; PyAV via the
-> optional `stream` extra). Measured on a Pixel 9: exec-out ~2.0 s/frame →
-> **~8 ms/frame** steady-state (first frame incl. startup ~1.3 s), identical
-> resolution, content diff 0.8/255; a Tongyi QA task ran end-to-end on stream
-> frames with zero fallbacks. S2 shipped: the `DeviceBackend.wait_settled` seam
-> (default False = fixed sleeps unchanged); on the scrcpy stream, "no new frame
-> for one quiet window" = settled (the encoder only emits on change — no pixel
-> diffing) replaces all four fixed sleeps (step_wait / wait action / blind-step /
-> poll-skip), worst case spending the original budget; `RELAY_SETTLE_DETECT`(1) /
-> `RELAY_SETTLE_QUIET`(0.2 s). Measured: static-screen step settle 0.5 s→0.2 s,
-> swipe animations correctly waited out. S3 (n=3 equivalence + 30-task
-> wall-clock) still open.
+> **Status**: S1 and S2 are shipped — the scrcpy streaming backend
+> (`agents/device/android_stream.py`, `RELAY_CAPTURE_BACKEND=scrcpy`; measured on a Pixel 9,
+> ~2.0 s/frame → ~8 ms/frame steady-state) and frame-arrival settle detection
+> (`DeviceBackend.wait_settled`, replacing all four fixed sleeps; static-screen step settle
+> 0.5 s → 0.2 s). S3 (equivalence validation + wall-clock evaluation) is open.
 
 **Today**: screencap measures ~1.2 s/frame and is the dominant per-step cost; the fixed sleeps (step_wait 0.5 s / blind-step 0.15 s / poll-skip 0.3 s) exist precisely because frames are too expensive to poll.
 
@@ -107,29 +96,16 @@ With cheap frames, replace each fixed sleep with `wait_until_stable(timeout, eps
 
 ### S3 Equivalence validation + evaluation (days 9–12)
 
-The key risk is **behavioral drift**: decoded frames differ from screencap frames in color/compression, which can affect VLM grounding and region hashing. Run the same tasks n=3 under both backends and diff action sequences and success; re-calibrate hash thresholds if needed. Then measure wall-clock on ~30 phase-B tasks. **Honest expectation**: the in-app agent's own reply latency (~18 s per reply) is not ours to cut; the task-level target is −~30%, not an order of magnitude.
+The key risk is **behavioral drift**: decoded frames differ from screencap frames in color/compression, which can affect VLM grounding and region hashing. Run the same tasks n=3 under both backends and diff action sequences and success; re-calibrate hash thresholds if needed. Then measure wall-clock on ~30 A/B tasks. **Honest expectation**: the in-app agent's own reply latency (~18 s per reply) is not ours to cut; the task-level target is −~30%, not an order of magnitude.
 
 ---
 
 ## 🧠 P3 User memory layer (~2 weeks)
 
-> **Status (2026-07-08)**: M1–M4 shipped (`agents/flow/user_profile.py`, schema
-> `spec/profile.schema.json`, unit tests `tests/test_user_profile.py`).
-> M1: `${RELAY_PROFILE_ROOT:-~/.relayagent}/profile.yaml` (`RELAY_PROFILE=0`
-> turns the layer off; a malformed file degrades to "no profile" with a warning).
-> M2: ① profile summary on the synthesis prompt (verified on device: "navigate
-> home" plans straight to `导航去<home address>`, zero ask_user rounds);
-> ② profile values as `prompt_template` slot candidates; ③ ask_user select_from
-> pre-selects the previous choice (`last_choices` records the user's own explicit
-> pick automatically). M3: post-flow one-call preference proposal → **asks y/n
-> before writing** (EOF/batch = declined); benchmarks force `RELAY_PROFILE=0`
-> (token fairness + reproducibility). M4: `RELAY_TRAJ_REDACT=1` replaces profile
-> values with `<profile:section.key>` at every log-write site (agent/flow
-> llm_calls, steps.json, summary.json, flow_report.json, the agent_reply.json log
-> copy); an on-device leak scan found zero plaintext. The 10-task
-> implicit-preference acceptance comparison is still to run. Caveat: resolved
-> profile values are baked into cached plans (`manifests/_generated/`,
-> gitignored) — after changing the profile, bypass stale cache with `--no-cache`.
+> **Status**: M1–M4 are shipped (`agents/flow/user_profile.py`, schema
+> `spec/profile.schema.json`, tests `tests/test_user_profile.py`); the 10-task
+> implicit-preference acceptance comparison is pending. Caveat: resolved profile values
+> are baked into cached plans — bypass stale cache with `--no-cache` after editing the profile.
 
 **Principles**: local, explicit, inspectable/deletable. The project's premise is that context already lives inside the apps; the memory layer only fills in preferences the user didn't spell out — no scraping.
 
@@ -162,7 +138,7 @@ The key risk is **behavioral drift**: decoded frames differ from screencap frame
 ```
 wk 1-3   P1 recovery loop (R0→R4)
 wk 1-2   P2 streaming capture (parallel, S1→S3)
-wk 4     full phase-B rerun with P1+P2 merged (the numbers double as OEM/paper ammunition)
+wk 4     full real-device A/B rerun with P1+P2 merged (the numbers double as OEM/paper ammunition)
 wk 5-6   P3 memory layer
 wk 5     P4-C1 card CI (small, fits in gaps)
 wk 7-9   P4-C2 recorder
@@ -171,5 +147,5 @@ ongoing  P5 milestones
 
 Two rules that apply to every phase:
 
-1. **Every phase ends with a phase-B subset rerun**, numbers land in `report/` — the project's credibility rests on "every claim has n=3 data"; productization doesn't get to drop that;
+1. **Every phase ends with a real-device A/B subset rerun**, numbers land in `report/` — the project's credibility rests on "every claim has n=3 data"; productization doesn't get to drop that;
 2. **Every new behavior ships behind an env switch defaulting to today's behavior** (`RELAY_RECOVERY` / `RELAY_CAPTURE_BACKEND` / `RELAY_PROFILE` / `RELAY_TRAJ_REDACT`), so a comparable baseline is always one flag away.

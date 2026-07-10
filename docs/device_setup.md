@@ -24,7 +24,7 @@
 
 | Item | Requirement | Notes |
 | --- | --- | --- |
-| Connection | USB debugging or Wi-Fi adb (`adb tcpip 5555` + `adb connect`) | Phase B ran over Wi-Fi adb; **tasks that toggle flight mode kill the Wi-Fi adb transport and are excluded from the task set** |
+| Connection | USB debugging or Wi-Fi adb (`adb tcpip 5555` + `adb connect`) | The real-device A/B runs used Wi-Fi adb; **tasks that toggle flight mode kill the Wi-Fi adb transport and are excluded from the task set** |
 | Multi-device | `RELAY_ANDROID_SERIAL=<serial>` | honored by every adb call (`agents/runtime/_adb.py`) |
 | IME | **ADBKeyBoard** (`com.android.adbkeyboard`, [senzhk/ADBKeyBoard](https://github.com/senzhk/ADBKeyBoard)) installed | the runner does `ime enable/set` itself at startup and `ime reset` on exit; only "installed" is required |
 | a11y dump | `uiautomator dump` works | primary path for tap_text grounding and reply scraping; without it everything falls back to the VLM (slow, expensive) |
@@ -40,7 +40,7 @@ Every benchmark's covered tier routes into the embedded agents of these 10 apps 
 
 | App | Package | Account / prerequisites |
 | --- | --- | --- |
-| Tongyi Qwen | com.aliyun.tongyi | Alibaba account (shopping/food capabilities go through the Taobao backend; the account needs normal purchase history — see README "Known blockers" on risk control) |
+| Tongyi Qwen | com.aliyun.tongyi | Alibaba account (shopping/food capabilities go through the Taobao backend; a fresh account can trip risk control — normal purchase history helps) |
 | Amap | com.autonavi.minimap | signed in + location permission (ride hailing needs real-name / payment binding) |
 | Ctrip | ctrip.android.view | signed in |
 | WeChat | com.tencent.mm | signed in (Yuanbao / AI-search entry) |
@@ -57,7 +57,7 @@ Every benchmark's covered tier routes into the embedded agents of these 10 apps 
 
 Only the 10 apps from §3.1 (the suite is designed around them, balanced at 4–5 appearances per app).
 
-### 3.3 AndroidDaily (235 tasks; Phase B runs only the 71 covered)
+### 3.3 AndroidDaily (235 tasks; the real-device A/B runs only the 71 covered)
 
 - **Covered subset (71 tasks)**: instructions name Taobao/Eleme etc., but RA routes them into manifest apps (e.g. Taobao shopping → Qwen, same fulfillment backend) → still only §3.1.
 - **MW-fallback tier (143 tasks, if run end-to-end on device)**: needs the native apps the tasks name. Top by frequency: Taobao (15), Ctrip (14), WeChat (14), Meituan (12), Amap (11), Railway 12306 (10), Xiaohongshu (9), Weibo (9), Qunar (9), Fliggy (8), JD (8), Pinduoduo (7), Bilibili, Douyin, Didi, Eleme, Dianping, NetEase Music, QQ Music, Zhihu… (70+ apps total — see the「APP名称」column of `benchmark/androiddaily_task_info.csv`). All need signed-in state.
@@ -67,7 +67,7 @@ Only the 10 apps from §3.1 (the suite is designed around them, balanced at 4–
 MW tasks run inside **MobileWorld's own app environment** (Mail, Messages, Mastodon, Files, Calendar, Mattermost, Chrome, Contacts, Gallery, Maps, Docreader, Clock, Settings, Camera, Taodian), with data seeded by MW's task initializers — **not the Chinese apps**. Environment setup: [`mobileworld_real_device.md`](mobileworld_real_device.md). Notes:
 
 - `MCP-*` tasks (40) are tool-calls, not real GUI; excluded via `--skip-mcp`.
-- Taodian (the toy e-commerce app) fails on real devices for both systems (risk control); Phase B records both-fail.
+- Taodian (MW's bundled demo e-commerce app) fails on real devices for both systems (risk control); recorded as both-fail.
 
 ## 🧹 4. State hygiene before benchmark runs
 
