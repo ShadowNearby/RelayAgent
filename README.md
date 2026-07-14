@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="#-citation">📚 Paper</a> •
+  <a href="paper/relayagent.pdf">📚 Paper</a> •
   <a href="android/README.en.md">📱 Android App</a> •
   <a href="docs/roadmap.md">🗺️ Roadmap</a> •
   <a href="CONTRIBUTING.md">🤝 Contributing</a>
@@ -141,7 +141,7 @@ The full pipeline — planning, routing, execution, logging — also runs inside
 
 ## 📚 Citation
 
-If you find RelayAgent useful, please cite the paper and this repository:
+If you find RelayAgent useful, please cite the paper and this repository. Paper PDF: [paper/relayagent.pdf](paper/relayagent.pdf).
 
 ```bibtex
 @misc{relayagent2026,

@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="#-引用">📚 论文</a> •
+  <a href="paper/relayagent.pdf">📚 论文</a> •
   <a href="android/README.md">📱 Android App</a> •
   <a href="docs/roadmap.zh.md">🗺️ 路线图</a> •
   <a href="CONTRIBUTING.md">🤝 参与贡献</a>
@@ -141,7 +141,7 @@ RelayAgent 在三个测试集（AndroidDaily、MobileWorld、RelayBench）上均
 
 ## 📚 引用
 
-如果 RelayAgent 对你有帮助，请引用论文与本仓库：
+如果 RelayAgent 对你有帮助，请引用论文与本仓库。论文 PDF：[paper/relayagent.pdf](paper/relayagent.pdf)。
 
 ```bibtex
 @misc{relayagent2026,

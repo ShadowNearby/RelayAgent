@@ -143,6 +143,10 @@ uv run python scripts/run_plan.py --yes "帮我找一台适合学生的平板电
 
 最后一步调 `ask_user` 等终端输入。stdin 被重定向时以 `EOF when reading a line` 结束 —— 这是**成功**不是失败。
 
+## 论文（paper/）
+
+`paper/` 只放编译好的 [`paper/relayagent.pdf`](paper/relayagent.pdf)，不含 LaTeX 源码（源码在独立仓库 `~/relayagent-paper` 维护）。README/README_zh 的「📚 Paper/论文」链接与 Citation 区块都指向 `paper/relayagent.pdf`，换 PDF 时直接覆盖该文件即可。
+
 ## Android App 移植（android/，进行中）
 
 纯无障碍方案 + Chaquopy 嵌 Python，把整个 NL flow 装进独立 App（无电脑无 adb）。骨架与映射表见 [`android/README.md`](android/README.md)。**主机行为零漂移**：以下接缝默认值全部保持原行为，只有 Android 侧换实现。
