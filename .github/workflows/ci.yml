@@ -8,6 +8,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      UV_DEFAULT_INDEX: https://pypi.org/simple
     steps:
       - uses: actions/checkout@v4
 
