@@ -679,11 +679,11 @@ class FlowRunner:
                            ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+        summary = {"last_action_type": terminal_action,
+                   "last_goal_status": goal_status,
+                   "via": "mobileworld"}
         summary_path.write_text(
-            json.dumps({"last_action_type": terminal_action,
-                        "last_goal_status": goal_status,
-                        "via": "mobileworld"}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
         needs_reply = bool(step.get("bind") or step.get("extract"))
@@ -692,6 +692,12 @@ class FlowRunner:
                 f"MobileWorld leg {step['id']!r}: no answer captured. "
                 f"Check {step_log_root}/user_task/."
             )
+        if not needs_reply:
+            # Same terminal check an output-free app leg gets in
+            # _execute_app_leg: with no bind to miss, a timed-out/crashed MW
+            # run (rc!=0, no answer, no terminal action) would otherwise fall
+            # through and read as leg success.
+            _assert_output_free_step_completed(step, summary, rc, summary_path)
         if reply:
             logger.info(f"captured MobileWorld answer ({len(reply)} chars)")
         else:
@@ -787,6 +793,11 @@ class FlowRunner:
                 f"General fallback leg {step['id']!r}: no answer captured. "
                 f"Check {step_log_root}/."
             )
+        if not needs_reply:
+            # Same terminal check as an output-free app leg / MW leg — the
+            # general agent runs on the native runtime, so the summary shape
+            # is already the one the assert reads.
+            _assert_output_free_step_completed(step, summary, rc, summary_path)
         if reply:
             logger.info(f"captured general-fallback answer ({len(reply)} chars)")
         else:

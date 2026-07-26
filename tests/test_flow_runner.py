@@ -74,7 +74,9 @@ class ExtractTests(unittest.TestCase):
 class MobileworldStepTests(unittest.TestCase):
     """Runs one MW fallback leg end-to-end with the driver subprocess mocked.
     Pins the command construction (a refactor once dropped `import sys`,
-    NameError-ing every MW leg) and the harvest→bind path."""
+    NameError-ing every MW leg), the harvest→bind path, and the output-free
+    terminal check (a timed-out/crashed MW run must fail the leg, not slide
+    through as success)."""
 
     def setUp(self) -> None:
         import tempfile
@@ -88,7 +90,7 @@ class MobileworldStepTests(unittest.TestCase):
         os.environ.pop("RELAY_LEG_JUDGE", None)
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    def test_mw_step_builds_command_and_binds_answer(self) -> None:
+    def _mw_runner(self) -> FlowRunner:
         runner = FlowRunner.__new__(FlowRunner)
         runner.bb = {}
         runner.env = {}
@@ -97,14 +99,24 @@ class MobileworldStepTests(unittest.TestCase):
         runner._step_idx = 0
         runner._mw_server_url = "http://127.0.0.1:1"
         runner._mw_server_proc = object()  # pretend the flow already started one
+        return runner
+
+    def _write_mw_traj(self, leg_dirname: str, actions: list[dict]) -> None:
+        traj = Path(self._tmp) / leg_dirname / "user_task" / "traj.json"
+        traj.parent.mkdir(parents=True, exist_ok=True)
+        traj.write_text(
+            json.dumps({"0": {"traj": [{"action": a} for a in actions]}}),
+            encoding="utf-8",
+        )
+
+    def test_mw_step_builds_command_and_binds_answer(self) -> None:
+        runner = self._mw_runner()
 
         def fake_call(cmd, **kwargs):
             # The driver would write MobileWorld's traj; emulate its answer.
-            traj = Path(self._tmp) / "01_mw1" / "user_task" / "traj.json"
-            traj.parent.mkdir(parents=True, exist_ok=True)
-            traj.write_text(json.dumps({"0": {"traj": [
-                {"action": {"action_type": "answer", "text": "the answer"}},
-            ]}}), encoding="utf-8")
+            self._write_mw_traj(
+                "01_mw1", [{"action_type": "answer", "text": "the answer"}]
+            )
             return 0
 
         with mock.patch(
@@ -117,6 +129,123 @@ class MobileworldStepTests(unittest.TestCase):
         self.assertEqual(argv[0], sys.executable)
         self.assertIn("--no-start-server", argv)
         self.assertIn("--no-prelaunch", argv)
+
+    def test_mw_output_free_step_crash_raises(self) -> None:
+        # Whole-request fallback shape (_mw_whole_request_plan): no bind. A
+        # driver that dies without writing a traj must fail the leg.
+        runner = self._mw_runner()
+        with mock.patch(
+            "agents.flow.flow_runner.subprocess.call", return_value=124
+        ), self.assertRaisesRegex(RuntimeError, "terminal state"):
+            runner._run_mobileworld_step({"id": "mw_fallback", "prompt": "do it"})
+
+    def test_mw_output_free_step_non_terminal_traj_raises(self) -> None:
+        # rc=0 but the traj never reached a terminal action (e.g. max-round
+        # exhausted mid-task): the output-free leg must not read as success.
+        runner = self._mw_runner()
+
+        def fake_call(cmd, **kwargs):
+            self._write_mw_traj(
+                "01_mw_fallback",
+                [{"action_type": "click", "goal_status": "in_progress"}],
+            )
+            return 0
+
+        with mock.patch(
+            "agents.flow.flow_runner.subprocess.call", side_effect=fake_call
+        ), self.assertRaisesRegex(RuntimeError, "terminal state"):
+            runner._run_mobileworld_step({"id": "mw_fallback", "prompt": "do it"})
+
+    def test_mw_output_free_step_terminal_state_passes(self) -> None:
+        runner = self._mw_runner()
+
+        def fake_call(cmd, **kwargs):
+            self._write_mw_traj(
+                "01_mw_fallback",
+                [{"action_type": "finished", "goal_status": "complete"}],
+            )
+            return 0
+
+        with mock.patch(
+            "agents.flow.flow_runner.subprocess.call", side_effect=fake_call
+        ):
+            runner._run_mobileworld_step({"id": "mw_fallback", "prompt": "do it"})
+        self.assertEqual(runner.bb, {})  # output-free: nothing bound
+
+
+class GeneralStepTests(unittest.TestCase):
+    """Runs one general fallback leg with the leg executor mocked. Pins the
+    reply→bind path and the output-free terminal check (mirrors the MW leg)."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmp = tempfile.mkdtemp()
+        os.environ["RELAY_LEG_JUDGE"] = "0"  # judging needs a device + LLM
+
+    def tearDown(self) -> None:
+        import shutil
+
+        os.environ.pop("RELAY_LEG_JUDGE", None)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _general_runner(self) -> FlowRunner:
+        runner = FlowRunner.__new__(FlowRunner)
+        runner.bb = {}
+        runner.env = {}
+        runner._llm = MagicMock(calls=[])
+        runner.flow_traj_root = Path(self._tmp)
+        runner._step_idx = 0
+        runner.extra_args = []
+        runner._leg_executor = MagicMock()
+        return runner
+
+    @staticmethod
+    def _fake_run(summary: dict | None, reply: str = "", rc: int = 0):
+        def run(target, prompt, child_env, extra_args):
+            if summary is not None:
+                Path(child_env["RELAY_SUMMARY_OUT"]).write_text(
+                    json.dumps(summary), encoding="utf-8"
+                )
+            if reply:
+                Path(child_env["RELAY_REPLY_OUT"]).write_text(
+                    json.dumps({"reply": reply}), encoding="utf-8"
+                )
+            return rc
+
+        return run
+
+    def test_general_step_binds_answer(self) -> None:
+        runner = self._general_runner()
+        runner._leg_executor.run.side_effect = self._fake_run(
+            {"last_action_type": "answer"}, reply="the answer"
+        )
+        runner._run_general_step({"id": "g1", "prompt": "do it", "bind": "out"})
+        self.assertEqual(runner.bb["out"], "the answer")
+
+    def test_general_output_free_step_crash_raises(self) -> None:
+        # Whole-request fallback shape (_general_whole_request_plan): no bind.
+        # A run that dies before writing a summary must fail the leg.
+        runner = self._general_runner()
+        runner._leg_executor.run.side_effect = self._fake_run(None, rc=1)
+        with self.assertRaisesRegex(RuntimeError, "terminal state"):
+            runner._run_general_step({"id": "g1", "prompt": "do it"})
+
+    def test_general_output_free_step_non_terminal_summary_raises(self) -> None:
+        runner = self._general_runner()
+        runner._leg_executor.run.side_effect = self._fake_run(
+            {"last_action_type": "click", "last_goal_status": None}
+        )
+        with self.assertRaisesRegex(RuntimeError, "terminal state"):
+            runner._run_general_step({"id": "g1", "prompt": "do it"})
+
+    def test_general_output_free_step_terminal_state_passes(self) -> None:
+        runner = self._general_runner()
+        runner._leg_executor.run.side_effect = self._fake_run(
+            {"last_action_type": "finished", "last_goal_status": "complete"}
+        )
+        runner._run_general_step({"id": "g1", "prompt": "do it"})
+        self.assertEqual(runner.bb, {})  # output-free: nothing bound
 
 
 class AskUserSelectFromTests(unittest.TestCase):

@@ -227,6 +227,29 @@ class RecoveryLadderTests(unittest.TestCase):
         self.assertEqual(mw_step.get("type"), "mobileworld")
         self.assertEqual(runner._step_outcomes[-1]["recovered_via"], "mw_fallback")
 
+    def test_mw_tier_failure_is_not_recovered(self) -> None:
+        """A MW-tier run that raises (e.g. the output-free terminal check on a
+        timed-out general_e2e run) is that tier FAILING — the step must not be
+        recorded as recovered, and the fatal original failure still aborts the
+        step once the ladder is exhausted."""
+        runner = _runner(self._tmp)
+        runner._recovery.reroute = MagicMock(return_value=None)
+        first = _hard_fail()
+        first.leg_dir = Path(self._tmp) / "01_s1"
+        first.leg_dir.mkdir()
+        runner._execute_app_leg = MagicMock(side_effect=[first, _hard_fail()])
+        runner._run_mobileworld_step = MagicMock(side_effect=RuntimeError(
+            "output-free run did not reach a successful terminal state"))
+        with mock.patch("agents.flow.flow_runner.mw_fallback_enabled", return_value=True), \
+             self.assertRaises(RuntimeError):
+            runner._run_app_step(dict(_STEP))
+        runner._run_mobileworld_step.assert_called_once()
+        self.assertEqual(runner._step_outcomes[-1]["status"], "failed")
+        self.assertNotIn("recovered", [o["status"] for o in runner._step_outcomes])
+        attempts = json.loads((first.leg_dir / "recovery.json").read_text())
+        self.assertEqual(attempts[-1]["tier"], "mw_fallback")
+        self.assertEqual(attempts[-1]["outcome"], "failed")
+
     def test_general_tier_when_mw_unavailable(self) -> None:
         """MW off (on-device / no mw extra) + general on: the last tier is the
         manifest-free general agent instead of MobileWorld."""
