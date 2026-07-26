@@ -62,6 +62,7 @@ class ScreenCaptureService : Service() {
     }
 
     private var projection: MediaProjection? = null
+    private var projectionCallback: MediaProjection.Callback? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var latestImage: Image? = null
@@ -110,18 +111,26 @@ class ScreenCaptureService : Service() {
     }
 
     private fun setUpProjection(resultCode: Int, data: Intent) {
+        // A repeated start (new consent while a session is still up) must not
+        // overwrite live fields and orphan the old session; no-op when idle.
+        tearDownProjection()
         val mgr = getSystemService(MediaProjectionManager::class.java)
         val proj = mgr.getMediaProjection(resultCode, data) ?: run {
             Log.w(TAG, "getMediaProjection returned null")
             stopSelf()
             return
         }
-        proj.registerCallback(object : MediaProjection.Callback() {
+        // Must be registered before createVirtualDisplay (enforced on Android 14).
+        // Kept in a field so tearDownProjection can unregister it before calling
+        // stop(), which would otherwise re-enter teardown via this onStop.
+        val callback = object : MediaProjection.Callback() {
             override fun onStop() {
                 Log.w(TAG, "projection revoked/stopped")
                 tearDownProjection()
             }
-        }, null)
+        }
+        proj.registerCallback(callback, null)
+        projectionCallback = callback
 
         val metrics = resources.displayMetrics
         val w = metrics.widthPixels
@@ -179,16 +188,39 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /**
+     * Releases the capture pipeline consumer-side first (VirtualDisplay →
+     * held Image → ImageReader), then ends the projection session itself.
+     * Runs on both paths: explicit teardown (onDestroy) and system revocation
+     * (the callback's onStop). Fields are nulled as they are released, so a
+     * second entry is a no-op.
+     */
     private fun tearDownProjection() {
         virtualDisplay?.release()
         virtualDisplay = null
+        // Drop the frame listener before closing so a queued callback can't
+        // touch a closed reader and the lambda's reference to this is released.
+        imageReader?.setOnImageAvailableListener(null, null)
         synchronized(frameLock) {
             latestImage?.close()
             latestImage = null
         }
         imageReader?.close()
         imageReader = null
+        val proj = projection
         projection = null
+        val callback = projectionCallback
+        projectionCallback = null
+        if (proj != null) {
+            // Unregister first: stop() dispatches onStop to registered
+            // callbacks, which would re-enter this method. On the revocation
+            // path the session is already stopped and the extra stop() is a
+            // no-op system-side, so this ends the session exactly once —
+            // without it the token stays held and the status-bar capture
+            // indicator persists after every run.
+            callback?.let { proj.unregisterCallback(it) }
+            proj.stop()
+        }
     }
 
     override fun onDestroy() {
