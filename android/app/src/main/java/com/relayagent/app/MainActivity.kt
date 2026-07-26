@@ -26,28 +26,31 @@ import org.json.JSONObject
  * Run flow is unchanged underneath: ensure a11y service → per-session
  * MediaProjection consent (Android 14) → capture service + overlay chip →
  * PythonRuntime.runFlow.
+ *
+ * All run state (pending goal, running flag, live Working card) lives in
+ * [RunSession], which survives activity recreation the way [ChatStore] does;
+ * this activity only renders. On resume it re-reads both singletons, so a
+ * rotation / theme-switch / low-memory recreation mid-run comes back with the
+ * live card still spinning and the composer still in its Stop state, and a
+ * result that arrived while no instance was attached is already in the thread.
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), RunSession.Host {
 
     private lateinit var ui: ActivityMainBinding
     private lateinit var adapter: ChatAdapter
-    private var pendingGoal: String? = null
-    private var running = false
-    private var working: ChatItem.Working? = null
 
     private val projectionConsent =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            val goal = pendingGoal ?: return@registerForActivityResult
-            pendingGoal = null
+            // The consent dialog can outlive this activity instance (the
+            // recreation is delivered to the NEW instance's callback); the
+            // parked goal lives in RunSession, not on the old instance.
+            val goal = RunSession.takePendingGoal() ?: return@registerForActivityResult
             if (result.resultCode != Activity.RESULT_OK || result.data == null) {
-                RunLog.append(getString(R.string.notice_consent_denied))
-                finishWorking()
-                appendItem(ChatItem.Notice(getString(R.string.notice_consent_denied)))
-                setRunning(false)
+                RunSession.onConsentDenied()
                 return@registerForActivityResult
             }
             ScreenCaptureService.start(this, result.resultCode, result.data!!)
-            launchFlow(goal)
+            RunSession.launchFlow(applicationContext, goal)
         }
 
     private val pickExample =
@@ -87,7 +90,9 @@ class MainActivity : AppCompatActivity() {
         ui.chatList.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
         ui.chatList.adapter = adapter
 
-        ui.sendBtn.setOnClickListener { if (running) onStopClicked() else onSendClicked() }
+        ui.sendBtn.setOnClickListener {
+            if (RunSession.running) onStopClicked() else onSendClicked()
+        }
         buildExampleChips()
         refreshEmptyState()
     }
@@ -95,147 +100,71 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshSetupBanner()
-        RunEvents.listener = { onRunEvent(it) }
+        RunSession.attach(this, applicationContext)
+        // Re-render everything from the surviving singletons: the thread
+        // (including a Working card mid-run or a result card that landed while
+        // no instance was attached) and the composer's send/stop state.
         adapter.notifyDataSetChanged()
+        refreshEmptyState()
+        renderRunning(RunSession.running)
         scrollToBottom()
     }
 
-    override fun onPause() {
-        super.onPause()
-        RunEvents.listener = null
+    override fun onDestroy() {
+        super.onDestroy()
+        // Detach at destroy, not pause: a paused-but-alive instance (consent
+        // dialog or another activity on top) must keep receiving adapter
+        // notifications — its RecyclerView still reads ChatStore.items, and
+        // mutating that list without notifying it is an inconsistency crash.
+        // The identity guard keeps a stale destroy from kicking out an
+        // instance that attached after us; on plain recreation the successor
+        // re-attaches (and re-renders) in its own onResume.
+        RunSession.detach(this)
     }
 
     // ------------------------------------------------------------- composing
 
     private fun onSendClicked() {
         val goal = ui.composerInput.text?.toString()?.trim().orEmpty()
-        if (goal.isEmpty()) return
+        if (goal.isEmpty() || RunSession.running) return
         if (RelayAccessibilityService.instance == null) {
             appendItem(ChatItem.Notice(getString(R.string.status_a11y_off)))
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
         ui.composerInput.setText("")
-        appendItem(ChatItem.User(goal))
-        working = ChatItem.Working().also { appendItem(it) }
-        setRunning(true)
-        RunLog.append("▶ $goal")
+        RunSession.begin(applicationContext, goal)
 
         // Per-session projection consent (Android 14 requirement).
-        pendingGoal = goal
         val mgr = getSystemService(MediaProjectionManager::class.java)
         projectionConsent.launch(mgr.createScreenCaptureIntent())
     }
 
     private fun onStopClicked() {
-        DeviceBridge.requestStop()
-        RunLog.append(getString(R.string.notice_stop_requested))
-        working?.let {
-            it.stopping = true
-            notifyWorkingChanged()
-        }
-        appendItem(ChatItem.Notice(getString(R.string.notice_stop_requested)))
+        RunSession.requestStop()
     }
 
-    private fun launchFlow(goal: String) {
-        OverlayController.show()
-        PythonRuntime.runFlow(this, goal, SettingsActivity.loadConfig(this)) { result ->
-            runOnUiThread {
-                if (!isDestroyed) onRunFinished(result)
-                OverlayController.hide()
-                ScreenCaptureService.stop(this)
-            }
-        }
+    // ------------------------------------------------------ RunSession.Host
+
+    override fun onItemInserted(index: Int) {
+        adapter.notifyItemInserted(index)
+        refreshEmptyState()
+        scrollToBottom()
     }
 
-    // --------------------------------------------------------------- results
-
-    private fun onRunFinished(resultJson: String) {
-        finishWorking()
-        appendItem(parseResult(resultJson))
-        setRunning(false)
-        RunLog.append("结果: ${resultJson.take(400)}")
+    override fun onItemChanged(index: Int) {
+        adapter.notifyItemChanged(index)
+        scrollToBottom()
     }
 
-    /** Map run_flow's structured JSON result onto a result card. */
-    private fun parseResult(raw: String): ChatItem {
-        val o = try {
-            JSONObject(raw)
-        } catch (e: Exception) {
-            return ChatItem.Answer(false, getString(R.string.result_failed), raw.take(600))
-        }
-        val trajRoot = o.optString("traj_root").takeIf { it.isNotEmpty() }
-        if (o.optBoolean("ok")) {
-            return ChatItem.Answer(
-                true, getString(R.string.result_done), summarizeBlackboard(o), trajRoot
-            )
-        }
-        if (o.optBoolean("unsatisfiable")) {
-            return ChatItem.Answer(
-                false,
-                getString(R.string.result_unsatisfiable),
-                o.optString("reason").ifEmpty { "没有能覆盖这个任务的 App。" },
-            )
-        }
-        val validation = o.optJSONArray("validation_errors")
-        if (validation != null && validation.length() > 0) {
-            val lines = (0 until validation.length()).joinToString("\n") {
-                "· ${validation.optString(it)}"
-            }
-            return ChatItem.Answer(false, getString(R.string.result_failed), lines)
-        }
-        return ChatItem.Answer(
-            false,
-            getString(R.string.result_failed),
-            o.optString("error").ifEmpty { raw.take(600) },
-            trajRoot,
-        )
-    }
-
-    /** Human summary of the final blackboard: captured replies / user picks. */
-    private fun summarizeBlackboard(result: JSONObject): String {
-        val bb = result.optJSONObject("blackboard") ?: return "已执行完毕。"
-        val parts = mutableListOf<String>()
-        for (key in bb.keys()) {
-            val value = bb.opt(key) ?: continue
-            val text = value.toString().trim()
-            if (text.isEmpty() || text == "null") continue
-            parts.add(if (bb.length() == 1) truncate(text) else "$key：${truncate(text)}")
-        }
-        return if (parts.isEmpty()) "已执行完毕。" else parts.joinToString("\n\n")
-    }
-
-    private fun truncate(s: String, n: Int = 800): String =
-        if (s.length <= n) s else s.take(n) + "…"
-
-    // ---------------------------------------------------------- live events
-
-    private fun onRunEvent(event: RunEvents.Event) {
-        val w = working ?: return
-        when (event) {
-            is RunEvents.Event.LegStart -> {
-                val label = event.app?.let { AppLabels.label(it) } ?: event.id
-                w.legs.add(ChatItem.Working.LegRow(event.id, label))
-                w.stepLine = null
-            }
-            is RunEvents.Event.Step -> {
-                w.stepLine = "步骤 ${event.step} · ${event.actionType}" +
-                    (if (event.thought.isNotEmpty()) " · ${event.thought.take(60)}" else "")
-            }
-            is RunEvents.Event.LegEnd -> {
-                w.legs.lastOrNull { it.id == event.id }?.done = true
-                w.stepLine = null
-            }
-            RunEvents.Event.AskUser ->
-                appendItem(ChatItem.Notice(getString(R.string.notice_waiting_answer)))
-            RunEvents.Event.AskAnswered ->
-                appendItem(ChatItem.Notice(getString(R.string.notice_answer_received)))
-        }
-        notifyWorkingChanged()
+    override fun onRunStateChanged(running: Boolean) {
+        renderRunning(running)
+        if (!running) ui.composerInput.requestFocus()
     }
 
     // ------------------------------------------------------------- UI state
 
+    /** Activity-local notices (e.g. a11y off) that are not part of a run. */
     private fun appendItem(item: ChatItem) {
         ChatStore.items.add(item)
         adapter.notifyItemInserted(ChatStore.items.size - 1)
@@ -243,28 +172,13 @@ class MainActivity : AppCompatActivity() {
         scrollToBottom()
     }
 
-    private fun notifyWorkingChanged() {
-        val idx = working?.let { ChatStore.items.indexOf(it) } ?: -1
-        if (idx >= 0) adapter.notifyItemChanged(idx)
-        scrollToBottom()
-    }
-
-    private fun finishWorking() {
-        working?.let {
-            it.running = false
-            val idx = ChatStore.items.indexOf(it)
-            if (idx >= 0) adapter.notifyItemChanged(idx)
-        }
-        working = null
-    }
-
-    private fun setRunning(value: Boolean) {
-        running = value
+    /** Composer send/stop rendering. Pure view state — [RunSession] owns the
+     * running flag itself. */
+    private fun renderRunning(value: Boolean) {
         ui.sendBtn.setIconResource(
             if (value) android.R.drawable.ic_media_pause else android.R.drawable.ic_menu_send
         )
         ui.composerInput.isEnabled = !value
-        if (!value) ui.composerInput.requestFocus()
     }
 
     private fun scrollToBottom() {

@@ -13,10 +13,11 @@ import org.json.JSONObject
  * can render a live activity card (per-subtask rows + current step) the way
  * the Codex/Claude apps show agent progress.
  *
- * Delivery is always on the main thread. A single listener (the visible
- * MainActivity) is enough — missed events while the activity is backgrounded
- * only degrade the live card; the final result still arrives via the
- * runFlow completion callback.
+ * Delivery is always on the main thread. A single listener is enough:
+ * [RunSession] owns the slot for the whole process lifetime and applies
+ * events to the live Working card model inside [ChatStore], so the card
+ * stays current even while no activity is attached — a recreated or
+ * returning MainActivity just re-renders the thread from the singletons.
  */
 object RunEvents {
 
