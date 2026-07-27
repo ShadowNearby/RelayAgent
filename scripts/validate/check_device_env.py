@@ -40,10 +40,20 @@ def _report(level: str, name: str, detail: str = "") -> None:
 
 
 def _adb(args: list[str], *, timeout: float = 15.0, binary: bool = False):
-    return subprocess.run(
-        adb_base() + args,
-        check=False, capture_output=True, text=not binary, timeout=timeout,
-    )
+    try:
+        return subprocess.run(
+            adb_base() + args,
+            check=False, capture_output=True, text=not binary, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        # A wedged adb (USB flake, device in D-state) is exactly the kind of
+        # environment problem this tool exists to report — surface it as a
+        # failed completion so the calling check emits a FAIL/WARN row instead
+        # of the whole tool dying with a traceback.
+        empty = b"" if binary else ""
+        stderr = (b"adb timed out" if binary
+                  else f"adb timed out after {timeout:.0f}s — device/USB wedged?")
+        return subprocess.CompletedProcess(args, returncode=124, stdout=empty, stderr=stderr)
 
 
 def check_adb_device() -> bool:
@@ -51,6 +61,9 @@ def check_adb_device() -> bool:
         res = subprocess.run(["adb", "version"], check=False, capture_output=True, text=True, timeout=10)
     except FileNotFoundError:
         _report("FAIL", "adb binary", "`adb` not on PATH — install Android platform-tools")
+        return False
+    except subprocess.TimeoutExpired:
+        _report("FAIL", "adb binary", "`adb version` hung >10s — adb server wedged? try `adb kill-server`")
         return False
     _report("PASS", "adb binary", res.stdout.splitlines()[0] if res.stdout else "")
 
@@ -125,6 +138,36 @@ def manifest_packages() -> list[str]:
     return pkgs
 
 
+def benchmark_packages(benchmark: str | None) -> tuple[list[str], str]:
+    """(packages to check, how that set was derived) for one benchmark.
+
+    Only RelayBench names real Android packages. MobileWorld tasks name its own
+    app labels (Mail/Messages/…) and AndroidDaily names Chinese launcher labels
+    ("高德地图"), neither of which is a package id — for those the requirement is
+    the manifest app set RelayAgent routes them to, which is what we check. The
+    derivation is reported so the flag is never a silent no-op.
+    """
+    if benchmark == "relaybench":
+        try:
+            import yaml
+            data = yaml.safe_load((ROOT / "benchmark" / "relaybench_tasks.yaml")
+                                  .read_text(encoding="utf-8")) or {}
+        except Exception as e:  # missing / unparsable task file — never crash a pre-flight check
+            return manifest_packages(), f"relaybench task file unreadable ({e}) — all manifest apps"
+        pkgs: set[str] = set()
+        for t in data.get("tasks") or []:
+            for a in [t.get("app"), *(t.get("apps") or [])]:
+                if a:
+                    pkgs.add(str(a))
+        if pkgs:
+            return sorted(pkgs), "apps named by benchmark/relaybench_tasks.yaml"
+        return manifest_packages(), "relaybench task file lists no apps — all manifest apps"
+    if benchmark in ("androiddaily", "mobileworld"):
+        return manifest_packages(), (f"{benchmark} names app labels, not packages — "
+                                     "checking the manifest apps it routes to")
+    return manifest_packages(), "all manifest apps"
+
+
 def check_apps(packages: list[str]) -> None:
     res = _adb(["shell", "pm", "list", "packages"], timeout=30)
     installed = {ln.split("package:", 1)[1].strip()
@@ -166,7 +209,11 @@ def check_mobileworld() -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--benchmark", choices=["relaybench", "androiddaily", "mobileworld", "all"],
-                    default=None, help="also check the app set this benchmark needs")
+                    default=None,
+                    help="check the app set this benchmark needs (relaybench: exactly the "
+                         "packages its tasks name; androiddaily/mobileworld name app labels, "
+                         "not packages, so the manifest app set is checked instead — "
+                         "mobileworld/all additionally check the MobileWorld runtime)")
     ap.add_argument("--apps", default=None, help="comma-separated package names to check instead")
     ap.add_argument("--serial", default=None, help="device serial (overrides RELAY_ANDROID_SERIAL)")
     args = ap.parse_args()
@@ -185,8 +232,9 @@ def main() -> int:
     if args.apps:
         check_apps([p.strip() for p in args.apps.split(",") if p.strip()])
     else:
-        # Manifest apps are the covered-tier requirement for every benchmark.
-        check_apps(manifest_packages())
+        pkgs, how = benchmark_packages(args.benchmark)
+        print(f"   app set: {how}")
+        check_apps(pkgs)
     if args.benchmark in ("mobileworld", "all"):
         check_mobileworld()
     check_llm_env()

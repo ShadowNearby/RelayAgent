@@ -223,14 +223,31 @@ def _by_app(bench: str = "AndroidDaily") -> dict:
     return out
 
 
+# leg kinds that mean "no specialized route" — same vocabulary as
+# run_benchmark_test._leg_kind / _ran_leg_kind.
+FALLBACK_LEG_KINDS = ("mw", "general")
+
+
 def _is_covered(relay_rec: dict) -> bool:
-    """RA actually ran a specialized route (no MobileWorld-fallback leg). At runtime
-    a task can drop into MW fallback even though it was classified covered plan-only;
-    those legs are named ``*mw_fallback*``. Empty legs == RA produced no real leg."""
+    """RA actually ran a specialized route (no manifest-free fallback leg).
+
+    At runtime a task can drop into MobileWorld / the general GUI agent even
+    though it was classified covered plan-only. Judged by the harvested leg
+    ``kind`` (run_benchmark_test stamps it from each leg's own artifacts), because
+    a per-leg conversion KEEPS the original step id — only a whole-request
+    fallback plan is named ``mw_fallback``. Rows harvested before ``kind``
+    existed fall back to that id match. Empty legs == RA produced no real leg."""
     legs = relay_rec.get("relay_legs") or []
     if not legs:
         return False
-    return not any("mw_fallback" in str(l.get("step", "")) for l in legs)
+    for l in legs:
+        kind = l.get("kind")
+        if kind is None:  # legacy row: id match is all we have
+            if "mw_fallback" in str(l.get("step", "")):
+                return False
+        elif kind in FALLBACK_LEG_KINDS:
+            return False
+    return True
 
 
 def _paired(bench: str) -> list[dict]:
@@ -438,22 +455,28 @@ def fig5_outcome_table() -> None:
     while baseline fails / baseline succeeds while RA fails / both fail. The two
     off-diagonal cells are the discordant pairs (what a McNemar test would use).
     """
+    def _cells(counts: tuple[int, int, int, int]) -> list[str]:
+        n = sum(counts)
+        return [f"{v}\n({100 * v / n:.0f}%)" for v in counts] + [str(n)]
+
     cols = ["both succeed", "RA ✓ / base ✗", "base ✓ / RA ✗", "both fail", "N"]
     rows, cells, totals = [], [], [0, 0, 0, 0]
     for b in AB_BENCHES:
-        both, ra_only, base_only, neither = _outcomes(PAIRED[b])
-        n = both + ra_only + base_only + neither
-        for j, v in enumerate((both, ra_only, base_only, neither)):
+        counts = _outcomes(PAIRED[b])
+        if not sum(counts):
+            # a single-system results dir (--systems relay, or an mw-only batch):
+            # rows exist but no task has BOTH systems, so there is nothing to pair
+            print(f"  [skip] {b}: no paired (RA+baseline) task — dropped from fig5")
+            continue
+        for j, v in enumerate(counts):
             totals[j] += v
         rows.append(b)
-        cells.append([f"{both}\n({100*both/n:.0f}%)", f"{ra_only}\n({100*ra_only/n:.0f}%)",
-                      f"{base_only}\n({100*base_only/n:.0f}%)", f"{neither}\n({100*neither/n:.0f}%)",
-                      str(n)])
-    tn = sum(totals)
+        cells.append(_cells(counts))
+    if not rows:
+        print("  [skip] fig5: no benchmark has paired rows — figure not rendered")
+        return
     rows.append("TOTAL")
-    cells.append([f"{totals[0]}\n({100*totals[0]/tn:.0f}%)", f"{totals[1]}\n({100*totals[1]/tn:.0f}%)",
-                  f"{totals[2]}\n({100*totals[2]/tn:.0f}%)", f"{totals[3]}\n({100*totals[3]/tn:.0f}%)",
-                  str(tn)])
+    cells.append(_cells(tuple(totals)))
 
     # console echo (handy when iterating without opening the PNG)
     print("  outcome matrix (RA × baseline):")

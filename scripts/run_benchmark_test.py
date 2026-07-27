@@ -140,11 +140,19 @@ NORM_FIT_FILE = TRAJ_LOGS / "phaseB" / "wall_norm_rounded.json"
 def _load_norm_const(fit_path: Path) -> tuple[float, float, float] | None:
     """(gamma, alpha, beta) from a fit file, or None if missing/malformed."""
     try:
-        fit = json.loads(fit_path.read_text(encoding="utf-8"))
+        raw = fit_path.read_text(encoding="utf-8")
+    except OSError:
+        return None  # no fit file at all — the caller already says so
+    try:
+        fit = json.loads(raw)
         return (float(fit.get("gamma_s_per_call") or 0.0),
                 float(fit["alpha_s_per_prefill_tok"]),
                 float(fit["beta_s_per_decode_tok"]))
-    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
+        # A hand-edited / half-written fit file (null constants -> TypeError, a
+        # JSON array instead of an object -> AttributeError) must degrade to
+        # "no normalization", not kill a multi-hour A/B run before task 1.
+        print(f"   [warn] unusable norm fit {fit_path}: {type(e).__name__}: {e}", flush=True)
         return None
 
 
@@ -550,6 +558,19 @@ def _run_subprocess(cmd: list[str], sys_dir: Path, *, env: dict[str, str] | None
     return rc, timed_out, round(time.monotonic() - t0, 1)
 
 
+# `--task-timeout 0` disables the outer per-run kill; run_mobileworld.py always
+# forwards a `--timeout` to `mw test` (its own default is 600s), so "disabled"
+# has to be expressed as a value big enough to never fire — otherwise relay runs
+# unbounded while mw is silently capped at 600s and the completion-rate
+# comparison is biased on long tasks.
+MW_TIMEOUT_DISABLED = 10 ** 7  # ~115 days
+
+
+def _mw_timeout_arg(timeout_s: float | None) -> str:
+    """Value for `run_mobileworld.py --timeout`, keeping A/B symmetry."""
+    return str(int(timeout_s) if timeout_s else MW_TIMEOUT_DISABLED)
+
+
 def _run_mw(task: dict[str, Any], sys_dir: Path, ctx: RunCtx) -> dict[str, Any]:
     """System `mw`: run the task through MobileWorld via run_mobileworld.py."""
     goal = task["instruction"]
@@ -562,7 +583,7 @@ def _run_mw(task: dict[str, Any], sys_dir: Path, ctx: RunCtx) -> dict[str, Any]:
         "--server-url", ctx.server_url,
         "--agent-type", ctx.mw_agent_type,
         "--max-round", str(ctx.mw_max_round),
-        "--timeout", str(int(ctx.timeout_s) if ctx.timeout_s else 600),
+        "--timeout", _mw_timeout_arg(ctx.timeout_s),
         "--output", str(sys_dir),           # forwarded to `mw test` → <sys_dir>/user_task/
         # Per-call latency + prompt/completion tokens, written beside traj.json by the
         # non-invasive probe (agents.llm.mw_llm_probe) injected into the mw test subprocess.
@@ -621,6 +642,25 @@ def _find_flow_root(stderr_log: Path, before: set[Path]) -> Path | None:
     return max(new, key=lambda p: p.stat().st_mtime) if new else None
 
 
+def _ran_leg_kind(summary: dict[str, Any], verdict: dict[str, Any]) -> str:
+    """Leg kind as ACTUALLY executed, from that leg's own artifacts.
+
+    Same vocabulary as `_leg_kind` (plan side), but read off disk: a leg that was
+    converted to a fallback at runtime (coverage gap / recovery ladder) keeps its
+    original step id, so the id says nothing. MobileWorld legs are stamped
+    ``via: "mobileworld"`` in summary.json; both fallback runtimes judge the leg
+    with capability ``fallback`` (an app leg always carries its real capability).
+    """
+    if (summary or {}).get("via") == "mobileworld":
+        return "mw"
+    cap = (verdict or {}).get("capability")
+    if cap == "fallback":
+        return "general"
+    if cap == "foundation_llm":
+        return "foundation"
+    return "specialized"
+
+
 def _harvest_relay_legs(flow_root: Path) -> dict[str, Any]:
     """Per-leg verdicts/reply/steps + the whole-run token accounting.
 
@@ -649,7 +689,8 @@ def _harvest_relay_legs(flow_root: Path) -> dict[str, Any]:
             total += u.get("total_tokens") or 0
         verdict = _read_json(leg / "leg_verdict.json")
         if isinstance(verdict, dict):
-            legs.append({"step": verdict.get("step"), "status": verdict.get("status")})
+            legs.append({"step": verdict.get("step"), "status": verdict.get("status"),
+                         "kind": _ran_leg_kind(summary, verdict)})
         reply_doc = _read_json(leg / "agent_reply.json")
         if isinstance(reply_doc, dict):
             last_reply = reply_doc.get("reply") or reply_doc.get("text") or last_reply
@@ -781,11 +822,21 @@ def _judge(llm: OpenAI, model: str, task: dict[str, Any], metrics: dict[str, Any
 
 
 # ───────────────────────── RA routing / planning only ─────────────────────────
+# Manifest-free fallback substrates: a generic GUI agent drives the device with
+# no capability card at all. `mw` is MobileWorld's general_e2e (== the A/B
+# baseline substrate), `general` is this repo's own GeneralGUIAgent, used when MW
+# is unavailable. They are different runtimes but the same *coverage* fact — the
+# request found no specialized route — so the tiers below treat them alike.
+_FALLBACK_KINDS = ("mw", "general")
+
+
 def _leg_kind(step: dict[str, Any]) -> str | None:
     """Classify one plan step as a leg kind, or None if it is not a leg.
 
-    `ask_user` steps are control flow, not legs. A `mobileworld` step is an MW
-    fallback leg. An app step on the generic foundation_llm route is
+    `ask_user` steps are control flow, not legs. A `mobileworld` / `general` step
+    is a manifest-free fallback leg (both keep their original step id and, for
+    `general`, an app launch hint — so they must be recognised by TYPE, never by
+    the presence of `app`). An app step on the generic foundation_llm route is
     `foundation`; on a real vertical capability it is `specialized`.
     """
     if not isinstance(step, dict):
@@ -793,8 +844,10 @@ def _leg_kind(step: dict[str, Any]) -> str | None:
     stype = step.get("type")
     if stype == "ask_user":
         return None
-    if stype == "mobileworld":  # agents.flow.flow_planner.MW_STEP_TYPE
+    if stype == "mobileworld":  # agents.flow.flow_runner_util.MW_STEP_TYPE
         return "mw"
+    if stype == "general":  # agents.flow.flow_runner_util.GENERAL_STEP_TYPE
+        return "general"
     cap = step.get("capability")
     if cap == "foundation_llm":
         return "foundation"
@@ -807,7 +860,8 @@ def _plan_legs(plan: dict[str, Any]) -> list[dict[str, str]]:
     """Legs of a synthesized plan, in order, each tagged with its kind.
 
     Kinds: `specialized` (real vertical capability), `foundation`
-    (foundation_llm generic route), `mw` (MobileWorld fallback leg).
+    (foundation_llm generic route), `mw` (MobileWorld fallback leg), `general`
+    (in-repo general-GUI fallback leg).
     """
     legs: list[dict[str, str]] = []
     for step in plan.get("steps") or []:
@@ -826,23 +880,43 @@ def _plan_tier(legs: list[dict[str, str]]) -> str:
     """Whole-plan tier from its leg kinds.
 
     - `covered`: every leg routes to a specialized in-app capability.
-    - `mw`: every leg is a MobileWorld fallback leg.
-    - `mixed`: some legs are MW fallback, some are not.
-    - `foundation_fallback`: no MW leg, but at least one generic foundation_llm
-      leg (i.e. leans on a chat assistant rather than a vertical capability).
+    - `mw`: every leg is a manifest-free fallback leg (`mw` / `general`).
+    - `mixed`: some legs are fallback, some are not.
+    - `foundation_fallback`: no fallback leg, but at least one generic
+      foundation_llm leg (leans on a chat assistant, not a vertical capability).
     """
     kinds = [l["kind"] for l in legs]
     if not kinds:
         return "foundation_fallback"
-    has_mw = "mw" in kinds
-    has_non_mw = any(k != "mw" for k in kinds)
-    if has_mw and has_non_mw:
+    has_fb = any(k in _FALLBACK_KINDS for k in kinds)
+    has_non_fb = any(k not in _FALLBACK_KINDS for k in kinds)
+    if has_fb and has_non_fb:
         return "mixed"
-    if has_mw:
+    if has_fb:
         return "mw"
     if all(k == "specialized" for k in kinds):
         return "covered"
     return "foundation_fallback"
+
+
+def _plan_leg_stats(legs: list[dict[str, str]]) -> dict[str, Any]:
+    """The per-task plan-only row fields derived purely from a plan's legs.
+
+    `n_mw_legs` / `mw_ratio` count every manifest-free fallback leg (`mw` and
+    `general`), so the tier and the leg-level ratio never disagree; the raw
+    `legs` list keeps each leg's exact kind.
+    """
+    spec = [l for l in legs if l["kind"] == "specialized"]
+    n_fb = sum(1 for l in legs if l["kind"] in _FALLBACK_KINDS)
+    return {
+        "tier": _plan_tier(legs),
+        "n_legs": len(legs), "legs": legs,
+        "n_mw_legs": n_fb,
+        "mw_ratio": round(n_fb / len(legs), 3) if legs else 0.0,
+        "ra_apps": sorted({l["app"] for l in legs if l["app"]}),
+        "spec_apps": sorted({l["app"] for l in spec if l["app"]}),
+        "spec_caps": sorted({l["capability"] for l in spec}),
+    }
 
 
 def _plan_only_aggregate(rows: list[dict[str, Any]], report_path: Path | str) -> dict[str, Any]:
@@ -877,12 +951,13 @@ def _plan_only_aggregate(rows: list[dict[str, Any]], report_path: Path | str) ->
         "mode": "plan_only", "n_tasks": len(rows),
         "by_status": by_status,
         # Leg-kind tiers: covered = every leg routes to a specialized in-app
-        # capability; foundation_fallback = no MW leg but ≥1 generic foundation_llm
-        # leg; mw = every leg is a MobileWorld fallback (== baseline substrate);
-        # mixed = some MW legs + some non-MW legs; invalid/error.
+        # capability; foundation_fallback = no fallback leg but ≥1 generic
+        # foundation_llm leg; mw = every leg is a manifest-free fallback leg
+        # (MobileWorld == baseline substrate, or the in-repo general GUI agent);
+        # mixed = some fallback legs + some routed legs; invalid/error.
         "by_tier": dict(sorted(by_tier.items(), key=lambda kv: -kv[1])),
         "covered_rate": round(covered / n, 3),
-        # MobileWorld fallback proportion, at both task and leg granularity.
+        # Manifest-free fallback proportion, at both task and leg granularity.
         "mw_fallback": {
             "tasks_fully_mw": mw_tasks,
             "tasks_mixed": mixed_tasks,
@@ -954,19 +1029,7 @@ def _run_plan_only(selected: list[tuple[int, dict[str, Any]]], env: dict[str, st
                                n_legs=0, legs=[], n_mw_legs=0, mw_ratio=1.0,
                                reason=plan.get("reason"))
                 else:
-                    legs = _plan_legs(plan)
-                    spec = [l for l in legs if l["kind"] == "specialized"]
-                    n_mw = sum(1 for l in legs if l["kind"] == "mw")
-                    rec.update(
-                        status="planned",
-                        tier=_plan_tier(legs),
-                        n_legs=len(legs), legs=legs,
-                        n_mw_legs=n_mw,
-                        mw_ratio=round(n_mw / len(legs), 3) if legs else 0.0,
-                        ra_apps=sorted({leg["app"] for leg in legs if leg["app"]}),
-                        spec_apps=sorted({l["app"] for l in spec if l["app"]}),
-                        spec_caps=sorted({l["capability"] for l in spec}),
-                    )
+                    rec.update(status="planned", **_plan_leg_stats(_plan_legs(plan)))
             except PlanValidationError as e:
                 rec.update(status="invalid", tier="invalid",
                            reason="; ".join(getattr(e, "errors", []) or [str(e)])[:300])
@@ -1137,7 +1200,9 @@ def _write_markdown(path: Path, agg: dict[str, Any], systems: list[str],
         )
     lines += [
         "",
-        "> 时间/token 统计仅覆盖**被判完成**的任务。relay token 暂不含 run_plan 的一次性规划调用。",
+        "> 时间/token 统计仅覆盖**被判完成**的任务。relay token 取自 run_plan 的 "
+        "`token_usage.json`,已含规划合成 / flow 级 / in-app agent 三相"
+        "(仅当该文件缺失才回退成逐 leg 求和,那种行会在跑的时候打 warning 并少算规划调用)。",
         "",
     ]
     for s in systems:

@@ -37,6 +37,17 @@ def _load(p: Path) -> list[dict]:
     return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
+def _dedupe_rerun_wins(rows: list[dict]) -> list[dict]:
+    """De-dupe by id, LAST occurrence wins: rerun rows are appended after the
+    old covered rows, and plan_report.jsonl itself is append-mode ("a"), so
+    within one file a later line is the fresher run too. Each id keeps its
+    first-seen position (deterministic order) but carries the latest row."""
+    latest: dict[str, dict] = {}
+    for r in rows:
+        latest[r["id"]] = r
+    return list(latest.values())
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     overall = {}
@@ -45,12 +56,7 @@ def main() -> int:
         if cov_file is not None:
             rows = _load(cov_file) + rows
         # de-dupe by id (rerun wins if any overlap), keep deterministic order
-        seen, merged = set(), []
-        for r in rows:
-            if r["id"] in seen:
-                continue
-            seen.add(r["id"])
-            merged.append(r)
+        merged = _dedupe_rerun_wins(rows)
         report = OUT / f"{bench}_plan_report.jsonl"
         with report.open("w", encoding="utf-8") as fh:
             for r in merged:

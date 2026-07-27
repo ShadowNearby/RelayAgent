@@ -1,7 +1,7 @@
 [project]
 name = "relayagent"
 version = "0.1.0"
-description = "Community registry of machine-readable cards describing AI agents embedded inside mobile apps"
+description = "Mobile agent that decomposes a user request into subtasks and delegates them to the AI assistants embedded in each app"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [
@@ -73,10 +73,8 @@ include = [
     "spec/",
     "tests/",
     "SPEC.md",
-    "SPEC-OPEN-QUESTIONS.md",
     "README.md",
     "CONTRIBUTING.md",
-    "CODE_OF_CONDUCT.md",
     "LICENSE",
     ".env.example",
 ]

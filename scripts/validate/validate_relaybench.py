@@ -85,7 +85,15 @@ def validate(path: Path = TASKS_PATH) -> list[str]:
             if ttype == "cross_app":
                 cross_apps[a] += 1
 
-        legs = list(zip(apps, caps)) if len(apps) == len(caps) else [(apps[0], caps[0])]
+        if len(apps) != len(caps):
+            # This is a validation error, not a crash: a task that lists apps
+            # but forgets capabilities (or vice versa) must show up as an
+            # error line, and an empty list must not IndexError the tool.
+            errors.append(
+                f"{tid}: apps ({len(apps)}) / capabilities ({len(caps)}) length "
+                f"mismatch — each leg needs one app + one capability"
+            )
+        legs = list(zip(apps, caps))  # zip truncates on mismatch; validate what pairs exist
         for a, cap in legs:
             if cap not in cap_to_apps:
                 errors.append(f"{tid}: unknown capability {cap}")

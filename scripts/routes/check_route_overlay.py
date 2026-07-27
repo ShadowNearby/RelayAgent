@@ -88,10 +88,16 @@ def main() -> int:
     try:
         R.route("导航去机场", stale, MATRIX, _BoomLLM(), "qwen",
                 preserve_goal=True, route_key=k, overlay=ov)
-        raise AssertionError("stale pair was served instead of routing live")
     except AssertionError as e:
-        if "routing live" not in str(e) and "LLM called" not in str(e):
-            raise  # a real assertion failure, re-raise
+        # EXPECTED path: the stale guard declines the short-circuit and routes
+        # live, which hits _BoomLLM. Any other assertion is a real failure.
+        if "LLM called" not in str(e):
+            raise
+    else:
+        # route() returned normally → the stale (app,cap) pair was served from
+        # the overlay without ever consulting the live catalog. This raise is
+        # OUTSIDE the try so it cannot be swallowed by the filter above.
+        raise AssertionError("stale pair was served instead of routing live")
 
     # consecutive failures pause solidification (MAX_FAILS=2)
     ov2 = _fresh()

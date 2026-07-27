@@ -93,6 +93,20 @@ def _instruction(task_dir: Path | None) -> str:
         return ""
 
 
+def _latest_cells(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per (id, system), the LAST occurrence winning.
+
+    results.jsonl is append-only and the PhaseB workflow re-runs cases into the
+    same file (self-healing reruns / phaseB_rerun_cases.py), so a cell can have
+    several lines. Every other consumer (phaseB_summary, plot_eval_figs,
+    wall_clock_table) converges on last-wins; aggregating the raw lines would
+    double-count a rerun task (old failure + new success both in the stats)."""
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        latest[(r["id"], r["system"])] = r
+    return list(latest.values())
+
+
 def _overrides_path(bench_dir: Path) -> Path:
     return bench_dir / "manual_overrides.json"
 
@@ -203,13 +217,19 @@ def cmd_apply(args: argparse.Namespace) -> int:
     out = bench_dir / "results.jsonl"
     out.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
                    encoding="utf-8")
-    agg = _aggregate(rows, systems)
+    # results.jsonl keeps every line (nothing is dropped on disk); the summary is
+    # recomputed on the deduped cells only.
+    latest = _latest_cells(rows)
+    n_tasks = len({r["id"] for r in latest})
+    agg = _aggregate(latest, systems)
     final = {"benchmark": args.bench, "out_root": str(bench_dir),
-             "n_tasks": len({r["id"] for r in rows}), "systems": systems,
-             "by_system": agg, "by_app": _aggregate_by_app(rows, systems)}
+             "n_tasks": n_tasks, "systems": systems,
+             "by_system": agg, "by_app": _aggregate_by_app(latest, systems)}
     _write_json(bench_dir / "summary.json", final)
-    _write_markdown(bench_dir / "summary.md", agg, systems, args.bench,
-                    len({r["id"] for r in rows}))
+    _write_markdown(bench_dir / "summary.md", agg, systems, args.bench, n_tasks)
+    if len(latest) != len(rows):
+        print(f"summary computed on {len(latest)} deduped cell(s) "
+              f"from {len(rows)} line(s) (last line per (id,system) wins)")
     print(f"applied {changed} override row(s) -> {out}")
     print(f"regenerated {bench_dir/'summary.json'} + summary.md")
     print("\n" + json.dumps(agg, ensure_ascii=False, indent=2))
