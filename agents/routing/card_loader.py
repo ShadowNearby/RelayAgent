@@ -8,6 +8,7 @@ platform filter below applies everywhere at once.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,19 @@ from loguru import logger
 
 from agents.device import current_platform
 
-MANIFESTS_DIR = Path(__file__).resolve().parent.parent.parent / "manifests"
+MANIFESTS_DIR = Path(__file__).resolve().parent.parent.parent / "manifests"  # host checkout default
+
+
+def default_manifests_dir() -> Path:
+    """Manifests dir used when the caller passes none.
+
+    `RELAY_MANIFESTS` when set (Android relocates the packaged assets to
+    filesDir — REPO_ROOT-relative paths don't exist under Chaquopy's
+    AssetFinder; same env the RelayAgent adapter already consumes), else the
+    repo checkout default. Resolved at call time, not import time, so entry
+    points that set the env after import still take effect."""
+    env = os.getenv("RELAY_MANIFESTS")
+    return Path(env).expanduser() if env else MANIFESTS_DIR
 
 
 def load_all_cards(manifests_dir: Path | None = None) -> list[dict[str, Any]]:
@@ -24,8 +37,12 @@ def load_all_cards(manifests_dir: Path | None = None) -> list[dict[str, Any]]:
     platform (`RELAY_PLATFORM`, default android). Errors in any single file
     are logged and the file is skipped — one bad manifest must not block
     every other card from loading."""
-    d = manifests_dir or MANIFESTS_DIR
+    d = manifests_dir or default_manifests_dir()
     platform = current_platform()
+    if not d.is_dir():
+        # Surface the miss: a silent empty glob here becomes an empty
+        # catalog / zero-candidate routing much further downstream.
+        logger.warning(f"manifests dir {d} does not exist; loading zero cards")
     cards = []
     for path in sorted(d.glob("*.yaml")):
         # Skip underscore-prefixed names (e.g. _draft.yaml) — they
@@ -76,4 +93,4 @@ def load_card_by_app_id(app_id: str, manifests_dir: Path | None = None) -> dict[
     for card in cards:
         if resolve_app_id(card) == app_id:
             return card
-    raise FileNotFoundError(f"No manifest found for app_id={app_id!r} under {manifests_dir or MANIFESTS_DIR}")
+    raise FileNotFoundError(f"No manifest found for app_id={app_id!r} under {manifests_dir or default_manifests_dir()}")

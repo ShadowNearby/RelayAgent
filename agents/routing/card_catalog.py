@@ -65,7 +65,9 @@ def _validate_prompt_template(
     for seg in _OPT_SEGMENT_RE.findall(template):
         in_segment.update(_PLACEHOLDER_RE.findall(seg))
     all_used = set(_PLACEHOLDER_RE.findall(template))
-    outside_segment = all_used - in_segment
+    # By position, not by name: a slot used both inside and outside a segment
+    # belongs to both sets, so it is neither droppable nor unwrapped.
+    outside_segment = set(_PLACEHOLDER_RE.findall(_OPT_SEGMENT_RE.sub("", template)))
 
     for ph in sorted(all_used):
         if ph not in slot_names:
@@ -80,8 +82,12 @@ def _validate_prompt_template(
     return errors
 
 
-def build_catalog(manifest_dir: Path = MANIFEST_DIR) -> dict[str, Any]:
-    """Compact JSON-able view of available apps for router/planner LLMs."""
+def build_catalog(manifest_dir: Path | None = None) -> dict[str, Any]:
+    """Compact JSON-able view of available apps for router/planner LLMs.
+
+    Default dir resolves at call time inside `load_all_cards` (honoring
+    `RELAY_MANIFESTS` — the Android filesDir relocation), so bare
+    `build_catalog()` callers work on-device too."""
     apps: list[dict[str, Any]] = []
     errors: list[str] = []
     # Single manifest reader: load_all_cards handles `_`-prefix skipping,

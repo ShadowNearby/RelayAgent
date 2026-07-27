@@ -52,6 +52,13 @@ def _default_path() -> Path:
     env = os.getenv("RELAY_ROUTE_OVERLAY_PATH")
     if env:
         return Path(env).expanduser()
+    # The overlay is a traj_logs artifact (see module docstring), so it follows
+    # the RELAY_TRAJ_ROOT relocation like flow_runner's traj base (Android
+    # points it at filesDir — REPO_ROOT lives inside the read-only APK).
+    # Host default (no env) is unchanged.
+    root = os.getenv("RELAY_TRAJ_ROOT")
+    if root:
+        return Path(root).expanduser() / "route_overlay.json"
     return REPO_ROOT / "traj_logs" / "route_overlay.json"
 
 
@@ -282,6 +289,14 @@ class RouteOverlay:
         if not self.enabled or not key or not app or not cap:
             return
         try:
+            # RELAY_TRAJ_REDACT=1: `intent` is the leg's rendered prompt and can
+            # carry resolved profile values (e.g. a home address) — apply the
+            # same write-time placeholder substitution as every other traj
+            # sink. No-op when redaction is off. Imported lazily so the routing
+            # package doesn't pull agents.flow in at import time.
+            from agents.flow.user_profile import redact_obj
+
+            intent = redact_obj(intent)
             with self._store_lock():
                 data = self._load()
                 entry = data.setdefault(key, {"intent": intent, "routes": {}})

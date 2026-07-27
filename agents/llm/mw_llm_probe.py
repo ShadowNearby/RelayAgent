@@ -26,6 +26,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -140,6 +141,17 @@ def install() -> bool:
     return True
 
 
+def _json_default(o: Any) -> str:
+    """Last-resort serializer for ``_flush``: MW-side message payloads are not
+    under our control (``_sanitize_messages`` passes non-dict elements through
+    untouched), and ONE unserializable value must not drop the whole per-call
+    log — degrade that value to a string/placeholder instead."""
+    try:
+        return str(o)[:2000]
+    except Exception:
+        return f"<unserializable {type(o).__name__}>"
+
+
 def _flush(out: Path) -> None:
     """Write the accumulated per-call records to ``out`` (best-effort)."""
     try:
@@ -157,6 +169,17 @@ def _flush(out: Path) -> None:
             },
             "llm_calls": _CALLS,
         }
-        out.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+        out.write_text(
+            json.dumps(doc, ensure_ascii=False, indent=2, default=_json_default),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        # Never raise at atexit — but never vanish silently either: without
+        # this line the benchmark harvest cannot tell "probe not installed"
+        # from "flush failed". loguru may already be torn down at atexit
+        # time, so write straight to stderr.
+        try:
+            print(f"[mw_llm_probe] WARNING: failed to write per-call log to {out}: {e!r}",
+                  file=sys.stderr)
+        except Exception:
+            pass

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,32 @@ from agents.routing.locale_policy import first_locale, locale_policy_text
 from agents.routing.route_overlay import RouteOverlay
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-MATRIX_CSV = REPO_ROOT / "docs" / "app_capability_matrix.csv"
+MATRIX_CSV = REPO_ROOT / "docs" / "app_capability_matrix.csv"  # host checkout default
+
+
+def default_matrix_csv() -> Path:
+    """Matrix CSV path used when the caller passes none.
+
+    `RELAY_MATRIX_CSV` wins when set. Otherwise, when `RELAY_MANIFESTS`
+    relocates the card assets (Android: the AssetInstaller extracts
+    `filesDir/relay/{manifests, app_capability_matrix.csv}` — REPO_ROOT-relative
+    paths don't exist under Chaquopy's AssetFinder), use the CSV shipped next
+    to the manifests dir. Falls back to the repo checkout default (host
+    behavior unchanged).
+    """
+    env = os.getenv("RELAY_MATRIX_CSV")
+    if env:
+        return Path(env).expanduser()
+    manifests = os.getenv("RELAY_MANIFESTS")
+    if manifests:
+        sibling = Path(manifests).expanduser().parent / "app_capability_matrix.csv"
+        if sibling.is_file():
+            return sibling
+        logger.warning(
+            f"RELAY_MANIFESTS is set but no matrix CSV at {sibling}; "
+            f"falling back to {MATRIX_CSV}"
+        )
+    return MATRIX_CSV
 
 # The generic, catch-all capability. Routing isolates it into its own fallback
 # stage: vertical capabilities are matched first, and `foundation_llm` is only
@@ -73,8 +99,13 @@ def parse_fenced_json(text: str) -> dict[str, Any]:
     return data
 
 
-def load_matrix(path: Path = MATRIX_CSV) -> dict[str, Any]:
-    """Parse docs/app_capability_matrix.csv as the authoritative cap x app map."""
+def load_matrix(path: Path | None = None) -> dict[str, Any]:
+    """Parse the capability matrix CSV as the authoritative cap x app map.
+
+    Default path resolves at call time via `default_matrix_csv()` so the
+    Android relocation envs apply to bare `load_matrix()` callers too
+    (e.g. leg_recovery's lazily-built catalog/matrix)."""
+    path = path or default_matrix_csv()
     with path.open(encoding="utf-8") as fh:
         rows = list(csv.reader(fh))
     if not rows:
@@ -120,7 +151,12 @@ def _llm_json(llm: Any, model: str, system: str, user: str) -> dict[str, Any]:
         temperature=0.0,
         max_tokens=512,
     )
-    raw = (resp.choices[0].message.content or "").strip()
+    msg = resp.choices[0].message
+    raw = (msg.content or "").strip()
+    # qwen can return a null content with the answer (incl. the fenced JSON)
+    # in reasoning_content — same fallback as leg_judge / agent_base.
+    if not raw and "qwen" in (model or "").lower():
+        raw = (getattr(msg, "reasoning_content", None) or "").strip()
     logger.debug(f"router raw reply: {raw}")
     return parse_fenced_json(raw)
 
@@ -439,7 +475,20 @@ def route(
         if hit is not None and hit in exclude:
             logger.info(f"route overlay pair {hit} excluded; routing live")
             hit = None
-        if hit is not None and hit in cat_index:  # guard against a stale pair
+        if hit is not None and hit not in cat_index:
+            # solidified but now missing from the catalog
+            logger.warning(f"route overlay pair {hit} for {route_key} not in catalog; routing live")
+            hit = None
+        if hit is not None and hit[0] not in matrix["cap_to_apps"].get(hit[1], []):
+            # The matrix CSV is the source of truth: revoking an app/cap
+            # authorization there must also invalidate the solidified pair,
+            # or a matrix edit would silently never take effect for
+            # already-learned keys (each hit keeps re-solidifying itself).
+            logger.warning(
+                f"route overlay pair {hit} for {route_key} no longer matrix-authorized; routing live"
+            )
+            hit = None
+        if hit is not None:
             app_id, cap_id = hit
             logger.info(f"route solidified -> {app_id} / {cap_id} (0 LLM, key {route_key})")
             return {
@@ -449,8 +498,6 @@ def route(
                 "goal": nl,
                 "reason": "solidified from prior successful runs (route overlay)",
             }
-        if hit is not None:  # solidified but now missing from the catalog
-            logger.warning(f"route overlay pair {hit} for {route_key} not in catalog; routing live")
 
     cap_ids = _stage1_prefilter(nl, matrix, llm, model)
     if cap_ids:

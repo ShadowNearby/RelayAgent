@@ -23,7 +23,14 @@ def language_label(locale: str | None) -> str:
     tag = (locale or "").strip()
     base = tag.split("-", 1)[0].lower()
     if base == "zh":
-        if tag.lower() in {"zh-tw", "zh-hk", "zh-mo", "zh-hant"}:
+        # Match subtags, not the whole tag: regionalized forms like zh-Hant-TW
+        # are valid BCP-47 (spec/schema.json admits them). An explicit script
+        # subtag wins; region (TW/HK/MO) only decides when no script is given,
+        # so zh-Hans-HK stays Simplified.
+        subtags = tag.lower().split("-")[1:]
+        if "hans" not in subtags and (
+            "hant" in subtags or {"tw", "hk", "mo"} & set(subtags)
+        ):
             return "Traditional Chinese"
         return "Simplified Chinese"
     if base == "en":
