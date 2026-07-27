@@ -80,6 +80,23 @@ def reset_ime() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Trajectory dir default — shared by the runner and StepLogger
+# ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def default_traj_dir() -> Path:
+    """Default trajectory dir when RELAY_TRAJ_DIR is unset: ``<root>/user_task``
+    with the root from RELAY_TRAJ_ROOT (Android filesDir redirect, same
+    convention as flow_runner) or ``<repo>/traj_logs``. Repo-anchored, never
+    CWD-relative, so every writer (runner, agent, StepLogger) resolves the
+    same place regardless of the invocation directory."""
+    root = os.getenv("RELAY_TRAJ_ROOT")
+    base = Path(root) if root else _REPO_ROOT / "traj_logs"
+    return base / "user_task"
+
+
+# ---------------------------------------------------------------------------
 # NativeEnv — direct-adb device interface for the runner loop
 # ---------------------------------------------------------------------------
 class NativeEnv:
@@ -262,9 +279,12 @@ class StepLogger:
             return None
         # RELAY_STEP_LOG_DIR overrides the steps location outright; otherwise
         # ride along with the run's traj dir (RELAY_TRAJ_DIR, set per leg by the
-        # flow runner) so steps/ lands next to traj.json. Default: global dir.
+        # flow runner) so steps/ lands next to traj.json. Default: the shared
+        # global dir, resolved exactly like the runner's (repo-anchored /
+        # RELAY_TRAJ_ROOT-aware — a CWD-relative path would split steps/ away
+        # from traj.json when invoked outside the repo).
         override = os.getenv("RELAY_STEP_LOG_DIR") or os.getenv("RELAY_TRAJ_DIR")
-        traj_dir = Path(override) if override else Path("traj_logs") / "user_task"
+        traj_dir = Path(override) if override else default_traj_dir()
         try:
             return cls(traj_dir)
         except OSError as e:

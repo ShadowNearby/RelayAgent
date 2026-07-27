@@ -11,6 +11,7 @@ import os
 import subprocess
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from unittest import mock
 
 from agents.device import Key, UINode, set_default_backend
@@ -107,6 +108,68 @@ class AdbArgvTests(unittest.TestCase):
         self.assertIs(b._input_channel_ok, False)
 
 
+class DumpUiTreeTests(unittest.TestCase):
+    """Stale-dump defense: `uiautomator dump` can fail with exit code 0 (AOSP
+    prints "ERROR: ..." and returns), and the remote path is reused across
+    calls — without the rm-first + ERROR check a failed dump would pull back
+    the PREVIOUS run's tree and serve it as current."""
+
+    XML = (
+        '<hierarchy><node text="ok" content-desc="" resource-id="" class="c"'
+        ' package="p" bounds="[0,0][10,10]" clickable="true" enabled="true"'
+        ' focusable="false" scrollable="false" long-clickable="false"/></hierarchy>'
+    )
+
+    def setUp(self):
+        patcher = mock.patch("agents.device.android.subprocess.run")
+        self.run = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _install(self, dump_cp: subprocess.CompletedProcess, *, pull_ok: bool):
+        def side_effect(argv, **kwargs):
+            if "rm" in argv:
+                return _cp()
+            if "uiautomator" in argv:
+                return dump_cp
+            if "pull" in argv:
+                if pull_ok:
+                    Path(argv[-1]).write_text(self.XML, encoding="utf-8")
+                    return _cp()
+                return _cp(returncode=1, stderr="remote object does not exist")
+            return _cp()
+
+        self.run.side_effect = side_effect
+
+    def test_remote_file_removed_before_dump(self):
+        b = AndroidBackend()
+        self._install(_cp(stdout="UI hierchary dumped to: /sdcard/x.xml"), pull_ok=True)
+        nodes = b.dump_ui_tree()
+        self.assertIsNotNone(nodes)
+        self.assertEqual(nodes[0].text, "ok")
+        argvs = [c.args[0] for c in self.run.call_args_list]
+        self.assertEqual(argvs[0][-3:], ["rm", "-f", b._remote_dump_path])
+        self.assertIn("uiautomator", argvs[1])  # rm strictly precedes the dump
+
+    def test_rc0_error_dump_returns_none_without_pulling(self):
+        b = AndroidBackend()
+        self._install(_cp(stdout="ERROR: could not get idle state."), pull_ok=True)
+        self.assertIsNone(b.dump_ui_tree())
+        for c in self.run.call_args_list:
+            self.assertNotIn("pull", c.args[0])  # the old tree is never read
+
+    def test_unrecognized_rc0_failure_surfaces_via_pull(self):
+        # A failure wording we don't know: the rm guarantees no stale remote
+        # file exists, so it degrades to a pull failure → None, never a tree.
+        b = AndroidBackend()
+        self._install(_cp(stdout="something odd"), pull_ok=False)
+        self.assertIsNone(b.dump_ui_tree())
+
+    def test_nonzero_rc_returns_none(self):
+        b = AndroidBackend()
+        self._install(_cp(returncode=1, stderr="Killed"), pull_ok=True)
+        self.assertIsNone(b.dump_ui_tree())
+
+
 class XmlToNodesTests(unittest.TestCase):
     XML = (
         '<hierarchy><node text="发送" content-desc="" resource-id="com.x:id/send"'
@@ -179,6 +242,70 @@ class InputTextFallbackTests(unittest.TestCase):
         b._input_channel_ok = False
         with self.assertRaises(RuntimeError):
             b.input_text("a&b;c")  # would be parsed by the remote shell
+
+    def test_glob_char_without_channel_raises(self):
+        # `?` is no longer in the safe set: the remote sh globs it against
+        # cwd entries (a lone "?" at / matches "/d"), silently corrupting the
+        # typed text — loud fail is required instead.
+        b = AndroidBackend()
+        b._input_channel_ok = False
+        with self.assertRaises(RuntimeError):
+            b.input_text("ready?")
+        self.run.assert_not_called()
+
+
+class AppIdValidationTests(unittest.TestCase):
+    """App ids are spliced into a remote shell command line (adb joins argv
+    with spaces; the device sh re-parses) — anything outside the package-name
+    alphabet must fail loudly before a single adb call."""
+
+    BAD_IDS = ("a.b;am broadcast", "com.x`reboot`", "$(rm -rf /)", "a b",
+               "com.x|id", "")
+
+    def setUp(self):
+        patcher = mock.patch("agents.device.android.subprocess.run")
+        self.run = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.run.return_value = _cp(stdout="Events injected: 1")
+
+    def test_launch_rejects_metacharacters(self):
+        b = AndroidBackend()
+        for app_id in self.BAD_IDS:
+            with self.assertRaises(ValueError):
+                b.launch(app_id)
+        self.run.assert_not_called()
+
+    def test_force_stop_rejects_metacharacters(self):
+        b = AndroidBackend()
+        for app_id in self.BAD_IDS:
+            with self.assertRaises(ValueError):
+                b.force_stop(app_id)
+        self.run.assert_not_called()
+
+    def test_cold_launch_rejects_before_any_device_call(self):
+        b = AndroidBackend()
+        with self.assertRaises(ValueError):
+            b.cold_launch("com.x;rm -rf /sdcard")
+        self.run.assert_not_called()
+
+    def test_valid_package_ids_pass(self):
+        b = AndroidBackend()
+        for app_id in ("com.aliyun.tongyi", "com.autonavi.minimap", "a_b.C1"):
+            b.launch(app_id)  # must not raise
+        self.assertEqual(self.run.call_count, 3)
+
+
+class StartRecordingSerialTests(unittest.TestCase):
+    def test_instance_serial_reaches_the_recorder(self):
+        # start_recording must pass THIS instance's adb prefix — the
+        # recorder's default resolves the factory singleton, which is the
+        # wrong device when several backends coexist (device-pool contract
+        # in the module docstring).
+        b = AndroidBackend(serial="DEVICE-B")
+        with mock.patch("agents.runtime._recorder.start") as start:
+            b.start_recording(Path("/tmp/unused"))
+        start.assert_called_once()
+        self.assertEqual(start.call_args.kwargs["adb_base"], ["adb", "-s", "DEVICE-B"])
 
 
 class VendorProfileTests(unittest.TestCase):

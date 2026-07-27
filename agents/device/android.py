@@ -38,6 +38,20 @@ _KEYCODES = {
     Key.ENTER: "KEYCODE_ENTER",
 }
 
+# App ids are spliced into a remote shell command line (adb joins argv with
+# spaces and the device-side sh re-parses it), so a metacharacter in a
+# poisoned manifest / future LLM-emitted app id would execute on the device.
+# Whitelist the package-name alphabet and fail loudly on anything else.
+_APP_ID_RE = re.compile(r"^[A-Za-z0-9._]+$")
+
+
+def _check_app_id(app_id: str) -> str:
+    if not app_id or not _APP_ID_RE.match(app_id):
+        raise ValueError(
+            f"invalid app id {app_id!r} — refusing to pass it to the device shell"
+        )
+    return app_id
+
 
 def _xml_to_nodes(root: ET.Element) -> list[UINode]:
     """Flatten a uiautomator dump into normalized UINodes (document order).
@@ -164,6 +178,12 @@ class AndroidBackend(DeviceBackend):
             if remaining <= 0:
                 return True  # budget spent — proceed, like the old fixed sleep
             new_seq = stream.wait_for_new_frame(seq, min(quiet, remaining))
+            if not stream.alive:
+                # Stream died mid-wait: wait_for_new_frame wakes immediately
+                # with an unchanged seq, which must NOT read as "settled" —
+                # report no signal so the caller falls back to its fixed
+                # sleep, matching the dead-stream entry check above.
+                return False
             if new_seq == seq:
                 return True  # no frame for a whole quiet window → settled
             seq = new_seq
@@ -242,12 +262,25 @@ class AndroidBackend(DeviceBackend):
         with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
             local_xml = fh.name
         try:
+            # A failed `uiautomator dump` can still exit 0 (AOSP prints the
+            # error and returns), and the remote path is reused across calls —
+            # remove the previous file first so a failed dump surfaces as a
+            # pull failure instead of silently serving the PREVIOUS tree as
+            # current (which would fake text-hash stability and mis-ground taps).
+            self._run(["shell", "rm", "-f", self._remote_dump_path], timeout=pull_timeout)
             dump = self._run(
                 ["shell", "uiautomator", "dump", self._remote_dump_path],
                 timeout=dump_timeout,
             )
-            if dump.returncode != 0:
-                logger.info(f"uiautomator dump failed: {(dump.stderr or '').strip()}")
+            # rc=0 failures print "ERROR: ..." (e.g. "could not get idle
+            # state", "null root node"); catch them here so the log carries
+            # the real reason rather than a downstream pull failure.
+            combined_out = (dump.stdout or "") + (dump.stderr or "")
+            if dump.returncode != 0 or "ERROR:" in combined_out:
+                logger.info(
+                    f"uiautomator dump failed (rc={dump.returncode}): "
+                    f"{combined_out.strip()}"
+                )
                 return None
             pull = self._run(
                 ["pull", self._remote_dump_path, local_xml], timeout=pull_timeout
@@ -361,8 +394,10 @@ class AndroidBackend(DeviceBackend):
 
     # `input text` reaches the device through a remote shell, so the fallback
     # only accepts characters that survive that parse unquoted (space handled
-    # via %s). Anything else must go through the AdbKeyboard broadcast.
-    _INPUT_TEXT_SAFE_RE = re.compile(r"^[A-Za-z0-9 .,:/@_+=?-]*$")
+    # via %s; `?` excluded — the remote sh globs it against cwd entries, e.g.
+    # a lone "?" at / matches "/d"). Anything else must go through the
+    # AdbKeyboard broadcast.
+    _INPUT_TEXT_SAFE_RE = re.compile(r"^[A-Za-z0-9 .,:/@_+=-]*$")
 
     def input_text(self, text: str, *, timeout: float = 30.0) -> None:
         """Type into the focused field.
@@ -398,6 +433,7 @@ class AndroidBackend(DeviceBackend):
 
     # -- app lifecycle -------------------------------------------------------
     def launch(self, app_id: str, *, timeout: float = 10.0) -> None:
+        _check_app_id(app_id)
         res = self._run(
             ["shell", "monkey", "-p", app_id,
              "-c", "android.intent.category.LAUNCHER", "1"],
@@ -427,6 +463,7 @@ class AndroidBackend(DeviceBackend):
         time.sleep(settle_seconds)
 
     def force_stop(self, app_id: str, *, timeout: float = 10.0) -> None:
+        _check_app_id(app_id)
         res = self._run(["shell", "am", "force-stop", app_id], timeout=timeout)
         if res.returncode != 0:
             logger.warning(
@@ -510,7 +547,11 @@ class AndroidBackend(DeviceBackend):
         # import time, to keep that loop open.
         from agents.runtime import _recorder
 
-        return _recorder.start(out_dir, basename=basename)
+        # Pass this instance's adb prefix: serial is an instance attribute
+        # (see module docstring), and _recorder's default resolves through the
+        # factory singleton — which would record the wrong device when several
+        # backends coexist.
+        return _recorder.start(out_dir, basename=basename, adb_base=self.adb_base())
 
     # -- platform hooks -------------------------------------------------------
     def dismiss_permission_popup(self) -> str | None:

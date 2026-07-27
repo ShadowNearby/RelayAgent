@@ -45,6 +45,17 @@ def _agent_file() -> Path:
     return Path(override).resolve() if override else DEFAULT_AGENT_FILE
 
 
+def _teardown_input_channel(backend) -> None:
+    """Best-effort IME restore. Never raises: it runs on failure paths
+    (run_leg's finally / the non-ASCII fast-fail) where an adb hiccup — e.g.
+    `ime reset` timing out on a half-dead transport — must not mask the run's
+    real error or skip the summary write that follows."""
+    try:
+        backend.teardown_input_channel()
+    except Exception as exc:  # noqa: BLE001 — loud but non-fatal
+        print(f"[native] IME teardown failed: {exc}", file=sys.stderr)
+
+
 def _resolve_traj_dir() -> tuple[Path, bool]:
     """This run's trajectory dir (traj.json + steps/ + agent_reply.json) and
     whether it was pinned via RELAY_TRAJ_DIR. Defaults to the shared global
@@ -54,7 +65,11 @@ def _resolve_traj_dir() -> tuple[Path, bool]:
     env = os.getenv("RELAY_TRAJ_DIR")
     if env:
         return Path(env), True
-    return REPO_ROOT / "traj_logs" / "user_task", False
+    # Shared default — same resolution as StepLogger's, so traj.json and
+    # steps/ can never land in two different places.
+    from agents.runtime.native_runtime import default_traj_dir
+
+    return default_traj_dir(), False
 
 
 def _rotate_traj_dir() -> Path:
@@ -185,6 +200,11 @@ def run_leg(
         # needs it WILL fail at the typing step, so fail fast here instead of
         # paying a doomed device run. ASCII goals can limp through `input text`.
         if any(ord(ch) > 127 for ch in goal):
+            # This fast-fail raises BEFORE the try/finally below, so restore
+            # the IME here: setup_input_channel may already have enabled/set
+            # AdbKeyboard even though its verification read came back negative.
+            if not keep_ime:
+                _teardown_input_channel(backend)
             raise RuntimeError(
                 "[native] input channel unavailable (AdbKeyboard missing?) and "
                 "the goal contains non-ASCII text — the typed invocation would "
@@ -204,7 +224,7 @@ def run_leg(
         if callable(finalize):
             finalize()
         if not keep_ime:
-            backend.teardown_input_channel()
+            _teardown_input_channel(backend)
         # Always stamp the agent's accumulated token total onto the summary —
         # even when run_task raised mid-leg, the agent has been counting usage,
         # and a bare {} summary would silently drop it from the run_plan token

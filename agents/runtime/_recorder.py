@@ -5,7 +5,9 @@ thread, writing chunks to the device and pulling each one as it finishes.
 On `.stop()` we wait for the in-flight chunk to flush, pull it, and
 optionally concat all chunks with ffmpeg into a single mp4.
 
-Honors `RELAY_ANDROID_SERIAL` via `agents.runtime._adb.adb_base()`.
+Callers may pass an explicit `adb_base` argv prefix (AndroidBackend passes
+its instance's, carrying the per-instance serial); the default resolves the
+factory backend, which honors `RELAY_ANDROID_SERIAL`.
 """
 from __future__ import annotations
 
@@ -18,10 +20,16 @@ from pathlib import Path
 
 from loguru import logger
 
-from agents.runtime._adb import adb_base
+from agents.runtime._adb import adb_base as _default_adb_base
 
 _CHUNK_SECONDS = 180
 _DEVICE_DIR = "/sdcard"
+# A chunk that dies this fast (without a stop request) never recorded at all.
+# After _MAX_FAST_FAILS consecutive ones the device simply can't record (no
+# H.264 encoder / DRM surface / screenrecord missing) — give up loudly instead
+# of a ~1.5s Popen+pull restart storm for the rest of the run.
+_FAST_FAIL_SECONDS = 5
+_MAX_FAST_FAILS = 3
 
 
 @dataclass
@@ -95,8 +103,11 @@ class Recording:
         return self.final_path
 
 
-def start(out_dir: Path, *, basename: str = "recording") -> Recording:
+def start(
+    out_dir: Path, *, basename: str = "recording", adb_base: list[str] | None = None
+) -> Recording:
     out_dir.mkdir(parents=True, exist_ok=True)
+    base = list(adb_base) if adb_base is not None else _default_adb_base()
     rec = Recording(
         out_dir=out_dir,
         final_path=out_dir / f"{basename}.mp4",
@@ -104,13 +115,14 @@ def start(out_dir: Path, *, basename: str = "recording") -> Recording:
 
     def _loop() -> None:
         idx = 0
+        fast_fails = 0
         while not rec._stop_evt.is_set():
             idx += 1
             device_path = f"{_DEVICE_DIR}/relay_rec_{idx:03d}.mp4"
             local_path = out_dir / f"chunk_{idx:03d}.mp4"
             logger.info(f"recorder: chunk {idx} → {device_path}")
             rec._proc = subprocess.Popen(
-                adb_base() + [
+                base + [
                     "shell", "screenrecord",
                     "--time-limit", str(_CHUNK_SECONDS),
                     device_path,
@@ -123,20 +135,30 @@ def start(out_dir: Path, *, basename: str = "recording") -> Recording:
             # Device needs a moment to finalize the mp4 trailer after SIGTERM.
             time.sleep(1.0)
             pull = subprocess.run(
-                adb_base() + ["pull", device_path, str(local_path)],
+                base + ["pull", device_path, str(local_path)],
                 capture_output=True, text=True,
             )
             subprocess.run(
-                adb_base() + ["shell", "rm", "-f", device_path],
+                base + ["shell", "rm", "-f", device_path],
                 capture_output=True, text=True,
             )
             if pull.returncode == 0 and local_path.exists() and local_path.stat().st_size > 0:
+                fast_fails = 0
                 rec._chunks.append(local_path)
                 logger.info(
                     f"recorder: chunk {idx} pulled ({local_path.stat().st_size} bytes, {elapsed:.1f}s)"
                 )
             else:
                 logger.warning(f"recorder: pull failed for chunk {idx}: {pull.stderr.strip()}")
+                if elapsed < _FAST_FAIL_SECONDS and not rec._stop_evt.is_set():
+                    fast_fails += 1
+                    if fast_fails >= _MAX_FAST_FAILS:
+                        logger.warning(
+                            f"recorder: screenrecord died instantly {fast_fails} "
+                            "times in a row — device cannot record; giving up "
+                            "recording for this run"
+                        )
+                        break
             # If we exited well before the time limit, the recorder was
             # stopped externally — don't immediately spin up another chunk.
             if elapsed < _CHUNK_SECONDS - 5 and rec._stop_evt.is_set():

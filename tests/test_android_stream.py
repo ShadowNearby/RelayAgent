@@ -1,8 +1,10 @@
-"""Device-less tests for the scrcpy streaming capture backend (roadmap P2-S1).
+"""Device-less tests for the scrcpy streaming capture backend (roadmap P2-S1)
+and the frame-arrival settle detection built on it (P2-S2).
 
 Pins: server/version discovery overrides, the RELAY_CAPTURE_BACKEND opt-in
-(default stays exec-out screencap), and the loud permanent fallback when the
-stream can't start. The stream itself needs a device — covered by the smoke
+(default stays exec-out screencap), the loud permanent fallback when the
+stream can't start, and AndroidBackend.wait_settled's quiet-window / budget /
+dead-stream branches. The stream itself needs a device — covered by the smoke
 run, not unit tests.
 """
 from __future__ import annotations
@@ -11,6 +13,7 @@ import io
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -102,6 +105,94 @@ class CaptureBackendSeamTests(unittest.TestCase):
         self.assertIsNotNone(img)  # exec-out picked it up
         self.assertTrue(backend._capture_stream_failed)
         stream_cls.return_value.close.assert_called_once()
+
+
+class _FakeStream:
+    """Duck-typed ScrcpyStream: wait_settled only touches `alive`,
+    `frame_seq` and `wait_for_new_frame(after_seq, timeout)`."""
+
+    def __init__(self, alive: bool = True):
+        self.alive = alive
+        self.frame_seq = 0
+        self.timeouts: list[float] = []
+        self.on_wait = None  # callable(stream), runs inside wait_for_new_frame
+
+    def wait_for_new_frame(self, after_seq: int, timeout: float) -> int:
+        self.timeouts.append(timeout)
+        if self.on_wait is not None:
+            self.on_wait(self)
+        return self.frame_seq
+
+
+class WaitSettledTests(unittest.TestCase):
+    """P2-S2 settle detection. Contract (CLAUDE.md / DeviceBackend.wait_settled):
+    True = the settle was handled here; False = no signal, the CALLER pays its
+    fixed sleep — including when the stream is dead."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"RELAY_SETTLE_DETECT": "1"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.backend = AndroidBackend()
+
+    def _attach(self, stream: _FakeStream) -> _FakeStream:
+        self.backend._capture_stream = stream
+        return stream
+
+    def test_no_stream_returns_false(self):
+        self.assertFalse(self.backend.wait_settled(0.5))
+
+    def test_dead_stream_at_entry_returns_false(self):
+        s = self._attach(_FakeStream(alive=False))
+        self.assertFalse(self.backend.wait_settled(0.5))
+        self.assertEqual(s.timeouts, [])  # never even waited
+
+    def test_detect_disabled_returns_false(self):
+        self._attach(_FakeStream())
+        with mock.patch.dict(os.environ, {"RELAY_SETTLE_DETECT": "0"}):
+            self.assertFalse(self.backend.wait_settled(0.5))
+
+    def test_quiet_window_without_frames_settles(self):
+        s = self._attach(_FakeStream())  # no frame arrives during the wait
+        self.assertTrue(self.backend.wait_settled(5.0, quiet=0.2))
+        self.assertEqual(len(s.timeouts), 1)
+        self.assertAlmostEqual(s.timeouts[0], 0.2, places=2)  # full quiet window
+
+    def test_budget_exhaustion_settles_with_trimmed_waits(self):
+        # Frames keep arriving (continuous animation): spend the whole budget,
+        # then True — identical worst case to the fixed sleep it replaces.
+        s = self._attach(_FakeStream())
+
+        def frames_keep_coming(st: _FakeStream) -> None:
+            time.sleep(0.005)
+            st.frame_seq += 1
+
+        s.on_wait = frames_keep_coming
+        self.assertTrue(self.backend.wait_settled(0.05, quiet=0.2))
+        self.assertGreaterEqual(len(s.timeouts), 1)
+        # every wait is trimmed to min(quiet, remaining budget)
+        self.assertTrue(all(t <= 0.05 + 1e-6 for t in s.timeouts))
+
+    def test_stream_dying_mid_wait_returns_false(self):
+        # The decode thread flips _alive and notifies: wait_for_new_frame
+        # wakes immediately with an UNCHANGED seq. That must report no-signal
+        # (False → caller falls back to its fixed sleep), not "settled".
+        s = self._attach(_FakeStream())
+        s.on_wait = lambda st: setattr(st, "alive", False)
+        self.assertFalse(self.backend.wait_settled(5.0, quiet=0.2))
+        self.assertEqual(len(s.timeouts), 1)
+
+    def test_death_beats_a_simultaneous_new_frame(self):
+        # Even when a last frame lands in the same wakeup, a dead stream is
+        # no-signal: liveness is checked before the seq comparison.
+        s = self._attach(_FakeStream())
+
+        def die_with_frame(st: _FakeStream) -> None:
+            st.frame_seq += 1
+            st.alive = False
+
+        s.on_wait = die_with_frame
+        self.assertFalse(self.backend.wait_settled(5.0, quiet=0.2))
 
 
 if __name__ == "__main__":
