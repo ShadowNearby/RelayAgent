@@ -115,7 +115,17 @@ object A11yXmlSerializer {
                 c == '>' -> sb.append("&gt;")
                 c == '"' -> sb.append("&quot;")
                 c == '\'' -> sb.append("&apos;")
-                c.code < 0x20 && c != '\n' && c != '\t' -> {} // strip control chars
+                // Whitespace controls must be character references: a literal
+                // LF/TAB/CR in an attribute value is normalized to a space by
+                // conforming parsers (ElementTree, which backend.dump_ui_tree
+                // uses), while uiautomator's kxml2 serializer emits
+                // &#10;/&#9;/&#13; and thus preserves them — without this,
+                // multi-line node text (single-bubble long replies) loses its
+                // line breaks and Spike B parity.
+                c == '\n' -> sb.append("&#10;")
+                c == '\t' -> sb.append("&#9;")
+                c == '\r' -> sb.append("&#13;")
+                c.code < 0x20 -> {} // strip remaining control chars
                 else -> sb.append(c)
             }
         }

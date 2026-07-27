@@ -20,9 +20,15 @@ object PythonRuntime {
         Thread(it, "relay-python").apply { isDaemon = true }
     }
 
+    /** Idempotent CPython bring-up. The FIRST start loads the interpreter +
+     * stdlib/AssetFinder (1s+ on a real device), so it must stay OFF the main
+     * thread — runFlow/runSingle run it inside the worker executor before the
+     * entrypoint call. @Synchronized guards a direct caller on another thread
+     * (e.g. instrumentation) against a double Python.start race. */
+    @Synchronized
     fun ensureStarted(context: Context) {
         if (!Python.isStarted()) {
-            Python.start(AndroidPlatform(context))
+            Python.start(AndroidPlatform(context.applicationContext))
             Log.i(TAG, "CPython started")
         }
     }
@@ -33,10 +39,13 @@ object PythonRuntime {
      * onDone receives the result JSON (or {"error": ...}).
      */
     fun runFlow(context: Context, goal: String, config: JSONObject, onDone: (String) -> Unit) {
-        ensureStarted(context)
+        val app = context.applicationContext
         DeviceBridge.resetStop()
         executor.execute {
             val result = try {
+                // First-call interpreter bring-up happens here on the worker
+                // thread, not on the UI thread the send button clicked from.
+                ensureStarted(app)
                 Python.getInstance()
                     .getModule("relay_android.entry")
                     .callAttr("run_flow", goal, config.toString())
@@ -55,10 +64,11 @@ object PythonRuntime {
         context: Context, pkg: String, goal: String, config: JSONObject,
         onDone: (String) -> Unit,
     ) {
-        ensureStarted(context)
+        val app = context.applicationContext
         DeviceBridge.resetStop()
         executor.execute {
             val result = try {
+                ensureStarted(app)
                 Python.getInstance()
                     .getModule("relay_android.entry")
                     .callAttr("run_single", pkg, goal, config.toString())

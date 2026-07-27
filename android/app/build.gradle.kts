@@ -16,9 +16,14 @@ val syncRelayPython by tasks.registering(Sync::class) {
     from(repoRoot.dir("agents")) {
         into("agents")
         exclude("**/__pycache__/**")
-        // Host-only modules: MobileWorld probe (imports mobile_world) and the
-        // adb recorder are never imported on-device.
-        exclude("mw_llm_probe.py")
+        // Host-only module: the MobileWorld LLM probe (imports mobile_world)
+        // is only ever loaded via scripts/_mw_probe/sitecustomize.py on the
+        // host. The pattern must be **-anchored — Ant-style excludes match
+        // relative to the from() root and the file lives at
+        // agents/llm/mw_llm_probe.py, so a bare filename matches nothing.
+        // (agents/runtime/_recorder.py stays packaged: relay_agent lazily
+        // imports it when RELAY_RECORD_DIR is set.)
+        exclude("**/mw_llm_probe.py")
     }
     into(layout.buildDirectory.dir("relayPython"))
 }

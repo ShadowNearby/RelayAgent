@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.util.Log
+import android.view.WindowManager
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -35,24 +36,37 @@ object DeviceBridge {
 
     // -- observation ----------------------------------------------------------
 
-    /** Current frame as PNG bytes. MediaProjection first (fast, continuous);
-     * a11y takeScreenshot as the degraded path; null when both fail. */
+    /** Current frame as JPEG bytes (quality 85). MediaProjection first (fast,
+     * continuous); a11y takeScreenshot as the degraded path; null when both
+     * fail. JPEG on purpose: PNG is lossless (the quality arg is ignored) and
+     * costs hundreds of ms per 1080p+ frame on a mid-range SoC — the single
+     * biggest per-step cost — while a JPEG encode is tens of ms and PIL's
+     * Image.open on the Python side decodes either format transparently.
+     * Consumers only need same-source frame consistency (hash prechecks
+     * compare frames that went through this same encoder) + VLM legibility,
+     * not pixel-exact lossless frames. */
     @JvmStatic
-    fun screencapPng(): ByteArray? {
+    fun screencapJpeg(): ByteArray? {
         val bmp: Bitmap? = ScreenCaptureService.instance
             ?.takeIf { it.isActive }?.captureBitmap()
             ?: a11y?.takeScreenshotBlocking()
         return bmp?.let {
-            val out = ByteArrayOutputStream(1 shl 20)
-            it.compress(Bitmap.CompressFormat.PNG, 100, out)
+            val out = ByteArrayOutputStream(1 shl 19)
+            it.compress(Bitmap.CompressFormat.JPEG, 85, out)
             out.toByteArray()
         }
     }
 
+    /** Same geometry the capture pipeline mirrors into (see
+     * ScreenCaptureService.captureGeometry): real display bounds in the current
+     * orientation, system bars included. App-context displayMetrics can exclude
+     * the bars and goes stale on rotation, so gesture geometry computed from it
+     * would not match the frames the agent looks at. */
     @JvmStatic
     fun screenSize(): IntArray {
-        val dm = appContext.resources.displayMetrics
-        return intArrayOf(dm.widthPixels, dm.heightPixels)
+        val bounds = appContext.getSystemService(WindowManager::class.java)
+            .maximumWindowMetrics.bounds
+        return intArrayOf(bounds.width(), bounds.height())
     }
 
     /** Monotonic frame-arrival counter off the MediaProjection pipeline, for

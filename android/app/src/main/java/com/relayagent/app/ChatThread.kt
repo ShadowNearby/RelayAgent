@@ -1,5 +1,6 @@
 package com.relayagent.app
 
+import android.content.Context
 import android.content.Intent
 import android.view.LayoutInflater
 import android.view.View
@@ -50,6 +51,51 @@ sealed class ChatItem {
 
 object ChatStore {
     val items = mutableListOf<ChatItem>()
+
+    private var hydrated = false
+
+    /**
+     * Cold-start rebuild of past exchanges from the on-disk run roots, so the
+     * home thread isn't amnesiac after process death (this object itself only
+     * survives activity recreation). Read-only and best-effort over the same
+     * files the log viewer parses ([TrajLog]): meta.json (the request text
+     * entry.py persists + kind/error) rebuilds the User bubble, the legs'
+     * agent_reply.json rebuild the Answer card; runs without a readable
+     * meta.json are skipped. Runs once per process and only into an empty
+     * thread, so it can never interleave with a live run's items.
+     */
+    fun hydrateFromDisk(context: Context, limit: Int = 10) {
+        if (hydrated || items.isNotEmpty()) return
+        hydrated = true
+        val runs = try {
+            TrajLog.listRuns(TrajLog.trajRoot(context.filesDir))
+        } catch (e: Exception) {
+            return // never let history rebuilding break the home screen
+        }
+        // listRuns is newest-first; append oldest-first so the newest run
+        // lands at the bottom of the thread like a live exchange would.
+        for (run in runs.take(limit).asReversed()) {
+            val request = run.request ?: continue
+            val replies = try {
+                TrajLog.legDirs(run.dir).mapNotNull { TrajLog.parseLeg(it).reply }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val ok = run.error == null
+            items.add(ChatItem.User(request))
+            items.add(
+                ChatItem.Answer(
+                    ok = ok,
+                    verdict = context.getString(
+                        if (ok) R.string.result_done else R.string.result_failed
+                    ),
+                    // Same fallback text as RunSession.summarizeBlackboard.
+                    text = run.error ?: replies.joinToString("\n\n").ifEmpty { "已执行完毕。" },
+                    trajRoot = run.dir.absolutePath,
+                )
+            )
+        }
+    }
 }
 
 class ChatAdapter(private val items: List<ChatItem>) :

@@ -135,26 +135,73 @@ class RelayAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Type into the focused field: ACTION_SET_TEXT first (replaces content,
-     * matching AdbKeyboard's broadcast semantics), clipboard+ACTION_PASTE as
-     * fallback for views that reject SET_TEXT. Misses are logged loudly per
-     * the surface-fallback-failures rule.
+     * Type into the focused field, INSERTING at the cursor like the host
+     * path (AdbKeyboard ADB_INPUT_B64 broadcast → InputConnection.commitText:
+     * inserts at the cursor, replacing only the selection). ACTION_SET_TEXT
+     * is a whole-field replace, so splice the new text into the existing
+     * content at the selection and put the cursor back after the insert;
+     * clipboard + ACTION_PASTE (natively insert-at-cursor, so both paths
+     * agree) is the fallback for views that reject SET_TEXT. Misses are
+     * logged loudly per the surface-fallback-failures rule.
      */
     fun inputText(text: String): Boolean {
         val node = findFocusedEditable() ?: run {
             Log.w(TAG, "input_text: no focused editable node")
             return false
         }
+        // Hint text is not content; password text is masked and cannot be
+        // spliced faithfully — treat both as empty (plain replace, the
+        // common case for such fields anyway).
+        val existing =
+            if (node.isShowingHintText || node.isPassword) ""
+            else node.text?.toString() ?: ""
+        // No reported cursor (-1) → append at the end, the usual cursor
+        // position after focusing a field.
+        var start = node.textSelectionStart
+        var end = node.textSelectionEnd
+        if (start < 0 || start > existing.length) start = existing.length
+        if (end < start || end > existing.length) end = start
+        val spliced = existing.substring(0, start) + text + existing.substring(end)
         val args = Bundle().apply {
             putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, spliced
             )
         }
-        if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return true
+        if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            // SET_TEXT leaves the cursor at the field end; move it back to
+            // just after the inserted text (commitText semantics). Best
+            // effort — a refusal only misplaces the cursor.
+            val cursor = start + text.length
+            if (cursor != spliced.length) {
+                val sel = Bundle().apply {
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+                }
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+            }
+            return true
+        }
         Log.w(TAG, "input_text: ACTION_SET_TEXT rejected; falling back to paste")
         val cm = getSystemService(ClipboardManager::class.java)
+        // Best-effort snapshot for restore: on Android 10+ a background app
+        // usually CANNOT read the clipboard (null), so restore degrades to
+        // clearing — either way the typed text (may carry profile values,
+        // exactly what RELAY_TRAJ_REDACT protects) must not linger where the
+        // next focused app can read it, nor silently replace the user's clip
+        // for good.
+        val previous = try {
+            cm.primaryClip
+        } catch (e: Exception) {
+            null
+        }
         cm.setPrimaryClip(ClipData.newPlainText("relay", text))
-        return node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        try {
+            if (previous != null) cm.setPrimaryClip(previous) else cm.clearPrimaryClip()
+        } catch (e: Exception) {
+            Log.w(TAG, "input_text: clipboard restore failed: $e")
+        }
+        return pasted
     }
 
     // -- observation --------------------------------------------------------------

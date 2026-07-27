@@ -41,12 +41,14 @@ class OnDeviceAndroidBackend(DeviceBackend):
     def screencap(self, timeout: float = 5.0):
         from PIL import Image
 
-        png = Bridge.screencapPng()
-        if png is None:
+        # JPEG (q85) from the Kotlin side — a PNG round-trip cost hundreds of
+        # ms per frame for no consumer benefit; Image.open sniffs the format.
+        data = Bridge.screencapJpeg()
+        if data is None:
             logger.warning("screencap: no frame (projection down and a11y capture failed)")
             return None
         try:
-            return Image.open(io.BytesIO(bytes(png))).convert("RGB")
+            return Image.open(io.BytesIO(bytes(data))).convert("RGB")
         except Exception as e:
             logger.warning(f"screencap decode failed: {e}")
             return None

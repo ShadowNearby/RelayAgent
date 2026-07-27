@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
@@ -13,6 +14,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -32,6 +35,18 @@ object OverlayController {
 
     private const val TAG = "RelayOverlay"
     private val main = Handler(Looper.getMainLooper())
+
+    /** Upper bound for one askUserBlocking wait. The host terminal input()
+     * has no timeout, but an unattended phone must not park the single
+     * Python worker forever — on expiry the panel resolves to null (EOF /
+     * take-over = handoff-success terminal). Mutable so a settings hook or
+     * test can tune it without a rebuild. */
+    @Volatile
+    var askTimeoutSeconds: Long = 600
+
+    /** Latch poll period: how quickly a stop request / service death is
+     * noticed while the worker waits on the ask_user panel. */
+    private const val ASK_POLL_MS = 250L
 
     private var chip: TextView? = null
 
@@ -54,14 +69,33 @@ object OverlayController {
             // those taps — a tap landing on it used to fire requestStop and end
             // the run silently. Stop now lives on the capture notification.
         }
-        wm.addView(view, chipLayoutParams())
-        chip = view
+        try {
+            wm.addView(view, chipLayoutParams())
+            chip = view
+        } catch (e: Exception) {
+            // e.g. the service is mid-teardown; the run continues without a chip.
+            Log.w(TAG, "overlay: chip addView failed: $e")
+        }
     }
 
     fun hide() = main.post {
-        val service = RelayAccessibilityService.instance ?: return@post
-        chip?.let { service.getSystemService(WindowManager::class.java).removeView(it) }
+        val view = chip ?: return@post
+        // Clear the field unconditionally BEFORE any early exit: a stale
+        // non-null chip would make every future show() a no-op (the guard
+        // above) while holding a view of a possibly-destroyed service.
         chip = null
+        val service = RelayAccessibilityService.instance ?: run {
+            // Service gone — the system already removed its windows with it.
+            Log.w(TAG, "overlay: a11y service gone; chip window already removed")
+            return@post
+        }
+        try {
+            service.getSystemService(WindowManager::class.java).removeView(view)
+        } catch (e: Exception) {
+            // The view can already be detached (service toggled off/on mid-run
+            // removes its windows); removeView then throws — never crash here.
+            Log.w(TAG, "overlay: chip removeView failed: $e")
+        }
     }
 
     fun postStatus(json: String) {
@@ -106,6 +140,15 @@ object OverlayController {
     /**
      * Blocking ask_user panel. Must NOT be called on the main thread (it is
      * called from the Python worker; enforced by the latch pattern).
+     *
+     * The wait is bounded: the worker polls the latch instead of parking
+     * forever, so it also unblocks on (a) a stop request — the App/notification
+     * 停止 only flips DeviceBridge's flag, and the loop-boundary polls can
+     * never run while the single Python worker is parked here — (b) the
+     * accessibility service dying (the system removes the panel window with
+     * it, so no tap can ever land), or (c) [askTimeoutSeconds] elapsing.
+     * All three resolve to null = the host InteractionProvider's EOF
+     * semantics, which the runtime treats as the handoff-success terminal.
      */
     fun askUserBlocking(text: String): String? {
         val service = RelayAccessibilityService.instance ?: run {
@@ -114,8 +157,29 @@ object OverlayController {
         }
         val latch = CountDownLatch(1)
         val answer = AtomicReference<String?>(null)
-        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        val done = AtomicBoolean(false)
+        val panelRef = AtomicReference<LinearLayout?>(null)
+
+        // Single terminal for every exit path (button tap, stop request,
+        // service death, timeout): first caller wins, the panel is removed on
+        // the main thread, and the latch counts down exactly once.
+        fun conclude(value: String?, why: String) {
+            if (!done.compareAndSet(false, true)) return
+            answer.set(value)
+            main.post {
+                panelRef.getAndSet(null)?.let { panel ->
+                    try {
+                        service.getSystemService(WindowManager::class.java).removeView(panel)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "ask_user: removeView failed ($why): $e")
+                    }
+                }
+            }
+            latch.countDown()
+        }
+
         main.post {
+            if (done.get()) return@post // stop/timeout raced ahead of the panel
             val wm = service.getSystemService(WindowManager::class.java)
             val panel = LinearLayout(service).apply {
                 orientation = LinearLayout.VERTICAL
@@ -142,41 +206,47 @@ object OverlayController {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
             }
-            fun finish(value: String?) {
-                // Guard against double-taps: a second removeView on the same
-                // panel throws and the latch must count down exactly once.
-                if (!done.compareAndSet(false, true)) return
-                answer.set(value)
-                try {
-                    wm.removeView(panel)
-                } catch (e: Exception) {
-                    Log.w(TAG, "ask_user: removeView failed: $e")
-                }
-                latch.countDown()
-            }
             buttons.addView(Button(service).apply {
                 this.text = service.getString(R.string.overlay_answer)
-                setOnClickListener { finish(input.text.toString()) }
+                setOnClickListener { conclude(input.text.toString(), "answer") }
             })
             buttons.addView(Button(service).apply {
                 // Take-over: maps to the EOF/None handoff terminal — the user
                 // finishes the task by hand and the run ends as a success.
                 this.text = service.getString(R.string.overlay_takeover)
-                setOnClickListener { finish(null) }
+                setOnClickListener { conclude(null, "take-over") }
             })
             panel.addView(label)
             panel.addView(input)
             panel.addView(buttons)
             try {
                 wm.addView(panel, panelLayoutParams())
+                panelRef.set(panel)
             } catch (e: Exception) {
                 // If the panel can't be shown the latch would never release
                 // and the Python worker would hang forever — treat as take-over.
                 Log.w(TAG, "ask_user: addView failed -> take-over: $e")
-                if (done.compareAndSet(false, true)) latch.countDown()
+                conclude(null, "addView failed")
             }
         }
-        latch.await()
+
+        val deadline = SystemClock.elapsedRealtime() + askTimeoutSeconds * 1000
+        while (!latch.await(ASK_POLL_MS, TimeUnit.MILLISECONDS)) {
+            when {
+                DeviceBridge.shouldStop() -> {
+                    Log.i(TAG, "ask_user: stop requested -> unblock as take-over")
+                    conclude(null, "stop requested")
+                }
+                RelayAccessibilityService.instance !== service -> {
+                    Log.w(TAG, "ask_user: a11y service died -> unblock as take-over")
+                    conclude(null, "service died")
+                }
+                SystemClock.elapsedRealtime() >= deadline -> {
+                    Log.w(TAG, "ask_user: no answer within ${askTimeoutSeconds}s -> take-over")
+                    conclude(null, "timeout")
+                }
+            }
+        }
         return answer.get()
     }
 

@@ -46,6 +46,7 @@
     <string name="notice_waiting_answer">代理在等待你的回答——请在悬浮面板里输入或点「我来接管」。</string>
     <string name="notice_answer_received">已收到回答，继续执行。</string>
     <string name="notice_consent_denied">屏幕采集授权被拒绝，任务未开始。</string>
+    <string name="notice_notif_denied">通知权限被拒绝——通知栏的「停止」按钮将不可见，需要停止时请回到本界面操作。</string>
     <string name="result_done">任务完成</string>
     <string name="result_failed">任务失败</string>
     <string name="result_unsatisfiable">当前可用的 App 无法完成这个任务</string>

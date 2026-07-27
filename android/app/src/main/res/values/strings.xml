@@ -46,6 +46,7 @@
     <string name="notice_waiting_answer">The agent is waiting for your answer — type in the floating panel or tap "I\'ll take over".</string>
     <string name="notice_answer_received">Answer received; continuing.</string>
     <string name="notice_consent_denied">Screen-capture permission denied; the task didn\'t start.</string>
+    <string name="notice_notif_denied">Notification permission denied — the Stop button on the capture notification won\'t be shown; come back to this screen to stop a run.</string>
     <string name="result_done">Task complete</string>
     <string name="result_failed">Task failed</string>
     <string name="result_unsatisfiable">None of the available apps can do this task</string>

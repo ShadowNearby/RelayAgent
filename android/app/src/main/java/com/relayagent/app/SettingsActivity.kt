@@ -1,6 +1,7 @@
 package com.relayagent.app
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -51,12 +52,27 @@ class SettingsActivity : AppCompatActivity() {
         )
         private val BOOL_KEYS = listOf(K_CAPTURE_FULL, K_STEP_LOG, K_FRESH_CONV, K_DISMISS_PERMS)
 
-        fun prefs(context: Context) = EncryptedSharedPreferences.create(
-            context, PREFS,
-            MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
+        // Creating EncryptedSharedPreferences walks the Keystore + disk every
+        // time (30-150ms, a known ANR source) and this is hit on the main
+        // thread from every MainActivity resume and every send — cache one
+        // instance for the process lifetime (also the single point to touch
+        // when migrating off the deprecated androidx.security-crypto).
+        @Volatile
+        private var cachedPrefs: SharedPreferences? = null
+
+        fun prefs(context: Context): SharedPreferences =
+            cachedPrefs ?: synchronized(this) {
+                cachedPrefs ?: run {
+                    val app = context.applicationContext
+                    EncryptedSharedPreferences.create(
+                        app, PREFS,
+                        MasterKey.Builder(app)
+                            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+                    ).also { cachedPrefs = it }
+                }
+            }
 
         /** Config JSON for the Python entrypoint (entry._install_env). */
         fun loadConfig(context: Context): JSONObject {

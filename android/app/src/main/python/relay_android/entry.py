@@ -46,17 +46,55 @@ _PASSTHROUGH_ENV = (
 )
 
 
+# Pre-override values of the Settings-managed keys (same snapshot/restore
+# idea as flow_leg_executor.InProcessLegExecutor, scoped to the keys we set).
+# This app process is long-lived, so "blank field keeps the runtime default"
+# needs an active restore: a key set on a previous run must be put back to
+# its pre-override value (usually: deleted) once its Settings field is
+# cleared — otherwise a stale gateway/knob silently survives until the
+# process dies.
+_env_snapshot: dict[str, str | None] = {}
+
+
+def _apply_env(key: str, val) -> None:
+    """Set `key` when `val` is non-empty; otherwise restore its pre-override
+    value (delete when it never existed). No-op for keys never overridden."""
+    if val is not None and str(val) != "":
+        if key not in _env_snapshot:
+            _env_snapshot[key] = os.environ.get(key)
+        os.environ[key] = str(val)
+    elif key in _env_snapshot:
+        prev = _env_snapshot.pop(key)
+        if prev is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prev
+
+
+def _cfg_int(val, default: int) -> int:
+    """Parse a Settings numeric field. SettingsActivity writes NUM_KEYS as
+    strings and "" when unset, so blank/None (and junk) keep the default —
+    int("") would otherwise crash the whole entrypoint."""
+    if val is None:
+        return default
+    s = str(val).strip()
+    if not s:
+        return default
+    try:
+        return int(s)
+    except ValueError:
+        logger.warning(f"ignoring non-numeric setting value {val!r}; using {default}")
+        return default
+
+
 def _install_env(cfg: dict) -> Path:
     """Install the Settings-provided LLM config + Android path layout as env
     (the runtime's existing env contract), and return this run's traj root."""
     for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
-        if cfg.get(key):
-            os.environ[key] = str(cfg[key])
+        _apply_env(key, cfg.get(key))
 
     for key in _PASSTHROUGH_ENV:
-        val = cfg.get(key)
-        if val is not None and str(val) != "":
-            os.environ[key] = str(val)
+        _apply_env(key, cfg.get(key))
 
     files = _files_dir()
     relay = files / "relay"  # extracted by AssetInstaller
@@ -115,7 +153,7 @@ def run_single(pkg: str, goal: str, config_json: str) -> str:
     try:
         from agents.runtime.native_runner import run_leg
 
-        summary = run_leg(pkg, goal, max_step=int(cfg.get("max_step", -1)))
+        summary = run_leg(pkg, goal, max_step=_cfg_int(cfg.get("max_step"), -1))
         return json.dumps({"ok": True, "summary": summary}, ensure_ascii=False)
     except Exception as e:
         logger.exception("run_single failed")
@@ -140,8 +178,19 @@ def run_flow(nl: str, config_json: str) -> str:
         relay = files / "relay"
         catalog = build_catalog(relay / "manifests")
         matrix = load_matrix(relay / "app_capability_matrix.csv")
+        base_url = os.environ.get("LLM_BASE_URL", "")
+        model = os.environ.get("LLM_MODEL", "")
+        if not base_url or not model:
+            # Readable failure instead of a bare KeyError ("'LLM_BASE_URL'")
+            # bubbling out of the generic except below.
+            return json.dumps(
+                {"ok": False, "error": "LLM 网关未配置：请在设置页填写 LLM_BASE_URL 与 LLM_MODEL"},
+                ensure_ascii=False,
+            )
+        # The API key may legitimately be blank (keyless/in-LAN gateway):
+        # make_llm_client maps a falsy key to "empty", same as on host.
         llm = _RecordingLLM(
-            make_llm_client(os.environ["LLM_BASE_URL"], os.environ["LLM_API_KEY"]),
+            make_llm_client(base_url, os.environ.get("LLM_API_KEY", "")),
             retry=False,
         )
         llm.purpose = "plan"
@@ -151,7 +200,7 @@ def run_flow(nl: str, config_json: str) -> str:
         # surfacing as unsatisfiable; RELAY_GENERAL_FALLBACK=0 (Settings)
         # restores the old give-up behavior.
         planner = FlowPlanner(
-            catalog, llm, os.environ["LLM_MODEL"], matrix=matrix, mw_fallback=False
+            catalog, llm, model, matrix=matrix, mw_fallback=False
         )
 
         result = nl_flow.plan_request(
@@ -175,11 +224,18 @@ def run_flow(nl: str, config_json: str) -> str:
         # nl_request wires the P3-M3 memory pass: after a successful flow, a
         # proposed preference is confirmed y/n through the overlay ask_user
         # before anything is written to the profile.
+        # Settings max_step caps every leg via the same CLI surface as the
+        # host (`native_runner --max-step`, appended to each leg's argv by
+        # the executor). General-fallback legs append their own --max-step
+        # AFTER extra_args (argparse last-wins), so they stay governed by
+        # RELAY_GENERAL_MAX_STEP, as on host.
+        max_step = _cfg_int(cfg.get("max_step"), -1)
         outcome = nl_flow.execute_plan(
             result.plan_path,
             leg_executor=InProcessLegExecutor(),
             prekill=False,
             nl_request=nl,
+            extra_args=["--max-step", str(max_step)] if max_step > 0 else None,
         )
         _write_meta(outcome.flow_traj_root, request=nl, kind="flow")
         return json.dumps(

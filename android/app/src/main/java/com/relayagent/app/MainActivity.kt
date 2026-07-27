@@ -1,8 +1,11 @@
 package com.relayagent.app
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
@@ -36,8 +39,25 @@ import org.json.JSONObject
  */
 class MainActivity : AppCompatActivity(), RunSession.Host {
 
+    companion object {
+        /** Ask for POST_NOTIFICATIONS once per process: a denial degrades
+         * gracefully (the capture notification and its 停止 action stay
+         * hidden) and must not re-prompt on every send. */
+        private var notifPermissionAsked = false
+    }
+
     private lateinit var ui: ActivityMainBinding
     private lateinit var adapter: ChatAdapter
+
+    private val notifPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            // Granted or denied, continue the send that triggered the request:
+            // the foreground service runs either way — when denied, only the
+            // capture notification (the one Stop entry that doesn't require
+            // switching back to this app) stays hidden, so say so once.
+            if (!granted) appendItem(ChatItem.Notice(getString(R.string.notice_notif_denied)))
+            onSendClicked()
+        }
 
     private val projectionConsent =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -86,6 +106,10 @@ class MainActivity : AppCompatActivity(), RunSession.Host {
             }
         }
 
+        // Cold start: rebuild past exchanges from the on-disk run roots before
+        // the adapter attaches (ChatStore itself is memory-only; a handful of
+        // small JSON reads, once per process).
+        ChatStore.hydrateFromDisk(this)
         adapter = ChatAdapter(ChatStore.items)
         ui.chatList.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
         ui.chatList.adapter = adapter
@@ -132,6 +156,15 @@ class MainActivity : AppCompatActivity(), RunSession.Host {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
+        if (needsNotifPermission()) {
+            // First send on Android 13+: request POST_NOTIFICATIONS before the
+            // run starts — targetSdk 34 blocks the capture notification (and
+            // its Stop action) without a runtime grant. The composer keeps its
+            // text; the result callback re-enters onSendClicked either way.
+            notifPermissionAsked = true
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
         ui.composerInput.setText("")
         RunSession.begin(applicationContext, goal)
 
@@ -143,6 +176,12 @@ class MainActivity : AppCompatActivity(), RunSession.Host {
     private fun onStopClicked() {
         RunSession.requestStop()
     }
+
+    private fun needsNotifPermission(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED &&
+            !notifPermissionAsked
 
     // ------------------------------------------------------ RunSession.Host
 
