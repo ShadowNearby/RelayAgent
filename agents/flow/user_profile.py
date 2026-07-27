@@ -56,15 +56,36 @@ class UserProfile:
     """One loaded profile.yaml. Mutations go through helpers + save() (atomic
     temp+rename) so a crash never leaves a half-written store."""
 
-    def __init__(self, data: dict[str, Any], path: Path) -> None:
+    def __init__(
+        self,
+        data: dict[str, Any],
+        path: Path,
+        invalid_sections: set[str] | None = None,
+    ) -> None:
         self.data = data
         self.path = path
+        # Sections load_profile found malformed: ignored on READ, kept intact
+        # in `data` (save() writes it verbatim, so the user's original values
+        # survive on disk) and refused as WRITE targets — a degraded read must
+        # never turn into a destructive write-back.
+        self._invalid_sections: set[str] = set(invalid_sections or ())
 
     # --------------------------------------------------------------- access
 
     def section(self, name: str) -> dict[str, str]:
+        if name in self._invalid_sections:
+            return {}
         sec = self.data.get(name)
         return sec if isinstance(sec, dict) else {}
+
+    def _writable(self, name: str) -> bool:
+        if name in self._invalid_sections:
+            logger.warning(
+                f"profile section {name!r} is malformed on disk; skipping the "
+                f"write so the original data is preserved"
+            )
+            return False
+        return True
 
     def is_empty(self) -> bool:
         return not any(self.section(s) for s in ("addresses", "contacts", "preferences", "app_hints"))
@@ -100,7 +121,7 @@ class UserProfile:
         return self.section("last_choices").get(_choice_key(question_key)) or None
 
     def remember_choice(self, question_key: str, label: str) -> None:
-        if not label:
+        if not label or not self._writable("last_choices"):
             return
         self.data.setdefault("last_choices", {})[_choice_key(question_key)] = label
         self.save()
@@ -108,6 +129,8 @@ class UserProfile:
     # -------------------------------------------------------- writes (M3)
 
     def add_preference(self, key: str, value: str) -> None:
+        if not self._writable("preferences"):
+            return
         self.data.setdefault("preferences", {})[key] = value
         self.save()
 
@@ -145,6 +168,7 @@ def load_profile() -> UserProfile | None:
     if not isinstance(data, dict):
         logger.warning(f"profile at {path} is not a mapping; running without it")
         return None
+    invalid: set[str] = set()
     for sec in _SECTIONS:
         val = data.get(sec)
         if val is None:
@@ -152,11 +176,14 @@ def load_profile() -> UserProfile | None:
         if not isinstance(val, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in val.items()
         ):
+            # Only FLAG the section (ignored on read, write-protected) — do
+            # not blank it in `data`, or the next save() would persist the
+            # loss and silently destroy the user's hand-edited values.
             logger.warning(
                 f"profile section {sec!r} must be a flat string→string map; ignoring it"
             )
-            data[sec] = {}
-    return UserProfile(data, path)
+            invalid.add(sec)
+    return UserProfile(data, path, invalid)
 
 
 # ------------------------------------------------------------- redaction (M4)

@@ -98,9 +98,9 @@ class PlanResult:
 
     - ok: `plan` + `plan_path` set, ready to execute.
     - unsatisfiable: no app coverage (or MW legs disallowed); `reason` says why.
-    - validation failed: `validation` carries the PlanValidationError
-      (`from_cache` distinguishes the cached-reroute vs. fresh-synthesis
-      message the CLI prints).
+    - validation failed: `validation` carries the PlanValidationError (always
+      from fresh synthesis — a cached plan that fails rerouting falls back to
+      fresh synthesis instead of surfacing its own validation error).
     """
 
     plan: dict[str, Any] | None = None
@@ -133,6 +133,11 @@ def plan_request(
     cached plan containing MobileWorld fallback legs into an unsatisfiable
     result instead of executing it. Freshly synthesized plans are governed by
     the planner's own mw_fallback flag.
+
+    A cached plan that no longer re-routes/validates (the capability matrix or
+    the platform card set changed since it was persisted) falls back to fresh
+    synthesis — which routes coverage gaps to the MW/general fallbacks — rather
+    than failing outright; only a fresh-synthesis failure is surfaced.
     """
     if use_cache:
         hit = cache_lookup(nl, generated_dir)
@@ -153,11 +158,15 @@ def plan_request(
                 plan = planner.resolve_app_routes(plan, nl)
                 planner.validate_plan(plan, nl)
             except PlanValidationError as e:
-                logger.error(str(e))
-                return PlanResult(from_cache=True, validation=e)
-            plan_path = persist_plan(plan, nl, generated_dir)
-            logger.info(f"cache hit → {hit.name}")
-            return PlanResult(plan=plan, plan_path=plan_path, from_cache=True)
+                logger.warning(
+                    f"cached plan {hit.name} failed rerouting/validation ({e}); "
+                    "falling back to fresh synthesis"
+                )
+                # fall through to the fresh-synthesis path below
+            else:
+                plan_path = persist_plan(plan, nl, generated_dir)
+                logger.info(f"cache hit → {hit.name}")
+                return PlanResult(plan=plan, plan_path=plan_path, from_cache=True)
 
     try:
         plan = planner.plan(nl)

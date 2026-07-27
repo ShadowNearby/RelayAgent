@@ -46,6 +46,7 @@ from agents.runtime._adb import screencap
 from agents.runtime.interaction import get_interaction
 from agents.flow.leg_judge import LOADING, LegVerdict, final_frames, judge_leg
 from agents.flow.leg_recovery import (
+    APP_FAIL,
     ENV_FAIL,
     ROUTE_FAIL,
     TIER_GENERAL,
@@ -83,6 +84,7 @@ from agents.flow.flow_runner_util import (
     REPO_ROOT,
     RUN_MOBILEWORLD,
     _assert_output_free_step_completed,
+    _choice_label,
     _harvest_mw_traj,
     _load_mw_driver,
     _parse_fenced_json,
@@ -239,11 +241,11 @@ class FlowRunner:
                 if kind == "app_step":
                     self._run_app_step(step)
                 elif kind == "ask_user":
-                    self._run_ask_user(step)
+                    self._run_noting_outcome(step, self._run_ask_user)
                 elif kind == MW_STEP_TYPE:
-                    self._run_mobileworld_step(step)
+                    self._run_noting_outcome(step, self._run_mobileworld_step)
                 elif kind == GENERAL_STEP_TYPE:
-                    self._run_general_step(step)
+                    self._run_noting_outcome(step, self._run_general_step)
                 else:
                     raise ValueError(f"Unknown step type: {kind}")
                 interaction.emit_status({"event": "leg_end", "id": step["id"]})
@@ -317,6 +319,19 @@ class FlowRunner:
         if recovered_via:
             entry["recovered_via"] = recovered_via
         self._step_outcomes.append(entry)
+
+    def _run_noting_outcome(self, step: dict, run) -> None:
+        """Run a non-app step (ask_user / plan-time MW / general leg) and record
+        its outcome, so flow_report's `steps` covers every plan step — app steps
+        note their own outcomes in _run_app_step/_recover_app_leg. Recovery-tier
+        MW/general runs call those methods directly (not through here), so they
+        are accounted once, on the recovered app step."""
+        try:
+            run(step)
+        except Exception as e:
+            self._note_outcome(step, "failed", LegFailure(APP_FAIL, str(e), fatal=True))
+            raise
+        self._note_outcome(step, "ok")
 
     def _execute_app_leg(
         self, step: dict, dir_suffix: str = "", prompt_override: str | None = None,
@@ -483,6 +498,12 @@ class FlowRunner:
         reroute_tried = False
         attempts: list[dict[str, Any]] = []
         committed = False
+        # First committable attempt (judge-only failure — would have been
+        # committed with recovery off). If the ladder ends on a FATAL attempt
+        # instead, this is the best attempt to ship rather than aborting.
+        committable: tuple[dict, LegResult, LegFailure] | None = None
+        if not first_failure.fatal:
+            committable = (step, first_result, first_failure)
 
         def _log_attempt(
             tier: str, target: str, outcome: str, detail: str, tokens: int = 0,
@@ -584,6 +605,8 @@ class FlowRunner:
             _log_attempt(tier, target, "failed",
                          f"{new_failure.kind}: {new_failure.reason}", tokens=spent)
             exclude.add((cur_step["app"], cur_step["capability"]))
+            if not new_failure.fatal and committable is None:
+                committable = (cur_step, new_result, new_failure)
             result, failure = new_result, new_failure
 
         # Persist the attempt log next to the original attempt's trajectory.
@@ -597,10 +620,22 @@ class FlowRunner:
 
         if committed:
             return
-        # Ladder exhausted. A fatal failure stops the flow (with the partial
-        # state accounted for in flow_report.json); a judge-only failure keeps
-        # today's semantics — ship the best attempt and continue.
+        # Ladder exhausted. A judge-only last failure keeps today's semantics —
+        # ship the best attempt and continue. A fatal last failure falls back to
+        # an earlier committable (judge-only) attempt when one exists, so a soft
+        # failure the ladder happened to make WORSE never escalates into a hard
+        # abort; only with no committable attempt at all does the flow stop
+        # (with the partial state accounted for in flow_report.json).
         if failure is not None and failure.fatal:
+            if committable is not None:
+                c_step, c_result, c_failure = committable
+                logger.warning(
+                    f"recovery exhausted on a fatal attempt; shipping the earlier "
+                    f"judged attempt for step {step['id']!r} instead"
+                )
+                self._commit_leg(c_step, c_result)
+                self._note_outcome(step, "judged_failed", c_failure)
+                return
             self._note_outcome(step, "failed", failure)
             raise RuntimeError(
                 f"Step {step['id']!r}: {failure.reason} "
@@ -1009,7 +1044,10 @@ class FlowRunner:
             if not items:
                 raise RuntimeError(f"ask_user {step['id']!r}: nothing in {arr_key!r} to choose from")
             label_tpl = step.get("item_label", "{name}")
-            labels = [render(label_tpl, it) for it in items]
+            # _choice_label falls back to str(item) for scalar items (an extract
+            # can bind a plain string list) — a dict-shaped label template would
+            # otherwise render every menu line empty and break text matching.
+            labels = [_choice_label(it, label_tpl) for it in items]
             # M2③ — pre-select the previous choice: when the profile remembers
             # a pick for this question (keyed by the UNrendered header, stable
             # across runs of the same/cached plan) and it is on today's list,
@@ -1026,7 +1064,20 @@ class FlowRunner:
             lines.append(f"  (1-{len(items)}, or empty to pick {default_idx})")
             # ask_user → None (EOF / take-over) keeps the empty-default pick.
             raw = (interaction.ask_user("\n".join(lines)) or "").strip() or str(default_idx)
-            chosen = _resolve_choice(raw, items, label_tpl)
+            try:
+                chosen = _resolve_choice(raw, items, label_tpl)
+            except ValueError as e:
+                # One unresolvable answer (a typo) must not abort a long
+                # multi-app flow: ask once more, then fall back to the default.
+                logger.warning(f"{e}; asking once more")
+                raw = (interaction.ask_user("\n".join(lines)) or "").strip() or str(default_idx)
+                try:
+                    chosen = _resolve_choice(raw, items, label_tpl)
+                except ValueError:
+                    logger.warning(
+                        f"choice {raw!r} still unresolvable; falling back to option {default_idx}"
+                    )
+                    chosen = items[default_idx - 1]
             logger.info(f"user chose: {chosen}")
             if profile is not None:
                 # Records the user's own explicit pick (not an inference) so
@@ -1044,7 +1095,9 @@ class FlowRunner:
     # ----------------------------------------------------------- extract
 
     def _extract(self, raw_text: str, spec: dict) -> Any:
-        prompt = render(spec["prompt"], self.bb)
+        # A missing `prompt` is a plan-validation error; tolerate it here too
+        # (hand-written flows bypass the validator) instead of KeyError-ing.
+        prompt = render(spec.get("prompt", ""), self.bb)
         system = (
             "You extract structured data from text. "
             "Reply with ONE JSON value inside a ```json``` fence. "
@@ -1064,7 +1117,16 @@ class FlowRunner:
         )
         out = (resp.choices[0].message.content or "").strip()
         logger.debug(f"extract raw reply: {out}")
-        data = _parse_fenced_json(out)
+        try:
+            data = _parse_fenced_json(out)
+        except json.JSONDecodeError as e:
+            # The leg itself already succeeded — a truncated/prose extractor
+            # reply at commit time must not abort the flow. Degrade to binding
+            # the raw reply text (what a bind without `extract` would get).
+            logger.warning(
+                f"extract output is not parseable JSON ({e}); binding the raw reply text instead"
+            )
+            return raw_text
         if "bind_to_array_key" in spec and isinstance(data, dict):
             data = data.get(spec["bind_to_array_key"], data)
         return data

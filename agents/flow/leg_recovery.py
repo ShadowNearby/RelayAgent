@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -246,15 +247,21 @@ class RecoveryController:
         if hasattr(self.llm, "purpose"):
             self.llm.purpose = "recovery_reroute"
         try:
-            decision = route(
-                goal,
-                self._catalog,
-                self._matrix,
-                self.llm,
-                self.model,
-                preserve_goal=True,
-                exclude=exclude,
-            )
+            # The router wraps its LLM calls in create_with_retry; the flow's
+            # _RecordingLLM proxy retries on its own too. Suspend the proxy's
+            # retry for this call so a bad gateway isn't retried 3×3 with
+            # stacked backoff (see _RecordingLLM.no_retry).
+            no_retry = getattr(self.llm, "no_retry", None)
+            with (no_retry() if callable(no_retry) else nullcontext()):
+                decision = route(
+                    goal,
+                    self._catalog,
+                    self._matrix,
+                    self.llm,
+                    self.model,
+                    preserve_goal=True,
+                    exclude=exclude,
+                )
         except (NoRunnableAppForCapability, FoundationNotApplicable) as e:
             logger.info(f"recovery reroute: no alternative route ({e})")
             return None
@@ -264,6 +271,15 @@ class RecoveryController:
         app_id, cap_id = decision.get("app_id"), decision.get("capability_id")
         if not app_id or not cap_id or (app_id, cap_id) in exclude:
             logger.info(f"recovery reroute returned unusable pair {app_id}/{cap_id}")
+            return None
+        if self.handoff_required(app_id, cap_id):
+            # Safety red line (module docstring): handoff capabilities get the
+            # retry tier ONLY — never route a recovery ONTO one either. The
+            # recovery leg runs unattended (stdin closed) and the plan has no
+            # trailing ask_user for it.
+            logger.info(
+                f"recovery reroute skipped {app_id}/{cap_id}: target is handoff_to_user_required"
+            )
             return None
         if self.has_prompt_template(app_id, cap_id):
             # Filling another capability's template needs the planner's slot

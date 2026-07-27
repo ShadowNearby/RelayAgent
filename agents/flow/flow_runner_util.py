@@ -167,6 +167,19 @@ def _assert_output_free_step_completed(
     )
 
 
+def _choice_label(item: Any, label_tpl: str) -> str:
+    """Menu label for one select_from item.
+
+    A scalar item (an extract can bind a plain string list) renders '' through
+    a dict-shaped label template like "{name}" — fall back to the item's own
+    text so the menu, substring matching and choice memory all get a usable
+    label."""
+    label = render(label_tpl, item).strip()
+    if label:
+        return label
+    return "" if item is None else str(item).strip()
+
+
 def _resolve_choice(raw: str, items: list[Any], label_tpl: str) -> Any:
     if not raw:
         return items[0]
@@ -177,7 +190,7 @@ def _resolve_choice(raw: str, items: list[Any], label_tpl: str) -> Any:
     # substring match against rendered label, then `name`
     lowered = raw.lower()
     for it in items:
-        if lowered in render(label_tpl, it).lower():
+        if lowered in _choice_label(it, label_tpl).lower():
             return it
     for it in items:
         if isinstance(it, dict) and lowered in str(it.get("name", "")).lower():

@@ -10,6 +10,7 @@ in-app agent's `["0"]["llm_calls"]`. Split out of `flow_runner.py`.
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from typing import Any
 
 from agents.llm.llm_retry import create_with_retry
@@ -61,6 +62,19 @@ class _RecordingLLM:
         self.calls: list[dict] = []
         self.purpose = "flow"
         self.chat = _RecChat(self)
+
+    @contextmanager
+    def no_retry(self):
+        """Suspend the recorder-owned retry for a call the callee already wraps
+        in create_with_retry (e.g. the capability router reached from the
+        recovery reroute tier) — otherwise a bad gateway is retried 3×3 with
+        stacked backoff. Restores the previous setting on exit, error included."""
+        prev = self._retry
+        self._retry = False
+        try:
+            yield self
+        finally:
+            self._retry = prev
 
 
 class _RecChat:

@@ -70,6 +70,23 @@ class ExtractTests(unittest.TestCase):
         out = runner._extract("raw reply", {"prompt": "parse"})
         self.assertEqual(out, {"city": "上海"})
 
+    def test_extract_parse_failure_degrades_to_raw_text(self) -> None:
+        # The leg already succeeded; a prose/truncated extractor reply at
+        # commit time must degrade to binding the raw reply, not raise.
+        runner = self._runner("抱歉，这不是 JSON。")
+        out = runner._extract("原始回复文本", {"prompt": "parse"})
+        self.assertEqual(out, "原始回复文本")
+
+    def test_extract_truncated_fence_degrades_to_raw_text(self) -> None:
+        runner = self._runner('```json\n{"items": [{"name": "A"}, {"na')
+        out = runner._extract("原始回复文本", {"prompt": "parse", "bind_to_array_key": "items"})
+        self.assertEqual(out, "原始回复文本")
+
+    def test_extract_missing_prompt_does_not_keyerror(self) -> None:
+        runner = self._runner('```json\n{"a": 1}\n```')
+        out = runner._extract("raw reply", {})
+        self.assertEqual(out, {"a": 1})
+
 
 class MobileworldStepTests(unittest.TestCase):
     """Runs one MW fallback leg end-to-end with the driver subprocess mocked.
@@ -248,7 +265,101 @@ class GeneralStepTests(unittest.TestCase):
         self.assertEqual(runner.bb, {})  # output-free: nothing bound
 
 
+class FlowReportStepCoverageTests(unittest.TestCase):
+    """flow_report.json `steps` must cover EVERY plan step — plan-time MW /
+    general fallback legs and ask_user steps included, success and failure —
+    not just app steps (the benchmark harvest reads these rows; rows are only
+    added, never changed, so existing consumers keep working)."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmp = tempfile.mkdtemp()
+        os.environ["RELAY_PROFILE_ROOT"] = self._tmp  # hermetic profile store
+
+    def tearDown(self) -> None:
+        import shutil
+
+        os.environ.pop("RELAY_PROFILE_ROOT", None)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _runner(self, steps: list[dict]) -> FlowRunner:
+        from agents.flow.leg_recovery import RecoveryController
+
+        runner = FlowRunner.__new__(FlowRunner)
+        runner.flow = {"steps": steps}
+        runner.flow_path = Path(self._tmp) / "flow.yaml"
+        runner.bb = {}
+        runner.env = {"LLM_MODEL": "qwen"}
+        runner._llm = MagicMock(calls=[])
+        runner.flow_traj_root = Path(self._tmp)
+        runner._step_idx = 0
+        runner._step_outcomes = []
+        runner._recovery = RecoveryController(runner._llm, "qwen")
+        runner._mw_server_proc = None
+        runner._mw_server_log = None
+        return runner
+
+    def test_mw_general_and_ask_user_steps_are_reported(self) -> None:
+        runner = self._runner([
+            {"id": "a", "type": "ask_user", "bind": "x"},
+            {"id": "m", "type": "mobileworld", "prompt": "p"},
+            {"id": "g", "type": "general", "prompt": "p"},
+        ])
+        runner._run_ask_user = MagicMock()
+        runner._run_mobileworld_step = MagicMock()
+        runner._run_general_step = MagicMock()
+        with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
+            gi.return_value.should_stop.return_value = False
+            runner.run()
+        self.assertEqual(
+            [(o["step"], o["status"]) for o in runner._step_outcomes],
+            [("a", "ok"), ("m", "ok"), ("g", "ok")],
+        )
+        report = json.loads(
+            (Path(self._tmp) / "flow_report.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(report["steps"]), 3)
+
+    def test_failed_mw_step_is_reported_with_reason(self) -> None:
+        runner = self._runner([{"id": "m", "type": "mobileworld", "prompt": "p"}])
+        runner._run_mobileworld_step = MagicMock(side_effect=RuntimeError("boom"))
+        with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
+            gi.return_value.should_stop.return_value = False
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                runner.run()
+        outcome = runner._step_outcomes[-1]
+        self.assertEqual(outcome["status"], "failed")
+        self.assertIn("boom", outcome["failure_reason"])
+        # The report is still written on a mid-flow abort.
+        report = json.loads(
+            (Path(self._tmp) / "flow_report.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(report["steps"][0]["status"], "failed")
+
+
 class AskUserSelectFromTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import tempfile
+
+        # _run_ask_user loads AND writes the user profile (M2③ choice memory):
+        # point the store at a throwaway dir so tests never touch the
+        # developer's real ~/.relayagent/profile.yaml.
+        self._tmp = tempfile.mkdtemp()
+        os.environ["RELAY_PROFILE_ROOT"] = self._tmp
+
+    def tearDown(self) -> None:
+        import shutil
+
+        os.environ.pop("RELAY_PROFILE_ROOT", None)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    @staticmethod
+    def _bare_runner(bb: dict) -> FlowRunner:
+        runner = FlowRunner.__new__(FlowRunner)
+        runner.bb = bb
+        return runner
+
     def test_select_from_path_normalization(self) -> None:
         from agents.flow.flow_runner_util import _select_from_path
 
@@ -260,8 +371,7 @@ class AskUserSelectFromTests(unittest.TestCase):
     def test_select_from_tolerates_braced_var(self) -> None:
         # The validator accepts `{var}` spellings; the runner must resolve the
         # same way instead of using the braced string as a blackboard key.
-        runner = FlowRunner.__new__(FlowRunner)
-        runner.bb = {"pois": [{"name": "A"}, {"name": "B"}]}
+        runner = self._bare_runner({"pois": [{"name": "A"}, {"name": "B"}]})
         with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
             gi.return_value.ask_user.return_value = "2"
             runner._run_ask_user({
@@ -270,6 +380,87 @@ class AskUserSelectFromTests(unittest.TestCase):
                 "item_label": "{name}",
             })
         self.assertEqual(runner.bb["choice"], {"name": "B"})
+
+    def test_string_items_get_usable_labels_and_text_matching(self) -> None:
+        # An extract can bind a plain string list; the default "{name}" label
+        # template must fall back to the item text (not render empty lines),
+        # and text input must match against that fallback label.
+        runner = self._bare_runner({"shops": ["优衣库", "海澜之家"]})
+        with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
+            gi.return_value.ask_user.return_value = "海澜"
+            runner._run_ask_user({
+                "id": "pick", "type": "ask_user", "bind": "choice",
+                "select_from": "shops", "prompt_header": "选哪家?",
+            })
+        self.assertEqual(runner.bb["choice"], "海澜之家")
+        menu = gi.return_value.ask_user.call_args[0][0]
+        self.assertIn("1. 优衣库", menu)
+        self.assertIn("2. 海澜之家", menu)
+
+    def test_unresolvable_choice_reasks_then_falls_back_to_default(self) -> None:
+        # A typo must not abort the flow: one re-ask, then the default pick.
+        runner = self._bare_runner({"pois": [{"name": "A"}, {"name": "B"}]})
+        with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
+            gi.return_value.ask_user.side_effect = ["zzz", "yyy"]
+            runner._run_ask_user({
+                "id": "pick", "type": "ask_user", "bind": "choice",
+                "select_from": "pois", "prompt_header": "pick one",
+                "item_label": "{name}",
+            })
+        self.assertEqual(runner.bb["choice"], {"name": "A"})
+        self.assertEqual(gi.return_value.ask_user.call_count, 2)
+
+    def test_reask_after_unresolvable_choice_can_resolve(self) -> None:
+        runner = self._bare_runner({"pois": [{"name": "A"}, {"name": "B"}]})
+        with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
+            gi.return_value.ask_user.side_effect = ["zzz", "2"]
+            runner._run_ask_user({
+                "id": "pick", "type": "ask_user", "bind": "choice",
+                "select_from": "pois", "prompt_header": "pick one",
+                "item_label": "{name}",
+            })
+        self.assertEqual(runner.bb["choice"], {"name": "B"})
+
+    def _write_profile(self, data: dict) -> None:
+        import yaml
+
+        Path(self._tmp, "profile.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True), encoding="utf-8"
+        )
+
+    def test_profile_preselects_remembered_choice(self) -> None:
+        # M2③: a remembered pick moves the empty-input default onto itself.
+        self._write_profile({"last_choices": {"pick one": "B"}})
+        runner = self._bare_runner({"pois": [{"name": "A"}, {"name": "B"}]})
+        with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
+            gi.return_value.ask_user.return_value = ""  # keep the default
+            runner._run_ask_user({
+                "id": "pick", "type": "ask_user", "bind": "choice",
+                "select_from": "pois", "prompt_header": "pick one",
+                "item_label": "{name}",
+            })
+        self.assertEqual(runner.bb["choice"], {"name": "B"})
+        menu = gi.return_value.ask_user.call_args[0][0]
+        self.assertIn("empty to pick 2", menu)
+
+    def test_explicit_choice_is_written_back_to_profile(self) -> None:
+        # M2③ write-back: the user's own explicit pick (not an inference) is
+        # recorded so the next run of the same question defaults to it.
+        import yaml
+
+        self._write_profile({})  # store exists — the layer is active
+        runner = self._bare_runner({"pois": [{"name": "A"}, {"name": "B"}]})
+        with mock.patch("agents.flow.flow_runner.get_interaction") as gi:
+            gi.return_value.ask_user.return_value = "2"
+            runner._run_ask_user({
+                "id": "pick", "type": "ask_user", "bind": "choice",
+                "select_from": "pois", "prompt_header": "pick one",
+                "item_label": "{name}",
+            })
+        stored = yaml.safe_load(
+            Path(self._tmp, "profile.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(stored["last_choices"]["pick one"], "B")
 
 
 class HarvestMwTrajTests(unittest.TestCase):

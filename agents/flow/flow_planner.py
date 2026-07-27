@@ -331,29 +331,43 @@ class FlowPlanner:
         )
         raw = (resp.choices[0].message.content or "").strip()
         logger.debug(f"planner raw reply: {raw}")
-        data = _parse_fenced_json(raw)
-        if not isinstance(data, dict):
-            raise PlanValidationError(
-                nl_request, data, [f"planner returned a {type(data).__name__}, expected an object"]
-            )
-        if data.get("unsatisfiable"):
-            reason = data.get("reason")
-            fallback = self._whole_request_fallback(
-                nl_request, str(reason or "no app covers this request"), "planner"
-            )
-            if fallback is not None:
-                return fallback
-            logger.info(f"planner: unsatisfiable — {reason!r}")
-            return data
+        # Unparseable JSON (max_tokens truncation, a second fence, prose) must
+        # not crash out of the planner — it is exactly the kind of error the
+        # repair loop below exists for, so feed it there instead of raising.
+        parse_errors: list[str] = []
+        try:
+            data: Any = _parse_fenced_json(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(f"planner output is not parseable JSON ({e}); handing to the repair loop")
+            data = {"x_unparseable_output": raw[-2000:]}
+            parse_errors = [
+                f"previous reply was not parseable JSON ({e}); "
+                "re-emit the COMPLETE plan as ONE ```json fence"
+            ]
+        if not parse_errors:
+            if not isinstance(data, dict):
+                raise PlanValidationError(
+                    nl_request, data, [f"planner returned a {type(data).__name__}, expected an object"]
+                )
+            if data.get("unsatisfiable"):
+                reason = data.get("reason")
+                fallback = self._whole_request_fallback(
+                    nl_request, str(reason or "no app covers this request"), "planner"
+                )
+                if fallback is not None:
+                    return fallback
+                logger.info(f"planner: unsatisfiable — {reason!r}")
+                return data
 
         # Route → validate → repair loop. resolve_app_routes raises
         # PlanValidationError on routing errors; _validate returns validation
         # errors. Either kind feeds an LLM repair round before we give up — up
         # to `_REPAIR_ROUNDS` re-prompts.
         for attempt in range(_REPAIR_ROUNDS + 1):
-            errors: list[str] = []
+            errors: list[str] = list(parse_errors)
+            parse_errors = []
             coverage_gaps: list[str] = []
-            if self.matrix is not None:
+            if not errors and self.matrix is not None:
                 try:
                     data = self.resolve_app_routes(data, nl_request)
                 except PlanValidationError as e:
@@ -522,6 +536,11 @@ class FlowPlanner:
         gaps: list[str],
     ) -> None:
         """Route one app step, then fill its prompt (template or localize)."""
+        # A gap marker from an earlier round can survive a repair (the LLM
+        # echoes unknown x_ fields); clear it before re-routing so the final
+        # round's `_apply_fallback_to_gaps` only converts steps that are STILL
+        # gaps — never a step this round routed successfully.
+        step.pop("x_coverage_gap", None)
         prompt = step.get("prompt")
         if not prompt:
             return
@@ -721,6 +740,11 @@ class FlowPlanner:
             bind = step.get("bind")
             if not bind:
                 continue
+            if not isinstance(bind, str):
+                # A list/object bind (the LLM occasionally emits one) is
+                # `_validate`'s error to report; the later-reference check
+                # below would crash on the unhashable value first.
+                continue
             cap_meta = self._caps.get(step.get("app"), {}).get(step.get("capability"), {})
             if not cap_meta.get("x_skip_wait_for_reply"):
                 continue
@@ -856,7 +880,15 @@ class FlowPlanner:
         )
         raw = (resp.choices[0].message.content or "").strip()
         logger.debug(f"repair raw reply: {raw}")
-        return _parse_fenced_json(raw)
+        try:
+            return _parse_fenced_json(raw)
+        except json.JSONDecodeError as e:
+            # A repair reply with broken JSON only burns this round: keep the
+            # previous plan so the next round re-reports the same errors (and
+            # exhaustion still ends in fallback / PlanValidationError, never a
+            # bare JSONDecodeError out of the planner).
+            logger.warning(f"repair output is not parseable JSON ({e}); keeping the previous plan")
+            return plan
 
     # ------------------------------------------------------------- validate
 
@@ -876,6 +908,11 @@ class FlowPlanner:
                 errors.append(f"step #{i} is not an object")
                 continue
             sid = step.get("id") or f"#{i}"
+            # The runner hard-reads step['id'] (logging, leg dir names), so a
+            # missing id is a validation error the repair round must fix — not
+            # a KeyError at execution time.
+            if not step.get("id"):
+                errors.append(f"step #{i}: missing `id`")
             # Coerce the id to a string before the dup check so a non-string id
             # (list/object from the LLM) can't crash the unhashable set ops.
             sid_key = sid if isinstance(sid, str) else json.dumps(sid, sort_keys=True)
@@ -907,6 +944,18 @@ class FlowPlanner:
 
         return errors
 
+    @staticmethod
+    def _validate_extract(step: dict, sid: str, errors: list[str]) -> None:
+        """An `extract` spec must be an object with a non-empty `prompt` — the
+        runner's LLM extraction call is built from it."""
+        extract = step.get("extract")
+        if extract is None:
+            return
+        if not isinstance(extract, dict) or not extract.get("prompt"):
+            errors.append(
+                f"step {sid!r}: `extract` must be an object with a non-empty `prompt`"
+            )
+
     def _validate_mw_leg(
         self, step: dict, sid: str, produced: set[str], errors: list[str],
     ) -> None:
@@ -915,6 +964,7 @@ class FlowPlanner:
         prompt = step.get("prompt")
         if not prompt:
             errors.append(f"step {sid!r}: missing `prompt`")
+        self._validate_extract(step, sid, errors)
         refs = _var_roots(prompt or "")
         if isinstance(step.get("extract"), dict):
             refs |= _var_roots(step["extract"].get("prompt", ""))
@@ -940,6 +990,8 @@ class FlowPlanner:
         elif app and cap and cap not in self._caps[app]:
             known = sorted(self._caps[app])
             errors.append(f"step {sid!r}: unknown capability {cap!r} for {app!r} (known: {known})")
+
+        self._validate_extract(step, sid, errors)
 
         # {var} references in prompt / extract.prompt must already be produced.
         refs = _var_roots(prompt or "")

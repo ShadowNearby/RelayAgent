@@ -68,6 +68,36 @@ class ProfileStoreTests(unittest.TestCase):
         self.assertEqual(p.section("addresses"), {})
         self.assertEqual(p.section("contacts"), {"a": "b"})
 
+    def test_malformed_section_survives_an_unrelated_save(self) -> None:
+        # A degraded READ must never become a destructive WRITE-BACK: a hand-
+        # edited section that slightly violates the schema (a nested map here)
+        # is ignored in memory, but a later save (choice memory writes on every
+        # select_from pick) must leave the user's data on disk intact.
+        self._write({
+            "preferences": {"milk_tea": {"ice": "less"}},  # nested → malformed
+            "addresses": {"home": "X路1号"},
+        })
+        p = load_profile()
+        self.assertEqual(p.section("preferences"), {})  # ignored on read
+        p.remember_choice("选哪个门店?", "人民广场店")  # unrelated write → save()
+        on_disk = yaml.safe_load(
+            (self._tmp / "profile.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(on_disk["preferences"], {"milk_tea": {"ice": "less"}})
+        self.assertEqual(on_disk["addresses"], {"home": "X路1号"})
+        self.assertEqual(on_disk["last_choices"]["选哪个门店?"], "人民广场店")
+
+    def test_writes_into_a_malformed_section_are_refused(self) -> None:
+        # Writing INTO the malformed section would still clobber it (the
+        # in-memory view is empty), so that write is skipped instead.
+        self._write({"preferences": {"milk_tea": {"ice": "less"}}})
+        p = load_profile()
+        p.add_preference("coffee", "拿铁")
+        on_disk = yaml.safe_load(
+            (self._tmp / "profile.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(on_disk["preferences"], {"milk_tea": {"ice": "less"}})
+
     def test_choice_memory_roundtrip_persists(self) -> None:
         self._write({})
         load_profile().remember_choice("选哪个门店?", "人民广场店")

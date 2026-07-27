@@ -111,16 +111,124 @@ class BudgetTests(unittest.TestCase):
                   "RELAY_RECOVERY_TOKEN_BUDGET"):
             os.environ.pop(k, None)
 
-    def test_leg_and_token_budgets(self) -> None:
+    def test_leg_budget_exhausts_alone(self) -> None:
+        # Token budget is effectively unlimited: only the leg guardrail can trip.
         os.environ["RELAY_RECOVERY_MAX_LEGS"] = "2"
-        os.environ["RELAY_RECOVERY_TOKEN_BUDGET"] = "150"
+        os.environ["RELAY_RECOVERY_TOKEN_BUDGET"] = "1000000"
         rec = RecoveryController(MagicMock(), "qwen")
         self.assertTrue(rec.can_spend_leg())
+        rec.spend_leg(None)
+        self.assertTrue(rec.can_spend_leg())
+        rec.spend_leg(None)  # 2 legs used, 0 tokens
+        self.assertFalse(rec.can_spend_leg())
+        self.assertEqual(rec.tokens_used, 0)
+
+    def test_token_budget_exhausts_alone(self) -> None:
+        # Leg budget is effectively unlimited: only the token guardrail can trip.
+        os.environ["RELAY_RECOVERY_MAX_LEGS"] = "100"
+        os.environ["RELAY_RECOVERY_TOKEN_BUDGET"] = "150"
+        rec = RecoveryController(MagicMock(), "qwen")
         rec.spend_leg({"token_usage": {"total_tokens": 100}})
         self.assertTrue(rec.can_spend_leg())
-        rec.spend_leg({"token_usage": {"total_tokens": 100}})  # 200 > 150
+        rec.spend_leg({"token_usage": {"total_tokens": 100}})  # 200 >= 150
         self.assertFalse(rec.can_spend_leg())
         self.assertEqual(rec.tokens_used, 200)
+        self.assertEqual(rec.extra_legs_used, 2)
+
+
+class RerouteGuardTests(unittest.TestCase):
+    """Pins reroute's target filters (the handoff red line) and the recorder
+    retry suspension around the router call (no 3×3 retry amplification)."""
+
+    def setUp(self) -> None:
+        os.environ["RELAY_RECOVERY"] = "1"
+
+    def tearDown(self) -> None:
+        os.environ.pop("RELAY_RECOVERY", None)
+
+    def _controller(self, llm=None) -> RecoveryController:
+        rec = RecoveryController(llm if llm is not None else MagicMock(), "qwen")
+        # Hermetic: don't touch the real manifest catalog in unit tests.
+        rec._catalog = {"apps": []}
+        rec._matrix = {}
+        return rec
+
+    def test_reroute_skips_handoff_required_target(self) -> None:
+        rec = self._controller()
+        rec.handoff_required = MagicMock(return_value=True)
+        rec.has_prompt_template = MagicMock(return_value=False)
+        with mock.patch(
+            "agents.flow.leg_recovery.route",
+            return_value={"app_id": "com.x", "capability_id": "hail_ride"},
+        ):
+            self.assertIsNone(rec.reroute("goal", set()))
+        rec.handoff_required.assert_called_once_with("com.x", "hail_ride")
+
+    def test_reroute_returns_non_handoff_decision(self) -> None:
+        rec = self._controller()
+        rec.handoff_required = MagicMock(return_value=False)
+        rec.has_prompt_template = MagicMock(return_value=False)
+        with mock.patch(
+            "agents.flow.leg_recovery.route",
+            return_value={"app_id": "com.x", "capability_id": "qa"},
+        ):
+            decision = rec.reroute("goal", set())
+        self.assertEqual(decision["capability_id"], "qa")
+
+    def test_reroute_suspends_recorder_retry(self) -> None:
+        from agents.flow.flow_recording_llm import _RecordingLLM
+
+        rec_llm = _RecordingLLM(MagicMock())
+        self.assertTrue(rec_llm._retry)
+        ctl = self._controller(rec_llm)
+        ctl.handoff_required = MagicMock(return_value=False)
+        ctl.has_prompt_template = MagicMock(return_value=False)
+        seen: dict = {}
+
+        def fake_route(goal, catalog, matrix, llm, model, **kwargs):
+            seen["retry_during_route"] = llm._retry
+            return {"app_id": "com.x", "capability_id": "qa"}
+
+        with mock.patch("agents.flow.leg_recovery.route", side_effect=fake_route):
+            ctl.reroute("goal", set())
+        self.assertFalse(seen["retry_during_route"])
+        self.assertTrue(rec_llm._retry)  # restored after the call
+
+    def test_reroute_restores_recorder_retry_on_router_error(self) -> None:
+        from agents.flow.flow_recording_llm import _RecordingLLM
+
+        rec_llm = _RecordingLLM(MagicMock())
+        ctl = self._controller(rec_llm)
+        with mock.patch(
+            "agents.flow.leg_recovery.route", side_effect=RuntimeError("gateway down")
+        ):
+            self.assertIsNone(ctl.reroute("goal", set()))
+        self.assertTrue(rec_llm._retry)
+
+    def test_router_call_through_the_recorder_is_never_retry_amplified(self) -> None:
+        """A dead gateway must cost 3 real requests total, not 3×3.
+
+        Two independent guards now cover this seam — the recorder's no_retry()
+        (here) and create_with_retry's passthrough for proxies advertising
+        `_retry` — so the total holds whichever one is doing the work.
+        """
+        from agents.flow.flow_recording_llm import _RecordingLLM
+        from agents.llm.llm_retry import create_with_retry
+
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RuntimeError("gateway down")
+        rec_llm = _RecordingLLM(client)
+        ctl = self._controller(rec_llm)
+
+        def fake_route(goal, catalog, matrix, llm, model, **kwargs):
+            # What capability_matrix_router does with the llm it is handed.
+            return create_with_retry(
+                llm, model=model, messages=[], base_delay=0, max_delay=0
+            )
+
+        with mock.patch("agents.flow.leg_recovery.route", side_effect=fake_route):
+            self.assertIsNone(ctl.reroute("goal", set()))
+        self.assertEqual(client.chat.completions.create.call_count, 3)
 
 
 def _runner(tmp: str) -> FlowRunner:
@@ -150,7 +258,7 @@ class RecoveryLadderTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self._tmp, ignore_errors=True)
         for k in ("RELAY_RECOVERY", "RELAY_RECOVERY_MAX_LEGS",
-                  "RELAY_RECOVERY_MAX_RETRIES"):
+                  "RELAY_RECOVERY_MAX_RETRIES", "RELAY_RECOVERY_TOKEN_BUDGET"):
             os.environ.pop(k, None)
 
     def test_retry_recovers_hard_failure(self) -> None:
@@ -283,6 +391,54 @@ class RecoveryLadderTests(unittest.TestCase):
             runner._run_app_step(dict(_STEP))
         runner._run_mobileworld_step.assert_not_called()
         runner._run_general_step.assert_not_called()
+
+    def test_token_budget_exhausted_mid_ladder_stops_climbing(self) -> None:
+        """The token budget can run out BETWEEN tiers: the retry burns it, so
+        the ladder must stop before reroute/MW and ship the judge-only best
+        attempt (partial success), not keep climbing or raise."""
+        os.environ["RELAY_RECOVERY_MAX_LEGS"] = "5"
+        os.environ["RELAY_RECOVERY_TOKEN_BUDGET"] = "50"
+        runner = _runner(self._tmp)
+        rec = runner._recovery
+        rec.reword = MagicMock(return_value=None)
+        rec.reroute = MagicMock()
+        # _judged_fail carries token_usage=100 ≥ the 50-token budget after retry.
+        runner._execute_app_leg = MagicMock(side_effect=[_judged_fail(), _judged_fail()])
+        runner._run_app_step(dict(_STEP))
+        rec.reroute.assert_not_called()
+        self.assertEqual(runner._execute_app_leg.call_count, 2)
+        self.assertEqual(runner.bb["out"], "wrong stuff")
+        self.assertEqual(runner._step_outcomes[-1]["status"], "judged_failed")
+
+    def test_fatal_exhaustion_ships_earlier_judged_attempt(self) -> None:
+        """First attempt fails only in the judge's eyes (committable with
+        recovery off); the retry then dies HARD and no other tier is available.
+        The ladder must fall back to committing the earlier judged attempt —
+        recovery being on must never turn a soft failure into a hard abort."""
+        runner = _runner(self._tmp)
+        rec = runner._recovery
+        rec.reword = MagicMock(return_value=None)
+        rec.reroute = MagicMock(return_value=None)
+        first = _judged_fail("wrong_feature")
+        first.leg_dir = Path(self._tmp) / "01_s1"
+        first.leg_dir.mkdir()
+        runner._execute_app_leg = MagicMock(side_effect=[first, _hard_fail()])
+        with mock.patch("agents.flow.flow_runner.mw_fallback_enabled", return_value=False), \
+             mock.patch("agents.flow.flow_runner.general_fallback_enabled", return_value=False):
+            runner._run_app_step(dict(_STEP))  # must NOT raise
+        self.assertEqual(runner.bb["out"], "wrong stuff")
+        self.assertEqual(runner._step_outcomes[-1]["status"], "judged_failed")
+
+    def test_fatal_exhaustion_without_committable_attempt_still_raises(self) -> None:
+        # All attempts died hard: there is nothing shippable — the flow stops.
+        runner = _runner(self._tmp)
+        runner._recovery.reroute = MagicMock(return_value=None)
+        runner._execute_app_leg = MagicMock(side_effect=[_hard_fail(), _hard_fail()])
+        with mock.patch("agents.flow.flow_runner.mw_fallback_enabled", return_value=False), \
+             mock.patch("agents.flow.flow_runner.general_fallback_enabled", return_value=False), \
+             self.assertRaises(RuntimeError):
+            runner._run_app_step(dict(_STEP))
+        self.assertEqual(runner.bb, {})
 
     def test_budget_zero_fails_fast(self) -> None:
         os.environ["RELAY_RECOVERY_MAX_LEGS"] = "0"
