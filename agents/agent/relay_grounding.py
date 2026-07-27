@@ -39,7 +39,7 @@ def _ground_text_via_a11y(
     Match policy (tightest first):
       1. exact text or desc match
       2. substring match (text contains target, or vice versa)
-      3. resource-id endswith target
+      3. resource-id matches target (full "pkg:id/name" form or bare name)
 
     All matches are restricted to clickable / focusable / visible nodes when
     possible — falls back to any node if no clickable match exists.
@@ -87,9 +87,14 @@ def _ground_text_via_a11y(
             or (n.desc and target in n.desc)
             or (n.text and n.text in target and len(n.text) > 1)
         )
-    # Tier 3: resource-id endswith
+    # Tier 3: resource-id — cards write either the full "pkg:id/name" form or
+    # just the bare name; accept both so a full-form selector doesn't silently
+    # degrade to the paid VLM fallback.
     if not hits:
-        hits = _candidates(lambda n: n.resource_id.split("/")[-1] == target)
+        hits = _candidates(
+            lambda n: n.resource_id == target
+            or n.resource_id.split("/")[-1] == target
+        )
     if not hits:
         logger.info(
             f"a11y dump ok ({len(nodes)} nodes) but no match for {target!r}"
@@ -114,15 +119,22 @@ def _extract_xy(raw: str) -> tuple[int | None, int | None]:
     """
     import ast
 
-    # 1. Try the spec-shaped fenced object first.
+    # 1. Try the spec-shaped fenced object first. Only return values the
+    # caller can actually do arithmetic on (int/float) or the explicit
+    # not-found null pair; anything else (e.g. quoted numbers {"x": "512"},
+    # a common model drift) falls through to the tolerant path below, which
+    # ends in the digit-regex fallback — same as unfenced input.
     m = _JSON_FENCE.search(raw)
     if m:
         try:
             d = json.loads(m.group(1))
-            if isinstance(d, dict) and "x" in d and "y" in d and not isinstance(d["x"], list):
-                return d["x"], d["y"]
         except json.JSONDecodeError:
-            pass
+            d = None
+        if isinstance(d, dict) and "x" in d and "y" in d and not isinstance(d["x"], list):
+            if isinstance(d["x"], (int, float)) and isinstance(d["y"], (int, float)):
+                return d["x"], d["y"]
+            if d["x"] is None or d["y"] is None:
+                return None, None
 
     # 2. Otherwise grab whatever is inside any fenced block, or the raw text.
     m2 = _FENCE_ANY.search(raw)

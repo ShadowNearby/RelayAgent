@@ -94,6 +94,9 @@ def serialize_tree(
             "role": (n.class_name.split(".")[-1] or "View"),
             "editable": bool(editable),
             "scrollable": bool(n.scrollable),
+            # Kept for the CTA tap-guard's geometric check (label-less
+            # clickable containers); not rendered into the listing.
+            "bounds": n.bounds,
         })
 
     truncated = len(out) > max_nodes
@@ -181,6 +184,40 @@ class A11yTextAgent(RelayAgent):
                 self._screen = (1080, 2340)
         return self._screen
 
+    def _tap_cta_label(self, nd: dict, tree: list[UINode]) -> str | None:
+        """CTA-guard check for a tap target. Returns the matched CTA label
+        (→ convert the tap to a handoff) or None (tap is safe).
+
+        Two tiers:
+          1. the tapped node's own label contains a CTA word;
+          2. the tapped node has NO label — the common 中文 App pay-button
+             structure is a clickable, label-less ViewGroup wrapping a
+             non-clickable "立即支付" TextView, which would bypass a
+             label-only check — so fall back to geometry: any CTA-labeled
+             node in the full tree whose bounds intersect the tapped node's
+             bounds trips the guard too. Labeled non-CTA nodes are trusted
+             as-is (a normal proceed button rarely shares its frame with CTA
+             text, and its own label is the better signal)."""
+        label = nd["label"]
+        if any(c in label for c in self.CTA_LABELS):
+            return label
+        if label:
+            return None
+        bounds = nd.get("bounds")
+        if not bounds:
+            return None
+        x1, y1, x2, y2 = bounds
+        for n in tree:
+            t = n.text or n.desc
+            if not t or not any(c in t for c in self.CTA_LABELS):
+                continue
+            if n.bounds is None:
+                continue
+            nx1, ny1, nx2, ny2 = n.bounds
+            if nx1 < x2 and nx2 > x1 and ny1 < y2 and ny2 > y1:
+                return t
+        return None
+
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
         # Same first-predict hook as RelayAgent: anchors the task wall-clock
         # (wall_clock.json — the agent is its sole writer) and performs the
@@ -235,11 +272,14 @@ class A11yTextAgent(RelayAgent):
             nd = nodes[idx]
             label = nd["label"]
             # Safety: a tap on an irreversible CTA is converted to a handoff.
-            if any(c in label for c in self.CTA_LABELS):
-                self._history.append(f"{self._nstep}: reached CTA {label!r} → handoff")
-                return (f"{thought} [CTA stop: {label!r}]", JSONAction(
+            cta_label = self._tap_cta_label(nd, tree)
+            if cta_label is not None:
+                self._history.append(
+                    f"{self._nstep}: reached CTA {cta_label!r} → handoff"
+                )
+                return (f"{thought} [CTA stop: {cta_label!r}]", JSONAction(
                     action_type="ask_user",
-                    text=f"Reached the irreversible action ({label}); "
+                    text=f"Reached the irreversible action ({cta_label}); "
                          "handing control back without crossing it.",
                 ))
             self._history.append(f"{self._nstep}: tap [{idx}] {label!r}")

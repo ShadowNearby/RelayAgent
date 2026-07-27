@@ -83,17 +83,21 @@ def _dump_visible_text_hash(
     )
     if nodes is None:
         return None
-    # Drop nodes fully inside the status-bar strip: the clock flips the hash
-    # once a minute, resetting the stability streak the done detection needs.
-    # Mirrors the top crop the pixel-hash precheck already applies.
+    # Drop nodes fully inside the status-bar strip (the clock flips the hash
+    # once a minute) AND nodes fully inside the input-area strip (rotating
+    # input placeholders / send-button state text flip it every tick, so the
+    # stability streak never reaches done and every reply rides the timeout
+    # ceiling). Mirrors both crops the pixel-hash precheck already applies.
     try:
         _, screen_h = backend.screen_size()
-        top_cutoff, _ = _crop_cutoffs(screen_h)
+        top_cutoff, bot_cutoff = _crop_cutoffs(screen_h)
     except Exception:  # size unavailable (e.g. mocked backend) — no crop
-        top_cutoff = 0
+        top_cutoff, bot_cutoff = 0, 0
     parts: list[str] = []
     for n in nodes:
         if top_cutoff and n.bounds is not None and n.bounds[3] <= top_cutoff:
+            continue
+        if bot_cutoff and n.bounds is not None and n.bounds[1] >= bot_cutoff:
             continue
         if n.text:
             parts.append(n.text)
@@ -184,7 +188,15 @@ def _extract_reply_text_from_dump(
         u = user_input_text.strip()
         if u:
             for y, t in nodes:
-                if u in t or t in u:
+                # `u in t`: the bubble node contains the typed text (plus
+                # timestamps etc.) — always a safe cut. The reverse direction
+                # (`t in u`, for bubbles the app truncated/split) needs a
+                # length gate: a short reply-area node that happens to be a
+                # substring of the request (a category chip like "平板电脑",
+                # a price anchor) must not drag cut_y into the reply and
+                # delete everything above it. Require the node to cover at
+                # least half the typed text (min 6 chars).
+                if u in t or (t in u and len(t) >= max(6, len(u) // 2)):
                     cut_y = max(cut_y, y)
     # Filter: above user bubble OR known chrome OR streaming markers.
     excludes = set(_REPLY_CHROME_LABELS) | set(extra_excludes)
@@ -289,14 +301,19 @@ def _stitch_chunks(chunks: list[str]) -> str:
         return chunks[0] if chunks else ""
 
     # (2) Line-level ordered-dedup merge. For each chunk in capture order,
-    # append its lines unless we've already emitted that line (normalized).
-    # Blank lines pass through unconditionally so paragraph breaks survive,
-    # but consecutive blanks are collapsed.
+    # append its lines unless a PREVIOUS chunk already emitted that line
+    # (normalized) — the sliding windows only overlap across chunk seams, so
+    # dedup must only look across chunks. Legit repeats WITHIN one chunk
+    # (two store cards both showing "人均：¥80") are kept verbatim, matching
+    # the single-chunk early return above. Blank lines pass through
+    # unconditionally so paragraph breaks survive, but consecutive blanks
+    # are collapsed.
     out_lines: list[str] = []
-    seen: set[str] = set()
+    seen: set[str] = set()  # normalized lines emitted by PREVIOUS chunks only
     new_line_counts: list[int] = []
     for c in chunks:
         added = 0
+        chunk_keys: set[str] = set()
         for line in c.splitlines():
             if not line.strip():
                 if out_lines and out_lines[-1].strip():
@@ -305,9 +322,10 @@ def _stitch_chunks(chunks: list[str]) -> str:
             key = _normalize_for_dedup(line)
             if not key or key in seen:
                 continue
-            seen.add(key)
+            chunk_keys.add(key)
             out_lines.append(line)
             added += 1
+        seen |= chunk_keys
         new_line_counts.append(added)
     while out_lines and not out_lines[-1].strip():
         out_lines.pop()

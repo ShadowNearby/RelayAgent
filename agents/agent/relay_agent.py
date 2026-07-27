@@ -153,10 +153,24 @@ def _settle_or_sleep(seconds: float) -> None:
 # the calls live alongside the per-step traj entries. The per-step traj writer
 # rewrites the whole file each step but preserves unknown sibling keys, so the
 # field survives across step writes.
-_TRAJ_DIR = (
-    Path(os.environ["RELAY_TRAJ_DIR"]) if os.getenv("RELAY_TRAJ_DIR")
-    else _REPO_ROOT / "traj_logs" / "user_task"
-)
+#
+# Resolved PER CALL, not at import (mirrors native_runner._resolve_traj_dir):
+# in-process multi-leg runs (Chaquopy's InProcessLegExecutor + the general
+# fallback) re-point RELAY_TRAJ_DIR between legs while this module stays
+# cached in sys.modules via the a11y_agent/general_agent import chain — a
+# module-level constant would leak leg A's dir into leg B's traj.json /
+# agent_reply.json.
+def _traj_dir() -> Path:
+    env = os.getenv("RELAY_TRAJ_DIR")
+    if env:
+        return Path(env)
+    # Shared default, resolved by the same helper the runner and StepLogger
+    # use (RELAY_TRAJ_ROOT-aware, repo-anchored) so traj.json / agent_reply.json
+    # can never split from steps/. Imported lazily — native_runtime imports
+    # this package.
+    from agents.runtime.native_runtime import default_traj_dir
+
+    return default_traj_dir()
 
 # Grounding, reply-scrape, permission-popup and LLM-logging helpers split into
 # sibling modules; imported here because RelayAgent uses each as a module global
@@ -326,7 +340,7 @@ class RelayAgent(_MCPAgentBase):
         # M4 — prompts AND responses can carry user-profile values; strip them
         # at write time (no-op unless RELAY_TRAJ_REDACT=1 and a profile exists).
         record = redact_obj(record)
-        traj_path = _TRAJ_DIR / "traj.json"
+        traj_path = _traj_dir() / "traj.json"
         try:
             if not traj_path.exists():
                 return
@@ -343,8 +357,14 @@ class RelayAgent(_MCPAgentBase):
             bucket.setdefault("tools", None)
             bucket.setdefault("traj", [])
             bucket.setdefault("llm_calls", []).append(record)
-            with open(traj_path, "w", encoding="utf-8") as f:
+            # Write-temp + atomic replace: a Ctrl-C / kill landing mid-write
+            # must not leave a truncated traj.json, or every later append
+            # hits the JSONDecodeError guard above and the leg's remaining
+            # llm_calls telemetry is silently lost.
+            tmp_path = traj_path.with_name(traj_path.name + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
+            os.replace(tmp_path, traj_path)
         except OSError as e:
             logger.warning(f"Failed to append LLM call to traj.json: {e}")
 
@@ -480,7 +500,21 @@ class RelayAgent(_MCPAgentBase):
 
     def _finalize_task(self) -> None:
         """Stop the recorder and write the framework-excluded task wall-clock.
-        Registered with atexit; tolerant of being called once at process exit."""
+        Registered with atexit; tolerant of being called once at process exit.
+        The agent stays the sole writer of wall_clock.json."""
+        # Drop this instance's atexit entry: long-lived in-process runs
+        # (Chaquopy — one new agent per leg, the process never exits) would
+        # otherwise accumulate a zombie no-op callback per finished agent,
+        # each pinning the agent (card/plan/captured chunks) forever. run_leg
+        # already finalizes explicitly in its `finally`; the atexit hook only
+        # matters when that path never ran, and unregistering here is a no-op
+        # in that case (the callback is already executing). Bound methods of
+        # the same instance compare equal, so unregister matches the entry
+        # _begin_task_once registered.
+        try:
+            atexit.unregister(self._finalize_task)
+        except Exception:  # pragma: no cover — never block finalization
+            pass
         if self._recorder is not None:
             try:
                 final = self._recorder.stop()
@@ -492,9 +526,13 @@ class RelayAgent(_MCPAgentBase):
         if self._task_t0 is not None:
             wall_s = round(time.monotonic() - self._task_t0, 1)
             out = os.getenv(_WALL_OUT_ENV)
+            # Same shared-default resolution as traj.json / steps/ (the flow
+            # runner pins RELAY_WALL_OUT per leg, so this is the standalone
+            # path only).
+            from agents.runtime.native_runtime import default_traj_dir
+
             wall_path = (
-                Path(out) if out
-                else _REPO_ROOT / "traj_logs" / "user_task" / "wall_clock.json"
+                Path(out) if out else default_traj_dir() / "wall_clock.json"
             )
             try:
                 if wall_path.parent.is_dir():
@@ -716,7 +754,16 @@ class RelayAgent(_MCPAgentBase):
             return JSONAction(action_type="click", x=x, y=y), True, "VLM-grounded"
 
         if kind == "wait_ms":
-            return JSONAction(action_type="wait"), True, ""
+            # Honor the card's declared duration HERE: the runtime's WAIT
+            # action only sleeps RELAY_WAIT_SECONDS (~0.2s), so a manifest
+            # `wait: {ms: 3000}` (transition animations, result rendering,
+            # the x_skip_wait_for_reply settle) must be slept by the agent.
+            # _settle_or_sleep upgrades to frame-settle detection while the
+            # scrcpy stream is live — `ms` is then the worst-case ceiling.
+            ms = int(p.get("ms", 0) or 0)
+            if ms > 0:
+                _settle_or_sleep(ms / 1000.0)
+            return JSONAction(action_type="wait"), True, (f"{ms}ms" if ms else "")
 
         if kind == "wait_text":
             # Poll uiautomator until `text` shows up or timeout elapses. Each
@@ -984,7 +1031,19 @@ class RelayAgent(_MCPAgentBase):
             prev = self._reply_last_dump_text_hash
             self._reply_last_dump_text_hash = text_hash
             if prev is not None and text_hash == prev:
-                self._reply_text_stable_streak += 1
+                # A watchdog-forced dump bypassed the Stage-1 pixel gate, so
+                # the pixels were still changing when it ran. For a reply
+                # rendered OUTSIDE the a11y tree (WebView/canvas) the text
+                # hash is chrome-only and stable from the first tick — if
+                # forced dumps advanced the streak, ~3 of them would declare
+                # a still-streaming reply done and the VLM fallback would
+                # capture a truncated answer. Forced dumps exist only to keep
+                # the text check from starving (they refresh `prev` and the
+                # skip counter); doneness may only accrue from dumps that
+                # passed the pixel gate. (Doneness itself stays VLM-free —
+                # see NOTE(no-vlm-done).)
+                if not force_dump:
+                    self._reply_text_stable_streak += 1
             else:
                 # First dump, or text changed since the last dump (still
                 # growing) — restart the stability count. New text also means
@@ -1318,8 +1377,9 @@ class RelayAgent(_MCPAgentBase):
             targets.append((Path(env_path), payload))
         # Drop the reply in the run's traj dir too so it's discoverable by
         # default (the flow runner pins this per leg via RELAY_TRAJ_DIR).
-        if _TRAJ_DIR.exists():
-            targets.append((_TRAJ_DIR / "agent_reply.json", log_payload))
+        traj_dir = _traj_dir()
+        if traj_dir.exists():
+            targets.append((traj_dir / "agent_reply.json", log_payload))
         for path, content in targets:
             try:
                 path.write_text(content, encoding="utf-8")

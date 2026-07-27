@@ -92,9 +92,12 @@ class BaseAgent(ABC):
             return self._wrap_stream_with_usage_logging(response)
         while retry_times > 0:
             try:
-                if "claude" in model:
-                    kwargs["max_tokens"] = 64000
-                    kwargs.pop("temperature", None)
+                # Case-insensitive like the gpt/o1/kimi branches below, and
+                # never override the caller's explicit params — grounding
+                # calls pass max_tokens=128 / temperature=0.0 on purpose.
+                # Only fill in a default output budget when none was given.
+                if "claude" in model.lower():
+                    kwargs.setdefault("max_tokens", 64000)
 
                 if "gpt" in model.lower() or "o1" in model.lower():
                     if "max_tokens" in kwargs:
